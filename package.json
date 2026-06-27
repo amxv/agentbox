@@ -1,0 +1,51 @@
+{
+  "name": "agentbox",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A small threaded message relay for ChatGPT and local agents.",
+  "type": "module",
+  "bin": {
+    "agentbox": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "migrations",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:cli": "tsup src/cli/index.ts --format esm --clean && node scripts/fix-cli-shebang.mjs",
+    "build:all": "npm run build && npm run build:cli",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "prepare": "npm run build:cli",
+    "link:cli": "npm run build:cli && npm link"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^14.0.2",
+    "mime-types": "^3.0.2",
+    "next": "^16.0.10",
+    "postgres": "^3.4.7",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^25.0.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "^16.0.10",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
