@@ -31,6 +31,12 @@ type CliThread = {
   updated_at: string;
   messages?: CliMessage[];
 };
+type DoctorCheck = {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  detail?: string;
+};
+
 
 function baseUrl(): string {
   const value = process.env.AGENTBOX_BASE_URL ?? process.env.AGENTBOX_URL;
@@ -44,12 +50,16 @@ function apiKey(): string {
   return value;
 }
 
-async function request(path: string, options: RequestOptions = {}) {
-  const headers = new Headers(options.headers);
+function endpoint(path: string): URL {
   const url = new URL(path, `${baseUrl()}/`);
   url.searchParams.set("key", apiKey());
+  return url;
+}
 
-  const response = await fetch(url, { ...options, headers });
+
+async function request(path: string, options: RequestOptions = {}) {
+  const headers = new Headers(options.headers);
+  const response = await fetch(endpoint(path), { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
 
@@ -109,11 +119,95 @@ async function downloadAsset(asset: CliAsset, outputPath: string) {
 }
 
 
+async function runDoctor(): Promise<DoctorCheck[]> {
+  const checks: DoctorCheck[] = [];
+
+  const add = (check: DoctorCheck) => {
+    checks.push(check);
+  };
+
+  try {
+    const value = baseUrl();
+    add({ name: "base URL", status: "pass", detail: value });
+  } catch (error) {
+    add({ name: "base URL", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
+
+  try {
+    apiKey();
+    add({ name: "API key", status: "pass", detail: "AGENTBOX_API_KEY is set" });
+  } catch (error) {
+    add({ name: "API key", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
+
+  try {
+    const response = await fetch(new URL("/api/health", `${baseUrl()}/`));
+    add({ name: "health endpoint", status: response.ok ? "pass" : "fail", detail: `HTTP ${response.status}` });
+  } catch (error) {
+    add({ name: "health endpoint", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
+
+  try {
+    const data = await request("/api/threads?limit=10");
+    add({ name: "authenticated API", status: "pass", detail: `${data.threads?.length ?? 0} thread(s) visible` });
+
+    let asset: CliAsset | null = null;
+    for (const thread of data.threads ?? []) {
+      const threadData = await request(`/api/threads/${encodeURIComponent(thread.id)}`);
+      for (const message of threadData.thread.messages ?? []) {
+        asset = message.assets?.[0] ?? null;
+        if (asset) break;
+      }
+      if (asset) break;
+    }
+
+    if (!asset) {
+      add({ name: "signed download URL", status: "skip", detail: "No attachments found in recent threads" });
+    } else {
+      const signed = await request(`/api/assets/${encodeURIComponent(asset.id)}/download-url`);
+      add({ name: "signed download URL", status: signed.download_url ? "pass" : "fail", detail: asset.file_name });
+    }
+  } catch (error) {
+    add({ name: "authenticated API", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
+
+  try {
+    const url = endpoint("/api/mcp");
+    add({ name: "ChatGPT MCP URL", status: "pass", detail: url.toString() });
+  } catch (error) {
+    add({ name: "ChatGPT MCP URL", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
+
+  return checks;
+}
+
+function printDoctor(checks: DoctorCheck[]) {
+  for (const check of checks) {
+    const icon = check.status === "pass" ? "✓" : check.status === "skip" ? "-" : "✗";
+    console.log(`${icon} ${check.name}${check.detail ? ` — ${check.detail}` : ""}`);
+  }
+
+  const failed = checks.filter((check) => check.status === "fail").length;
+  if (failed > 0) {
+    throw new Error(`${failed} check${failed === 1 ? "" : "s"} failed.`);
+  }
+}
+
 const program = new Command();
 program
   .name("agentbox")
   .description("CLI for Agentbox, a small threaded message relay for ChatGPT and local agents.")
   .version("0.1.0");
+
+program
+  .command("doctor")
+  .description("Check local CLI configuration and the Agentbox deployment.")
+  .option("--json", "print raw JSON")
+  .action(async (options) => {
+    const checks = await runDoctor();
+    if (options.json) return printJson({ checks });
+    printDoctor(checks);
+  });
 
 program
   .command("list")

@@ -225,3 +225,12 @@ export async function postMessage(params: {
 
   return normalizeMessage(rows.message, rows.assets);
 }
+
+
+export async function closeDb(): Promise<void> {
+  if (!sqlClient) return;
+  const client = sqlClient;
+  sqlClient = null;
+  schemaReady = null;
+  await client.end({ timeout: 5 });
+}

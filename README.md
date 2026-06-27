@@ -1,31 +1,35 @@
 # Agentbox
 
-Agentbox is a small threaded message relay for ChatGPT and local coding agents.
+Agentbox gives ChatGPT and your local coding agents a shared task inbox.
 
-It gives ChatGPT and local tools such as Codex or Claude Code a shared place to exchange Markdown messages and optional file assets without manual copy/paste.
-
-## Current shape
-
-- Vercel-hosted Next.js API
-- Remote MCP endpoint at `/api/mcp`
-- REST API for the CLI
-- Postgres for threads and messages
-- Cloudflare R2 for assets
-- `agentbox` CLI
-
-## API
+Use it when you want ChatGPT to hand work to Claude Code, Codex, or another local agent without copy-pasting prompts, files, and terminal output back and forth. Each task lives in a thread. Messages, decisions, and attachments stay together.
 
 ```text
-GET  /api/health
-POST /api/mcp
-GET  /api/mcp
-GET  /api/threads
-POST /api/threads
-GET  /api/threads/:thread_id
-POST /api/threads/:thread_id/messages
+ChatGPT creates a thread → local agent reads it → local agent attaches results → ChatGPT reviews
 ```
 
-## MCP tools
+## Quickstart
+
+```bash
+export AGENTBOX_BASE_URL="https://your-agentbox.vercel.app"
+export AGENTBOX_API_KEY="LOCAL_KEY"
+
+agentbox doctor
+agentbox list
+agentbox get thr_xxx
+agentbox download thr_xxx --output ./inbox
+agentbox post thr_xxx "done — attached the result" --asset result.md
+```
+
+## Connect ChatGPT
+
+Provision a dedicated API key for ChatGPT, then add Agentbox as a custom MCP server using this URL format:
+
+```text
+https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
+```
+
+Available MCP tools:
 
 ```text
 list_threads
@@ -36,47 +40,76 @@ post_message
 
 `post_message` supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass `/mnt/data/...` paths or plain filenames.
 
-MCP clients authenticate by putting the key in the endpoint URL:
-
-```text
-https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
-```
-
-## CLI
+## CLI commands
 
 ```bash
-export AGENTBOX_BASE_URL="https://your-agentbox.vercel.app"
-export AGENTBOX_API_KEY="your-client-key"
-
+agentbox doctor
 agentbox list
 agentbox create "Design thread"
-agentbox get thr_123
-agentbox post thr_123 "Message body"
-agentbox post thr_123 --file message.md
-agentbox post thr_123 --file message.md --asset screenshot.png
+agentbox get thr_xxx
+agentbox post thr_xxx "Message body"
+agentbox post thr_xxx --file message.md
+agentbox post thr_xxx --file message.md --asset screenshot.png
+agentbox download thr_xxx
+agentbox download thr_xxx --output ./downloads
+```
+
+`download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
+
+## Read-only web viewer
+
+Agentbox includes a simple browser viewer for inspecting threads and attachments:
+
+```text
+https://your-agentbox.vercel.app/threads?admin_key=ADMIN_KEY
+```
+
+Set `AGENTBOX_ADMIN_KEY` in the deployment environment. The viewer is read-only and intended for demos, debugging, and quick inspection.
+
+## API
+
+```text
+GET  /api/health
+GET  /api/assets/:asset_id/download-url
+GET  /api/mcp
+POST /api/mcp
+GET  /api/threads
+POST /api/threads
+GET  /api/threads/:thread_id
+POST /api/threads/:thread_id/messages
 ```
 
 ## Development
 
 ```bash
 bun install
+bun run db:migrate
 bun run dev
 bun run typecheck
+bun run lint
+bun run build
 bun run build:cli
 ```
 
 ## Environment variables
 
+Required on the deployed server:
+
 ```text
 DATABASE_URL
 AGENTBOX_API_KEYS
-AGENTBOX_ALLOWED_ORIGINS
-AGENTBOX_MAX_FILE_SIZE_BYTES
-
+AGENTBOX_ADMIN_KEY
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
 R2_BUCKET
+```
+
+Optional:
+
+```text
+AGENTBOX_ALLOWED_ORIGINS
+AGENTBOX_MAX_FILE_SIZE_BYTES
 R2_PUBLIC_BASE_URL
 ```
 
@@ -99,14 +132,5 @@ JSON:
 
 ## Docs
 
-- [`docs/agentbox-spec.md`](docs/agentbox-spec.md)
 - [`docs/first-time-setup.md`](docs/first-time-setup.md)
-
-## Download thread attachments
-
-```bash
-agentbox download <thread_id>
-agentbox download <thread_id> --output ./downloads
-```
-
-`download` fetches every attachment linked to the thread through the Agentbox API, prints the saved local paths, and only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY` locally. The Vercel deployment streams the files. By default files are saved to `agentbox-downloads/<thread_id>/`.
+- [`docs/agentbox-spec.md`](docs/agentbox-spec.md)

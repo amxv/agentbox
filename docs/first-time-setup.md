@@ -77,6 +77,7 @@ Compact format:
 
 ```bash
 AGENTBOX_API_KEYS="chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook"
+AGENTBOX_ADMIN_KEY="ADMIN_KEY"
 ```
 
 The format is:
@@ -139,7 +140,17 @@ After deployment, note your production URL:
 https://your-agentbox.vercel.app
 ```
 
-## 6. Smoke-test the server
+## 6. Run database migrations
+
+Run the schema migration once after setting `DATABASE_URL`:
+
+```bash
+bun run db:migrate
+```
+
+This creates the `threads`, `messages`, and `assets` tables if they do not already exist.
+
+## 7. Smoke-test the server
 
 Check the health endpoint:
 
@@ -167,7 +178,7 @@ List threads:
 curl "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY"
 ```
 
-## 7. Install and configure the CLI
+## 8. Install and configure the CLI
 
 For local development from the repo:
 
@@ -203,7 +214,7 @@ Post a message with an attached asset:
 agentbox post thr_xxx "Here is a screenshot." --asset screenshot.png
 ```
 
-## 8. Connect ChatGPT as an MCP client
+## 9. Connect ChatGPT as an MCP client
 
 Use your deployed MCP endpoint with the ChatGPT key in the URL:
 
@@ -227,7 +238,7 @@ post_message
 
 For MCP file uploads from ChatGPT, the `post_message.file` argument should be the uploaded ChatGPT conversation file ID, for example `file_abc123`. Do not pass a local sandbox path such as `/mnt/data/example.md` or a plain filename. The Apps SDK marks `file` with `_meta["openai/fileParams"]`, so ChatGPT expands the file ID before the server handler runs; the server receives `{ download_url, file_id, mime_type?, file_name? }` and immediately persists the bytes to R2.
 
-## 9. First end-to-end test
+## 10. First end-to-end test
 
 Create a new thread from ChatGPT using `create_thread`.
 
@@ -281,7 +292,17 @@ Saved 2 attachments to ./downloads
 
 The download command fetches files through the Agentbox API. Your local shell only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; the Vercel deployment streams the file bytes.
 
-## 10. Local development
+## 11. Read-only web viewer
+
+Open the browser viewer with your admin key:
+
+```text
+https://your-agentbox.vercel.app/threads?admin_key=ADMIN_KEY
+```
+
+The viewer is read-only. Use it to inspect threads, messages, and attachment metadata without using the CLI.
+
+## 12. Local development
 
 Run the app locally:
 
