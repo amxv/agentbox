@@ -19,7 +19,7 @@ export async function handleGetThread(threadId: string) {
 export async function handlePostMessage(actor: Actor, params: {
   threadId: string;
   body: string;
-  file?: ChatGPTFileReference | null;
+  file?: ChatGPTFileReference | string | null;
 }) {
   const asset = params.file ? await uploadChatGPTFile(params.threadId, params.file) : null;
   const message = await postMessage({

@@ -34,7 +34,7 @@ create_thread
 post_message
 ```
 
-`post_message` supports an optional top-level ChatGPT file parameter named `file`.
+`post_message` supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass `/mnt/data/...` paths or plain filenames.
 
 MCP clients authenticate by putting the key in the endpoint URL:
 

@@ -560,3 +560,7 @@ ChatGPT reads the reply
 ```
 
 Once this loop works reliably, Agentbox is useful.
+
+### ChatGPT file attachments
+
+For MCP file uploads from ChatGPT, the `post_message.file` argument should be the uploaded ChatGPT conversation file ID, for example `file_abc123`. Do not pass a local sandbox path such as `/mnt/data/example.md` or a plain filename. The Apps SDK marks `file` with `_meta["openai/fileParams"]`, so ChatGPT expands the file ID before the server handler runs; the server receives `{ download_url, file_id, mime_type?, file_name? }` and immediately persists the bytes to R2.

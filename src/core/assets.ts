@@ -88,7 +88,27 @@ export async function uploadAssetBytes(params: {
   };
 }
 
-export async function uploadChatGPTFile(threadId: string, file: ChatGPTFileReference): Promise<NewAsset> {
+function chatGPTFileReferenceFromInput(file: ChatGPTFileReference | string): ChatGPTFileReference {
+  if (typeof file !== "string") return file;
+
+  const value = file.trim();
+  if (/^https?:\/\//i.test(value)) {
+    const url = new URL(value);
+    const fileName = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "download.bin");
+    return {
+      download_url: value,
+      file_id: `url-${crypto.randomUUID()}`,
+      file_name: fileName || "download.bin"
+    };
+  }
+
+  throw new Error(
+    "File was received as a plain string. Pass a ChatGPT uploaded file ID like file_... to the MCP tool so ChatGPT expands it into { download_url, file_id, mime_type?, file_name? }. Local filesystem paths and plain filenames cannot be fetched by the remote Agentbox server."
+  );
+}
+
+export async function uploadChatGPTFile(threadId: string, input: ChatGPTFileReference | string): Promise<NewAsset> {
+  const file = chatGPTFileReferenceFromInput(input);
   const response = await fetch(file.download_url);
   if (!response.ok) {
     throw new Error(`Failed to download ChatGPT file: ${response.status} ${response.statusText}`);

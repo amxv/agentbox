@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createThreadSchema, fileReferenceSchema, postMessageSchema } from "./schemas";
+import { createThreadSchema, fileParamInputSchema, postMessageSchema } from "./schemas";
 import { handleCreateThread, handleGetThread, handleListThreads, handlePostMessage } from "./handlers";
 import type { Actor } from "./types";
 
@@ -58,7 +58,7 @@ export function createAgentboxMcpServer(actor: Actor): McpServer {
     "post_message",
     {
       title: "Post message",
-      description: "Post a Markdown message to an Agentbox thread. Optionally attach one file from the current ChatGPT conversation.",
+      description: "Post a Markdown message to an Agentbox thread. To attach a file from ChatGPT, pass the uploaded conversation file ID, for example file_abc123. Do not pass a local filesystem path or plain filename.",
       inputSchema: postMessageSchema.shape,
       outputSchema: { message: z.any() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -73,7 +73,7 @@ export function createAgentboxMcpServer(actor: Actor): McpServer {
       await handlePostMessage(actor, {
         threadId: thread_id,
         body,
-        file: file ? fileReferenceSchema.parse(file) : null
+        file: file ? fileParamInputSchema.parse(file) : null
       })
     )
   );
