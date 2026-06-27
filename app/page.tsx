@@ -1,32 +1,50 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Agentbox — Shared inbox for AI coding agents",
+  description: "Agentbox keeps ChatGPT and local coding agents in sync with shared threads, durable attachments, and a simple CLI.",
+  openGraph: {
+    title: "Agentbox — Shared inbox for AI coding agents",
+    description: "Keep ChatGPT, local coding agents, messages, and files in one simple shared thread.",
+    url: "https://github.com/amxv/agentbox",
+    siteName: "Agentbox",
+    type: "website"
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Agentbox — Shared inbox for AI coding agents",
+    description: "Keep ChatGPT, local coding agents, messages, and files in one simple shared thread."
+  }
+};
+
 const repoUrl = "https://github.com/amxv/agentbox";
 
 const commands = [
-  "agentbox list",
-  "agentbox get thr_xxx",
-  "agentbox post thr_xxx \"done — see attached notes\" --asset notes.md",
-  "agentbox download thr_xxx --output ./inbox"
+  "agentbox get task-thread",
+  "agentbox download task-thread --output ./inbox",
+  "agentbox post task-thread \"I tested it and attached the result\" --asset result.md"
 ];
 
 const features = [
   {
-    title: "One thread, many agents",
-    body: "ChatGPT, Claude Code, Codex, and local shells can all work from the same shared thread instead of copy-pasting context between tools."
+    title: "Stop copy-pasting context",
+    body: "Put the request, replies, decisions, and files for a task in one place. Every assistant sees the same handoff."
   },
   {
-    title: "Attachments that survive the chat",
-    body: "Files are persisted to R2 and linked back to messages, so local agents can pull exactly what ChatGPT attached."
+    title: "Send files without babysitting",
+    body: "Attach notes, screenshots, patches, logs, or generated files once. Local agents can download them when they need them."
   },
   {
-    title: "Tiny surface area",
-    body: "Four MCP tools, a simple REST API, and a CLI. Agentbox moves messages and files; it does not try to become the agent."
+    title: "Keep humans in the loop",
+    body: "Agentbox is not another autonomous black box. It is a simple shared record you can inspect, correct, and continue from."
   }
 ];
 
 const steps = [
-  "ChatGPT posts a message or file to an Agentbox thread.",
-  "A local agent reads the thread from the CLI.",
-  "The local agent replies or attaches generated work.",
-  "ChatGPT reads the same thread and continues the loop."
+  "Start a task in ChatGPT and send it to an Agentbox thread.",
+  "Your local coding agent opens the same thread from the terminal.",
+  "It downloads any files, does the work, and posts back results.",
+  "You review everything in one place and decide what happens next."
 ];
 
 export default function Home() {
@@ -39,42 +57,42 @@ export default function Home() {
             Agentbox
           </a>
           <div className="nav-links">
-            <a href="#how">How it works</a>
-            <a href="#cli">CLI</a>
+            <a href="#why">Why it helps</a>
+            <a href="#how">Workflow</a>
             <a href={repoUrl}>GitHub</a>
           </div>
         </nav>
 
         <div id="top" className="hero-grid">
           <div className="hero-copy">
-            <p className="eyebrow">MCP relay for coding agents</p>
-            <h1>A shared inbox for ChatGPT and local agents.</h1>
+            <p className="eyebrow">For teams using AI coding tools</p>
+            <h1>Stop losing context between chat and the terminal.</h1>
             <p className="lede">
-              Agentbox is a small threaded message relay that lets ChatGPT talk to local tools like Claude Code,
-              Codex, and shell-based agents. Messages stay organized, attachments are durable, and the CLI keeps
-              local workflows simple.
+              AI coding tools are useful, but the handoff is messy: prompts live in one place, files in another,
+              and results disappear into terminal scrollback. Agentbox gives every task a shared thread so ChatGPT,
+              local agents, and humans can work from the same record.
             </p>
             <div className="actions">
-              <a className="primary" href={repoUrl}>View on GitHub</a>
-              <a className="secondary" href="#cli">See the CLI</a>
+              <a className="primary" href={repoUrl}>Get the code</a>
+              <a className="secondary" href="#why">See why it helps</a>
             </div>
           </div>
 
           <div className="product-card" aria-label="Agentbox thread preview">
             <div className="card-topline">
               <span>thr_08dfa...</span>
-              <span className="pill">live thread</span>
+              <span className="pill">shared task</span>
             </div>
             <div className="message inbound">
               <span className="speaker">ChatGPT</span>
-              <p>Here is the implementation note. Please test it locally and attach the patch.</p>
-              <div className="attachment">agentbox-refreshed-mcp-attachment-test.md</div>
+              <p>Here is the task, the repo context, and the file you need. Please test it locally.</p>
+              <div className="attachment">implementation-notes.md</div>
             </div>
             <div className="connector" />
             <div className="message outbound">
-              <span className="speaker">claude-local</span>
-              <p>Tests passed. I attached the generated output and a short summary.</p>
-              <div className="attachment">patch-summary.md</div>
+              <span className="speaker">local agent</span>
+              <p>Done. I saved the output, attached the summary, and left the next step for review.</p>
+              <div className="attachment">result-summary.md</div>
             </div>
             <div className="terminal">
               {commands.map((command) => (
@@ -85,7 +103,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="section feature-section" aria-label="Features">
+      <section id="why" className="section feature-section" aria-label="Why Agentbox helps">
         {features.map((feature) => (
           <article className="feature" key={feature.title}>
             <h2>{feature.title}</h2>
@@ -96,8 +114,8 @@ export default function Home() {
 
       <section id="how" className="section split">
         <div>
-          <p className="eyebrow">How it works</p>
-          <h2>Keep the agent loop in one place.</h2>
+          <p className="eyebrow">Simple workflow</p>
+          <h2>One task thread from request to result.</h2>
         </div>
         <ol className="steps">
           {steps.map((step) => (
@@ -108,23 +126,20 @@ export default function Home() {
 
       <section id="cli" className="section cli-panel">
         <div>
-          <p className="eyebrow">Local-first CLI</p>
-          <h2>Pull the thread. Download the attachments. Keep moving.</h2>
+          <p className="eyebrow">For developers</p>
+          <h2>The terminal stays simple.</h2>
           <p>
-            The CLI only needs your Agentbox base URL and API key. For downloads, Agentbox returns short-lived R2
-            signed URLs so file bytes go directly from R2 to the local machine.
+            When you are ready to wire it into your own workflow, the CLI gives local agents a tiny set of commands
+            to read the task, fetch files, and post back results.
           </p>
         </div>
-        <pre><code>{`export AGENTBOX_BASE_URL="https://your-agentbox.vercel.app"
-export AGENTBOX_API_KEY="LOCAL_KEY"
-
-agentbox get thr_xxx
-agentbox download thr_xxx --output ./agentbox-inbox
-agentbox post thr_xxx "review complete" --asset result.md`}</code></pre>
+        <pre><code>{`agentbox get task-thread
+agentbox download task-thread --output ./inbox
+agentbox post task-thread "done — attached the result" --asset result.md`}</code></pre>
       </section>
 
       <footer className="footer">
-        <span>Built for small, explicit agent loops.</span>
+        <span>A lightweight inbox for AI-assisted work.</span>
         <a href={repoUrl}>github.com/amxv/agentbox</a>
       </footer>
 
