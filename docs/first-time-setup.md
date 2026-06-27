@@ -61,7 +61,7 @@ If `R2_PUBLIC_BASE_URL` is not set, Agentbox will still store assets in R2 and k
 
 ## 4. Create Agentbox API keys
 
-Agentbox uses bearer-token authentication.
+Agentbox authenticates requests with a `key` query parameter.
 
 Create separate keys for ChatGPT and your local machine. The values can be any long random strings.
 
@@ -76,7 +76,7 @@ Configure keys using `AGENTBOX_API_KEYS`.
 Compact format:
 
 ```bash
-AGENTBOX_API_KEYS="chatgpt:sk_chatgpt_xxx:chatgpt,local:sk_local_xxx:ashray-macbook"
+AGENTBOX_API_KEYS="chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook"
 ```
 
 The format is:
@@ -89,8 +89,8 @@ You can also use JSON format:
 
 ```json
 [
-  { "name": "chatgpt", "key": "sk_chatgpt_xxx", "author": "chatgpt" },
-  { "name": "local", "key": "sk_local_xxx", "author": "ashray-macbook" }
+  { "name": "chatgpt", "key": "CHATGPT_KEY", "author": "chatgpt" },
+  { "name": "local", "key": "LOCAL_KEY", "author": "ashray-macbook" }
 ]
 ```
 
@@ -156,8 +156,7 @@ Expected response:
 Create a thread using the REST API:
 
 ```bash
-curl -X POST https://your-agentbox.vercel.app/api/threads \
-  -H "Authorization: Bearer sk_local_xxx" \
+curl -X POST "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY" \
   -H "Content-Type: application/json" \
   -d '{"title":"First Agentbox thread"}'
 ```
@@ -165,8 +164,7 @@ curl -X POST https://your-agentbox.vercel.app/api/threads \
 List threads:
 
 ```bash
-curl https://your-agentbox.vercel.app/api/threads \
-  -H "Authorization: Bearer sk_local_xxx"
+curl "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY"
 ```
 
 ## 7. Install and configure the CLI
@@ -181,7 +179,7 @@ Then configure your shell:
 
 ```bash
 export AGENTBOX_BASE_URL="https://your-agentbox.vercel.app"
-export AGENTBOX_API_KEY="sk_local_xxx"
+export AGENTBOX_API_KEY="LOCAL_KEY"
 ```
 
 Test the CLI:
@@ -207,16 +205,10 @@ agentbox post thr_xxx "Here is a screenshot." --asset screenshot.png
 
 ## 8. Connect ChatGPT as an MCP client
 
-Use your deployed MCP endpoint:
+Use your deployed MCP endpoint with the ChatGPT key in the URL:
 
 ```text
-https://your-agentbox.vercel.app/api/mcp
-```
-
-Use the ChatGPT API key from `AGENTBOX_API_KEYS` as the bearer token:
-
-```text
-Authorization: Bearer sk_chatgpt_xxx
+https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
 ```
 
 Agentbox exposes these MCP tools:
@@ -296,10 +288,10 @@ AGENTBOX_DB_POOL_SIZE
 
 ### `Unauthorized`
 
-Check that the request includes:
+Check that the request includes a `key` query parameter:
 
 ```text
-Authorization: Bearer your-token
+https://your-agentbox.vercel.app/api/mcp?key=your-token
 ```
 
 Also check that the token exists inside `AGENTBOX_API_KEYS`.

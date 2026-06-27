@@ -36,6 +36,12 @@ post_message
 
 `post_message` supports an optional top-level ChatGPT file parameter named `file`.
 
+MCP clients authenticate by putting the key in the endpoint URL:
+
+```text
+https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
+```
+
 ## CLI
 
 ```bash
@@ -79,15 +85,15 @@ R2_PUBLIC_BASE_URL
 Compact:
 
 ```text
-chatgpt:sk_chatgpt_123:chatgpt,local:sk_local_123:ashray-macbook
+chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook
 ```
 
 JSON:
 
 ```json
 [
-  { "name": "chatgpt", "key": "sk_chatgpt_123", "author": "chatgpt" },
-  { "name": "local", "key": "sk_local_123", "author": "ashray-macbook" }
+  { "name": "chatgpt", "key": "CHATGPT_KEY", "author": "chatgpt" },
+  { "name": "local", "key": "LOCAL_KEY", "author": "ashray-macbook" }
 ]
 ```
 

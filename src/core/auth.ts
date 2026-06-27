@@ -35,11 +35,9 @@ function parseKeyConfig(raw: string | undefined): KeyConfig[] {
     .filter((entry) => entry.name && entry.key && entry.author);
 }
 
-export function getBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-  if (!header) return null;
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match?.[1] ?? null;
+export function getUrlKey(request: Request): string | null {
+  const url = new URL(request.url);
+  return url.searchParams.get("key");
 }
 
 export function authenticateRequest(request: Request): Actor | null {
@@ -49,7 +47,7 @@ export function authenticateRequest(request: Request): Actor | null {
     return { name: "local-dev", keyName: "local-dev" };
   }
 
-  const token = getBearerToken(request);
+  const token = getUrlKey(request);
   if (!token) return null;
 
   const match = keys.find((entry) => safeEqual(entry.key, token));

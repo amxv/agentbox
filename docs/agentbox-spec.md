@@ -397,7 +397,7 @@ agentbox/thr_123/msg_456/asset_789-homepage-banner.png
 
 ## Authentication
 
-Agentbox uses bearer-token authentication.
+Agentbox authenticates requests with a `key` query parameter.
 
 Each client should have its own key:
 
@@ -420,18 +420,24 @@ claude-code-local
 
 Keys are configured with the `AGENTBOX_API_KEYS` environment variable.
 
+Clients authenticate by putting the key directly in the endpoint URL:
+
+```text
+https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
+```
+
 Example compact format:
 
 ```text
-chatgpt:sk_chatgpt_123:chatgpt,local:sk_local_123:ashray-macbook
+chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook
 ```
 
 Example JSON format:
 
 ```json
 [
-  { "name": "chatgpt", "key": "sk_chatgpt_123", "author": "chatgpt" },
-  { "name": "local", "key": "sk_local_123", "author": "ashray-macbook" }
+  { "name": "chatgpt", "key": "CHATGPT_KEY", "author": "chatgpt" },
+  { "name": "local", "key": "LOCAL_KEY", "author": "ashray-macbook" }
 ]
 ```
 

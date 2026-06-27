@@ -44,9 +44,10 @@ function apiKey(): string {
 
 async function request(path: string, options: RequestOptions = {}) {
   const headers = new Headers(options.headers);
-  headers.set("authorization", `Bearer ${apiKey()}`);
+  const url = new URL(path, `${baseUrl()}/`);
+  url.searchParams.set("key", apiKey());
 
-  const response = await fetch(`${baseUrl()}${path}`, { ...options, headers });
+  const response = await fetch(url, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
 
