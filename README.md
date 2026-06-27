@@ -59,10 +59,10 @@ agentbox post thr_123 --file message.md --asset screenshot.png
 ## Development
 
 ```bash
-npm install
-npm run dev
-npm run typecheck
-npm run build:cli
+bun install
+bun run dev
+bun run typecheck
+bun run build:cli
 ```
 
 ## Environment variables

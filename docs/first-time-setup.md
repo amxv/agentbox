@@ -7,7 +7,7 @@ This guide walks through setting up Agentbox for the first time on Vercel with P
 ```bash
 git clone https://github.com/amxv/agentbox.git
 cd agentbox
-npm install
+bun install
 ```
 
 ## 2. Create a Postgres database
@@ -99,7 +99,7 @@ You can also use JSON format:
 Install the Vercel CLI if needed:
 
 ```bash
-npm i -g vercel
+bun add -g vercel
 ```
 
 Link the repo to a Vercel project:
@@ -172,7 +172,7 @@ curl "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY"
 For local development from the repo:
 
 ```bash
-npm run link:cli
+bun run link:cli
 ```
 
 Then configure your shell:
@@ -250,7 +250,7 @@ If ChatGPT can see the local reply, the basic Agentbox loop is working.
 Run the app locally:
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 In development, if `AGENTBOX_API_KEYS` is not set, requests are accepted as `local-dev`.
@@ -258,10 +258,10 @@ In development, if `AGENTBOX_API_KEYS` is not set, requests are accepted as `loc
 Useful checks:
 
 ```bash
-npm run lint
-npm run typecheck
-npm run build:cli
-npm run build
+bun run lint
+bun run typecheck
+bun run build:cli
+bun run build
 ```
 
 ## Required environment variables
