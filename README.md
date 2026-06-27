@@ -101,3 +101,12 @@ JSON:
 
 - [`docs/agentbox-spec.md`](docs/agentbox-spec.md)
 - [`docs/first-time-setup.md`](docs/first-time-setup.md)
+
+## Download thread attachments
+
+```bash
+agentbox download <thread_id>
+agentbox download <thread_id> --output ./downloads
+```
+
+`download` fetches every attachment linked to the thread through the Agentbox API, prints the saved local paths, and only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY` locally. The Vercel deployment streams the files. By default files are saved to `agentbox-downloads/<thread_id>/`.

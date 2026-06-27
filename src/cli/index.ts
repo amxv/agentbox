@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { lookup } from "mime-types";
 import { Command } from "commander";
 
@@ -10,7 +10,9 @@ type RequestOptions = {
 };
 
 type CliAsset = {
+  id: string;
   file_name: string;
+  mime_type?: string | null;
   public_url?: string | null;
   storage_key: string;
 };
@@ -83,12 +85,29 @@ function printThread(thread: CliThread) {
       console.log("");
       console.log("Assets:");
       for (const asset of message.assets) {
-        console.log(`- ${asset.file_name} ${asset.public_url ?? asset.storage_key}`);
+        console.log(`- ${asset.id} ${asset.file_name} ${asset.public_url ?? asset.storage_key}`);
       }
     }
     console.log("");
   }
 }
+
+function outputFilePath(outputDir: string, asset: CliAsset): string {
+  return join(outputDir, `${asset.id}-${asset.file_name}`);
+}
+
+async function downloadAsset(asset: CliAsset, outputPath: string) {
+  const data = await request(`/api/assets/${encodeURIComponent(asset.id)}/download-url`);
+  const response = await fetch(data.download_url);
+
+  if (!response.ok) {
+    throw new Error(`Direct R2 download failed with HTTP ${response.status}`);
+  }
+
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, new Uint8Array(await response.arrayBuffer()));
+}
+
 
 const program = new Command();
 program
@@ -135,6 +154,45 @@ program
     const data = await request(`/api/threads/${encodeURIComponent(threadId)}`);
     if (options.json) return printJson(data);
     printThread(data.thread);
+  });
+
+program
+  .command("download")
+  .description("Download all attachments from a thread to a local directory.")
+  .argument("<thread-id>", "thread id")
+  .option("-o, --output <dir>", "directory to save files into")
+  .option("--json", "print raw JSON")
+  .action(async (threadId, options) => {
+    const data = await request(`/api/threads/${encodeURIComponent(threadId)}`);
+    const outputDir = options.output ?? join("agentbox-downloads", threadId);
+    const downloads = [];
+
+    for (const message of data.thread.messages ?? []) {
+      for (const asset of message.assets ?? []) {
+        const outputPath = outputFilePath(outputDir, asset);
+        await downloadAsset(asset, outputPath);
+        downloads.push({
+          message_id: message.id,
+          asset_id: asset.id,
+          file_name: asset.file_name,
+          storage_key: asset.storage_key,
+          output_path: outputPath
+        });
+      }
+    }
+
+    const result = { thread_id: threadId, output_dir: outputDir, downloads };
+
+    if (options.json) return printJson(result);
+    if (downloads.length === 0) {
+      console.log(`No attachments found for ${threadId}.`);
+      return;
+    }
+
+    console.log(`Saved ${downloads.length} attachment${downloads.length === 1 ? "" : "s"} to ${outputDir}`);
+    for (const download of downloads) {
+      console.log(`- ${download.file_name} -> ${download.output_path}`);
+    }
   });
 
 program

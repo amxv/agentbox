@@ -1,4 +1,5 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { lookup } from "mime-types";
 import type { ChatGPTFileReference } from "./types";
 import type { NewAsset } from "./db";
@@ -86,6 +87,28 @@ export async function uploadAssetBytes(params: {
     sizeBytes: params.bytes.byteLength,
     publicUrl: publicUrlForKey(storageKey)
   };
+}
+
+export async function createSignedAssetDownloadUrl(params: {
+  storageKey: string;
+  fileName: string;
+  mimeType?: string | null;
+  expiresInSeconds?: number;
+}): Promise<string> {
+  const bucket = process.env.R2_BUCKET;
+  if (!bucket) throw new Error("R2_BUCKET is required for asset downloads.");
+
+  const fallback = params.fileName.replace(/[^a-zA-Z0-9._-]+/g, "_") || "download.bin";
+  const command = new GetObjectCommand({
+    Bucket: bucket,
+    Key: params.storageKey,
+    ResponseContentDisposition: `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(params.fileName)}`,
+    ResponseContentType: params.mimeType ?? undefined
+  });
+
+  return getSignedUrl(getR2Client(), command, {
+    expiresIn: params.expiresInSeconds ?? 300
+  });
 }
 
 function chatGPTFileReferenceFromInput(file: ChatGPTFileReference | string): ChatGPTFileReference {

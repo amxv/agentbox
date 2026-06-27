@@ -164,6 +164,17 @@ export async function getThread(threadId: string): Promise<ThreadWithMessages | 
   };
 }
 
+export async function getAsset(assetId: string): Promise<Asset | null> {
+  await ensureSchema();
+  const sql = getSql();
+  const rows = await sql`
+    select id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, created_by
+    from assets
+    where id = ${assetId}
+  `;
+  return rows.length ? normalizeAsset(rows[0]) : null;
+}
+
 export type NewAsset = {
   storageKey: string;
   fileName: string;

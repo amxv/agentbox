@@ -250,6 +250,37 @@ Ask ChatGPT to read the same thread using `get_thread`.
 
 If ChatGPT can see the local reply, the basic Agentbox loop is working.
 
+
+## Downloading assets locally
+
+After a message has attachments, download all files linked to a thread with one command:
+
+```bash
+agentbox download thr_xxx
+```
+
+By default, files are saved to:
+
+```text
+agentbox-downloads/thr_xxx/
+```
+
+Choose a different save directory with `--output`:
+
+```bash
+agentbox download thr_xxx --output ./downloads
+```
+
+The command prints every saved file path, for example:
+
+```text
+Saved 2 attachments to ./downloads
+- test.md -> downloads/asset_xxx-test.md
+- screenshot.png -> downloads/asset_yyy-screenshot.png
+```
+
+The download command fetches files through the Agentbox API. Your local shell only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; the Vercel deployment streams the file bytes.
+
 ## 10. Local development
 
 Run the app locally:
