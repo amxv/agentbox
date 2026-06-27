@@ -47,6 +47,13 @@ const steps = [
   "You review everything in one place and decide what happens next."
 ];
 
+const chatgptSetupSteps = [
+  "Deploy Agentbox and create an API key for ChatGPT.",
+  "Open ChatGPT settings and add a new custom MCP server or connector.",
+  "Use your Agentbox MCP URL with the key in the query string.",
+  "Save it, then ask ChatGPT to list or create Agentbox threads."
+];
+
 export default function Home() {
   return (
     <main className="page-shell">
@@ -59,6 +66,7 @@ export default function Home() {
           <div className="nav-links">
             <a href="#why">Why it helps</a>
             <a href="#how">Workflow</a>
+            <a href="#connect">Connect ChatGPT</a>
             <a href={repoUrl}>GitHub</a>
           </div>
         </nav>
@@ -122,6 +130,32 @@ export default function Home() {
             <li key={step}>{step}</li>
           ))}
         </ol>
+      </section>
+
+      <section id="connect" className="section setup-panel">
+        <div>
+          <p className="eyebrow">Connect ChatGPT</p>
+          <h2>Add Agentbox as an MCP server.</h2>
+          <p>
+            After you deploy Agentbox and provision an API key for ChatGPT, add the server URL in ChatGPT so it can
+            create threads, post messages, and read replies from your local agents.
+          </p>
+        </div>
+        <div className="setup-card">
+          <ol className="setup-list">
+            {chatgptSetupSteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <div className="url-box">
+            <span>MCP server URL</span>
+            <code>{`https://your-agentbox.vercel.app/api/mcp?key=YOUR_AGENTBOX_KEY`}</code>
+          </div>
+          <p className="note">
+            Keep the key private. Create separate keys for ChatGPT and each local machine so you can rotate access
+            without disrupting every agent.
+          </p>
+        </div>
       </section>
 
       <section id="cli" className="section cli-panel">
@@ -264,7 +298,7 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
         h1 {
           max-width: 680px;
           margin-bottom: 22px;
-          font-size: clamp(56px, 9vw, 104px);
+          font-size: clamp(44px, 6.8vw, 78px);
         }
 
         h2 {
@@ -274,10 +308,24 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
 
         .lede,
         .cli-panel p,
+        .setup-panel p,
         .feature p {
           color: #5e574f;
-          font-size: 18px;
           line-height: 1.65;
+        }
+
+        .lede {
+          max-width: 640px;
+          font-size: 16.5px;
+        }
+
+        .cli-panel p,
+        .setup-panel p {
+          font-size: 17px;
+        }
+
+        .feature p {
+          font-size: 15px;
         }
 
         .actions {
@@ -407,6 +455,7 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
 
         .feature,
         .split,
+        .setup-panel,
         .cli-panel {
           border: 1px solid rgba(39, 31, 22, 0.1);
           border-radius: 26px;
@@ -425,12 +474,57 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
         }
 
         .split,
+        .setup-panel,
         .cli-panel {
           display: grid;
           grid-template-columns: 0.9fr 1.1fr;
           gap: 34px;
           align-items: start;
           padding: clamp(28px, 5vw, 46px);
+        }
+
+        .setup-card {
+          display: grid;
+          gap: 18px;
+        }
+
+        .setup-list {
+          display: grid;
+          gap: 10px;
+          margin: 0;
+          padding-left: 20px;
+          color: #4d463e;
+          font-size: 16px;
+          line-height: 1.55;
+        }
+
+        .url-box {
+          display: grid;
+          gap: 8px;
+          border: 1px solid rgba(39, 31, 22, 0.12);
+          border-radius: 18px;
+          padding: 16px;
+          background: rgba(255, 255, 255, 0.36);
+        }
+
+        .url-box span {
+          color: #8a8176;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+        }
+
+        .url-box code {
+          color: #1c1915;
+          font-size: 14px;
+          overflow-wrap: anywhere;
+        }
+
+        .note {
+          margin-bottom: 0;
+          font-size: 14px !important;
+          color: #756d63 !important;
         }
 
         .steps {
@@ -498,6 +592,7 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
 
           .hero-grid,
           .split,
+          .setup-panel,
           .cli-panel,
           .feature-section {
             grid-template-columns: 1fr;
@@ -524,12 +619,13 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
           .hero,
           .feature,
           .split,
+          .setup-panel,
           .cli-panel {
             border-radius: 22px;
           }
 
           h1 {
-            font-size: 48px;
+            font-size: 40px;
           }
 
           .nav-links,
