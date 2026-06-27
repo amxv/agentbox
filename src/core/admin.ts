@@ -7,25 +7,30 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-export function requireAdminFromSearch(searchParams: URLSearchParams): string {
-  const configured = process.env.AGENTBOX_ADMIN_KEY;
+function configuredAdminKey(): string | null {
+  return process.env.AGENTBOX_ADMIN_KEY ?? null;
+}
 
-  if (!configured && process.env.NODE_ENV !== "production") {
-    return searchParams.get("admin_key") ?? "local-dev";
-  }
+function allowLocalDev(): boolean {
+  return !configuredAdminKey() && process.env.NODE_ENV !== "production";
+}
+
+export function requireAdminKey(provided: string | null): void {
+  const configured = configuredAdminKey();
+
+  if (!configured && allowLocalDev()) return;
 
   if (!configured) {
     throw new Error("AGENTBOX_ADMIN_KEY is required for the web thread viewer.");
   }
 
-  const provided = searchParams.get("admin_key");
   if (!provided || !safeEqual(provided, configured)) {
     throw new Error("Unauthorized");
   }
-
-  return provided;
 }
 
-export function adminQuery(adminKey: string): string {
-  return `admin_key=${encodeURIComponent(adminKey)}`;
+export function requireAdminRequest(request: Request): void {
+  const headerKey = request.headers.get("x-agentbox-admin-key");
+  const bearer = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? null;
+  requireAdminKey(headerKey ?? bearer);
 }

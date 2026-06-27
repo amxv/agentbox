@@ -61,10 +61,10 @@ agentbox download thr_xxx --output ./downloads
 Agentbox includes a simple browser viewer for inspecting threads and attachments:
 
 ```text
-https://your-agentbox.vercel.app/threads?admin_key=ADMIN_KEY
+https://your-agentbox.vercel.app/threads
 ```
 
-Set `AGENTBOX_ADMIN_KEY` in the deployment environment. The viewer is read-only and intended for demos, debugging, and quick inspection.
+Set `AGENTBOX_ADMIN_KEY` in the deployment environment. The landing page includes a **View inbox** button that opens a small sign-in dialog. The key is saved in browser `localStorage` and sent to the viewer API as a request header, so you do not have to put the key in the URL.
 
 ## API
 

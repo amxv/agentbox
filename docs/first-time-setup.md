@@ -294,13 +294,13 @@ The download command fetches files through the Agentbox API. Your local shell on
 
 ## 11. Read-only web viewer
 
-Open the browser viewer with your admin key:
+Open the browser viewer:
 
 ```text
-https://your-agentbox.vercel.app/threads?admin_key=ADMIN_KEY
+https://your-agentbox.vercel.app/threads
 ```
 
-The viewer is read-only. Use it to inspect threads, messages, and attachment metadata without using the CLI.
+The landing page also has a **View inbox** button. Enter `AGENTBOX_ADMIN_KEY` in the dialog once; Agentbox saves it in browser `localStorage` and uses it as a request header for viewer API calls. The viewer is read-only. Use it to inspect threads, messages, and attachment metadata without using the CLI.
 
 ## 12. Local development
 

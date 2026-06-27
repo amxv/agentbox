@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { InboxButton } from "./components/inbox-button";
 
 export const metadata: Metadata = {
   title: "Agentbox — Shared inbox for AI coding agents",
@@ -67,6 +68,7 @@ export default function Home() {
             <a href="#why">Why it helps</a>
             <a href="#how">Workflow</a>
             <a href="#connect">Connect ChatGPT</a>
+            <InboxButton className="nav-button" label="View inbox" />
             <a href={repoUrl}>GitHub</a>
           </div>
         </nav>
@@ -81,8 +83,8 @@ export default function Home() {
               local agents, and humans can work from the same record.
             </p>
             <div className="actions">
-              <a className="primary" href={repoUrl}>Get the code</a>
-              <a className="secondary" href="#why">See why it helps</a>
+              <InboxButton className="primary" label="View inbox" />
+              <a className="secondary" href={repoUrl}>Get the code</a>
             </div>
           </div>
 
@@ -336,7 +338,11 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
         }
 
         .primary,
-        .secondary {
+        .secondary,
+        .nav-button {
+          border: 0;
+          cursor: pointer;
+          font: inherit;
           display: inline-flex;
           align-items: center;
           justify-content: center;
@@ -353,7 +359,18 @@ agentbox post task-thread "done — attached the result" --asset result.md`}</co
 
         .secondary {
           border: 1px solid rgba(39, 31, 22, 0.18);
+          background: transparent;
           color: #2b261f;
+        }
+
+        .nav-button {
+          min-height: auto;
+          border-radius: 999px;
+          padding: 7px 12px;
+          background: #1c1915;
+          color: #fffaf0;
+          font-size: 14px;
+          font-weight: 700;
         }
 
         .product-card {
