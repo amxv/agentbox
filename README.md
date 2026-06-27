@@ -91,6 +91,7 @@ JSON:
 ]
 ```
 
-## Spec
+## Docs
 
-See [`docs/agentbox-spec.md`](docs/agentbox-spec.md).
+- [`docs/agentbox-spec.md`](docs/agentbox-spec.md)
+- [`docs/first-time-setup.md`](docs/first-time-setup.md)
