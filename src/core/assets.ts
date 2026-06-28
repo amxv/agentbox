@@ -8,6 +8,10 @@ const MAX_FILE_SIZE_BYTES = Number(process.env.AGENTBOX_MAX_FILE_SIZE_BYTES ?? 2
 
 let s3Client: S3Client | null = null;
 
+function isFakeR2Enabled(): boolean {
+  return process.env.AGENTBOX_TEST_FAKE_R2 === "1";
+}
+
 function getR2Client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID;
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
@@ -62,9 +66,6 @@ export async function uploadAssetBytes(params: {
     throw new Error(`File is too large. Max size is ${MAX_FILE_SIZE_BYTES} bytes.`);
   }
 
-  const bucket = process.env.R2_BUCKET;
-  if (!bucket) throw new Error("R2_BUCKET is required for asset uploads.");
-
   const fileName = sanitizeFilename(params.fileName);
   const mimeType = inferMimeType(fileName, params.mimeType);
   const storageKey = makeStorageKey({
@@ -73,12 +74,17 @@ export async function uploadAssetBytes(params: {
     fileName
   });
 
-  await getR2Client().send(new PutObjectCommand({
-    Bucket: bucket,
-    Key: storageKey,
-    Body: params.bytes,
-    ContentType: mimeType ?? "application/octet-stream"
-  }));
+  if (!isFakeR2Enabled()) {
+    const bucket = process.env.R2_BUCKET;
+    if (!bucket) throw new Error("R2_BUCKET is required for asset uploads.");
+
+    await getR2Client().send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: storageKey,
+      Body: params.bytes,
+      ContentType: mimeType ?? "application/octet-stream"
+    }));
+  }
 
   return {
     storageKey,
@@ -95,6 +101,14 @@ export async function createSignedAssetDownloadUrl(params: {
   mimeType?: string | null;
   expiresInSeconds?: number;
 }): Promise<string> {
+  if (isFakeR2Enabled()) {
+    const url = new URL(`https://r2.test/${params.storageKey}`);
+    url.searchParams.set("X-Amz-Expires", String(params.expiresInSeconds ?? 300));
+    url.searchParams.set("response-content-disposition", `attachment; filename="${params.fileName}"`);
+    if (params.mimeType) url.searchParams.set("response-content-type", params.mimeType);
+    return url.toString();
+  }
+
   const bucket = process.env.R2_BUCKET;
   if (!bucket) throw new Error("R2_BUCKET is required for asset downloads.");
 

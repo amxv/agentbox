@@ -19,6 +19,7 @@
     "build": "next build",
     "build:cli": "tsup src/cli/index.ts --format esm --clean && node scripts/fix-cli-shebang.mjs",
     "db:migrate": "bun src/scripts/migrate.ts",
+    "test:parity": "bun scripts/parity-current.ts",
     "build:all": "bun run build && bun run build:cli",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

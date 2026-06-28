@@ -4,6 +4,20 @@ import type { Asset, Message, Thread, ThreadWithMessages } from "./types";
 let sqlClient: postgres.Sql | null = null;
 let schemaReady: Promise<void> | null = null;
 
+const memoryDb = {
+  threads: [] as Thread[],
+  messages: [] as Message[],
+  assets: [] as Asset[]
+};
+
+function isMemoryDbEnabled(): boolean {
+  return process.env.AGENTBOX_TEST_DB === "memory";
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
 function getSql() {
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is required.");
@@ -19,6 +33,8 @@ function getSql() {
 }
 
 export async function ensureSchema(): Promise<void> {
+  if (isMemoryDbEnabled()) return;
+
   schemaReady ??= (async () => {
     const sql = getSql();
     await sql`
@@ -99,6 +115,12 @@ function normalizeMessage(row: Record<string, unknown>, assets: Asset[] = []): M
 }
 
 export async function listThreads(limit = 50): Promise<Thread[]> {
+  if (isMemoryDbEnabled()) {
+    return [...memoryDb.threads]
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, limit);
+  }
+
   await ensureSchema();
   const sql = getSql();
   const rows = await sql`
@@ -111,6 +133,19 @@ export async function listThreads(limit = 50): Promise<Thread[]> {
 }
 
 export async function createThread(title: string, author: string): Promise<Thread> {
+  if (isMemoryDbEnabled()) {
+    const createdAt = nowIso();
+    const thread: Thread = {
+      id: `thr_${crypto.randomUUID()}`,
+      title,
+      created_at: createdAt,
+      updated_at: createdAt,
+      created_by: author
+    };
+    memoryDb.threads.push(thread);
+    return thread;
+  }
+
   await ensureSchema();
   const sql = getSql();
   const id = `thr_${crypto.randomUUID()}`;
@@ -123,6 +158,24 @@ export async function createThread(title: string, author: string): Promise<Threa
 }
 
 export async function getThread(threadId: string): Promise<ThreadWithMessages | null> {
+  if (isMemoryDbEnabled()) {
+    const thread = memoryDb.threads.find((entry) => entry.id === threadId);
+    if (!thread) return null;
+
+    return {
+      ...thread,
+      messages: memoryDb.messages
+        .filter((message) => message.thread_id === threadId)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map((message) => ({
+          ...message,
+          assets: memoryDb.assets
+            .filter((asset) => asset.message_id === message.id)
+            .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        }))
+    };
+  }
+
   await ensureSchema();
   const sql = getSql();
   const threadRows = await sql`
@@ -165,6 +218,10 @@ export async function getThread(threadId: string): Promise<ThreadWithMessages | 
 }
 
 export async function getAsset(assetId: string): Promise<Asset | null> {
+  if (isMemoryDbEnabled()) {
+    return memoryDb.assets.find((asset) => asset.id === assetId) ?? null;
+  }
+
   await ensureSchema();
   const sql = getSql();
   const rows = await sql`
@@ -189,6 +246,40 @@ export async function postMessage(params: {
   body: string;
   asset?: NewAsset | null;
 }): Promise<Message> {
+  if (isMemoryDbEnabled()) {
+    const thread = memoryDb.threads.find((entry) => entry.id === params.threadId);
+    if (!thread) {
+      throw new Error("insert or update on table \"messages\" violates foreign key constraint \"messages_thread_id_fkey\"");
+    }
+
+    const message: Message = {
+      id: `msg_${crypto.randomUUID()}`,
+      thread_id: params.threadId,
+      author: params.author,
+      body: params.body,
+      created_at: nowIso(),
+      assets: []
+    };
+    memoryDb.messages.push(message);
+    thread.updated_at = nowIso();
+
+    if (!params.asset) return message;
+
+    const asset: Asset = {
+      id: `asset_${crypto.randomUUID()}`,
+      message_id: message.id,
+      storage_key: params.asset.storageKey,
+      file_name: params.asset.fileName,
+      mime_type: params.asset.mimeType ?? null,
+      size_bytes: params.asset.sizeBytes,
+      public_url: params.asset.publicUrl ?? null,
+      created_at: nowIso(),
+      created_by: params.author
+    };
+    memoryDb.assets.push(asset);
+    return { ...message, assets: [asset] };
+  }
+
   await ensureSchema();
   const sql = getSql();
   const messageId = `msg_${crypto.randomUUID()}`;
@@ -228,6 +319,13 @@ export async function postMessage(params: {
 
 
 export async function closeDb(): Promise<void> {
+  if (isMemoryDbEnabled()) {
+    memoryDb.threads = [];
+    memoryDb.messages = [];
+    memoryDb.assets = [];
+    return;
+  }
+
   if (!sqlClient) return;
   const client = sqlClient;
   sqlClient = null;
