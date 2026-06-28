@@ -11,6 +11,8 @@ type Asset = {
   file_name: string;
   mime_type: string | null;
   size_bytes: number;
+  download_url?: string | null;
+  preview_url?: string | null;
 };
 
 type Message = {
@@ -92,9 +94,20 @@ export function ThreadView({ threadId }: { threadId: string }) {
               <div style={styles.assets}>
                 <span style={styles.assetLabel}>Attachments</span>
                 {message.assets.map((asset) => (
-                  <div key={asset.id} style={styles.assetRow}>
-                    <span>{asset.file_name}</span>
-                    <span>{asset.mime_type ?? "unknown type"} · {asset.size_bytes} bytes</span>
+                  <div key={asset.id} style={styles.assetCard}>
+                    {asset.preview_url && (
+                      <a href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer" style={styles.previewLink}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={asset.preview_url} alt={asset.file_name} style={styles.previewImage} loading="lazy" />
+                      </a>
+                    )}
+                    <div style={styles.assetRow}>
+                      <span>{asset.file_name}</span>
+                      <span>{asset.mime_type ?? "unknown type"} · {asset.size_bytes} bytes</span>
+                    </div>
+                    {asset.download_url && (
+                      <a href={asset.download_url} target="_blank" rel="noreferrer" style={styles.downloadLink}>Open attachment</a>
+                    )}
                   </div>
                 ))}
               </div>
@@ -189,12 +202,40 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.1em",
     textTransform: "uppercase"
   },
+  assetCard: {
+    display: "grid",
+    gap: 10,
+    border: "1px solid rgba(39, 31, 22, 0.08)",
+    borderRadius: 16,
+    padding: 12,
+    background: "rgba(255, 255, 255, 0.32)"
+  },
+  previewLink: {
+    display: "block",
+    overflow: "hidden",
+    borderRadius: 14,
+    border: "1px solid rgba(39, 31, 22, 0.08)",
+    background: "#efe7d9"
+  },
+  previewImage: {
+    display: "block",
+    width: "100%",
+    maxHeight: 520,
+    objectFit: "contain"
+  },
   assetRow: {
     display: "flex",
     justifyContent: "space-between",
     gap: 12,
     color: "#5e574f",
     fontSize: 13
+  },
+  downloadLink: {
+    width: "fit-content",
+    color: "#a24f2f",
+    fontSize: 13,
+    fontWeight: 800,
+    textDecoration: "none"
   },
   empty: {
     maxWidth: 980,
