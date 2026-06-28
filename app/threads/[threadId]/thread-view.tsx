@@ -3,8 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-
-const STORAGE_KEY = "agentbox_admin_key";
+import { getActiveViewerProfile } from "../../components/viewer-profiles";
 
 type Asset = {
   id: string;
@@ -37,8 +36,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const key = window.localStorage.getItem(STORAGE_KEY);
-    if (!key) {
+    const profile = getActiveViewerProfile();
+    if (!profile) {
       router.replace("/threads");
       return;
     }
@@ -60,7 +59,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       }
     }
 
-    void loadThread(key);
+    void loadThread(profile.adminKey);
   }, [router, threadId]);
 
   return (

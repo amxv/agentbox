@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
-
-const STORAGE_KEY = "agentbox_admin_key";
+import {
+  getActiveViewerProfile,
+  loadViewerProfiles,
+  removeViewerProfile,
+  setActiveViewerProfileId,
+  upsertViewerProfile,
+  type ViewerProfile
+} from "../components/viewer-profiles";
 
 type Thread = {
   id: string;
@@ -12,21 +18,30 @@ type Thread = {
   created_by: string;
 };
 
+function initialViewerState() {
+  const profiles = loadViewerProfiles();
+  const active = getActiveViewerProfile();
+  return {
+    profiles,
+    activeProfileId: active?.id ?? profiles[0]?.id ?? "",
+    draftName: active?.name ?? "",
+    draftKey: active?.adminKey ?? ""
+  };
+}
+
 export function InboxView() {
-  const [key, setKey] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(STORAGE_KEY) ?? "";
-  });
-  const [draftKey, setDraftKey] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(STORAGE_KEY) ?? "";
-  });
+  const [profiles, setProfiles] = useState<ViewerProfile[]>(() => initialViewerState().profiles);
+  const [activeProfileId, setActiveProfileIdState] = useState(() => initialViewerState().activeProfileId);
+  const [draftName, setDraftName] = useState(() => initialViewerState().draftName);
+  const [draftKey, setDraftKey] = useState(() => initialViewerState().draftKey);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
+
   useEffect(() => {
-    if (!key) return;
+    if (!activeProfile) return;
 
     async function loadThreads(adminKey: string) {
       setLoading(true);
@@ -45,23 +60,43 @@ export function InboxView() {
       }
     }
 
-    void loadThreads(key);
-  }, [key]);
+    void loadThreads(activeProfile.adminKey);
+  }, [activeProfile]);
 
-  function saveKey(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = draftKey.trim();
-    if (!trimmed) return;
-    window.localStorage.setItem(STORAGE_KEY, trimmed);
-    setKey(trimmed);
-  }
-
-  function signOut() {
-    window.localStorage.removeItem(STORAGE_KEY);
-    setKey("");
-    setDraftKey("");
+  function syncProfiles(nextProfiles: ViewerProfile[], nextActiveId: string) {
+    const active = nextProfiles.find((profile) => profile.id === nextActiveId) ?? null;
+    setProfiles(nextProfiles);
+    setActiveProfileIdState(nextActiveId);
+    setDraftName(active?.name ?? "");
+    setDraftKey(active?.adminKey ?? "");
     setThreads([]);
     setError(null);
+  }
+
+  function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = draftName.trim();
+    const trimmedKey = draftKey.trim();
+    if (!trimmedName || !trimmedKey) return;
+
+    const profile = upsertViewerProfile({
+      id: activeProfileId || null,
+      name: trimmedName,
+      adminKey: trimmedKey
+    });
+
+    syncProfiles(loadViewerProfiles(), profile.id);
+  }
+
+  function selectProfile(profileId: string) {
+    setActiveViewerProfileId(profileId);
+    syncProfiles(loadViewerProfiles(), profileId);
+  }
+
+  function removeActiveProfile() {
+    if (!activeProfile) return;
+    const nextProfiles = removeViewerProfile(activeProfile.id);
+    syncProfiles(nextProfiles, nextProfiles[0]?.id ?? "");
   }
 
   return (
@@ -72,19 +107,26 @@ export function InboxView() {
           <div>
             <p style={styles.eyebrow}>Read-only viewer</p>
             <h1 style={styles.title}>Inbox</h1>
-            <p style={styles.copy}>Inspect task threads, messages, and attachments without putting your admin key in the URL.</p>
+            <p style={styles.copy}>Inspect task threads, messages, and attachments without putting your admin key in the URL. Save multiple viewer profiles locally and switch between them.</p>
           </div>
-          {key && <button type="button" style={styles.secondaryButton} onClick={signOut}>Forget key</button>}
+          {activeProfile && <button type="button" style={styles.secondaryButton} onClick={removeActiveProfile}>Remove profile</button>}
         </div>
       </header>
 
-      {!key ? (
-        <form style={styles.signInCard} onSubmit={saveKey}>
+      {profiles.length === 0 ? (
+        <form style={styles.signInCard} onSubmit={saveProfile}>
           <div>
-            <p style={styles.eyebrow}>Sign in</p>
-            <h2 style={styles.cardTitle}>Enter your admin key</h2>
-            <p style={styles.copy}>The key is saved in this browser and sent as a request header to the viewer API.</p>
+            <p style={styles.eyebrow}>Create profile</p>
+            <h2 style={styles.cardTitle}>Save your first viewer profile</h2>
+            <p style={styles.copy}>Profiles stay in this browser and send the selected admin key as a request header to the viewer API.</p>
           </div>
+          <input
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            placeholder="Production"
+            type="text"
+            style={styles.input}
+          />
           <input
             value={draftKey}
             onChange={(event) => setDraftKey(event.target.value)}
@@ -92,25 +134,84 @@ export function InboxView() {
             type="password"
             style={styles.input}
           />
-          <button type="submit" style={styles.primaryButton}>View inbox</button>
+          <button type="submit" style={styles.primaryButton}>Save profile</button>
         </form>
       ) : (
-        <section style={styles.list}>
-          {loading && <p style={styles.empty}>Loading threads…</p>}
-          {error && (
-            <div style={styles.errorCard}>
-              <strong>Could not load inbox.</strong>
-              <span>{error}</span>
+        <section style={styles.viewerLayout}>
+          <aside style={styles.profileCard}>
+            <div style={styles.profileHeader}>
+              <div>
+                <p style={styles.eyebrow}>Viewer profiles</p>
+                <h2 style={styles.cardTitle}>Current profile</h2>
+              </div>
+              <button
+                type="button"
+                style={styles.secondaryButton}
+                onClick={() => {
+                  setActiveProfileIdState("");
+                  setDraftName("");
+                  setDraftKey("");
+                }}
+              >
+                New
+              </button>
             </div>
-          )}
-          {!loading && !error && threads.length === 0 && <p style={styles.empty}>No threads yet.</p>}
-          {!loading && !error && threads.map((thread) => (
-            <Link key={thread.id} href={`/threads/${thread.id}`} style={styles.threadCard}>
-              <span style={styles.threadTitle}>{thread.title}</span>
-              <span style={styles.threadMeta}>{thread.id}</span>
-              <span style={styles.threadMeta}>Updated {new Date(thread.updated_at).toLocaleString()}</span>
-            </Link>
-          ))}
+
+            <div style={styles.profileList}>
+              {profiles.map((profile) => (
+                <button
+                  key={profile.id}
+                  type="button"
+                  style={{
+                    ...styles.profileListItem,
+                    ...(profile.id === activeProfileId ? styles.profileListItemActive : {})
+                  }}
+                  onClick={() => selectProfile(profile.id)}
+                >
+                  <strong>{profile.name}</strong>
+                  <span>{profile.id === activeProfileId ? "Active" : "Select"}</span>
+                </button>
+              ))}
+            </div>
+
+            <form style={styles.profileEditor} onSubmit={saveProfile}>
+              <input
+                value={draftName}
+                onChange={(event) => setDraftName(event.target.value)}
+                placeholder="Profile name"
+                type="text"
+                style={styles.input}
+              />
+              <input
+                value={draftKey}
+                onChange={(event) => setDraftKey(event.target.value)}
+                placeholder="ADMIN_KEY"
+                type="password"
+                style={styles.input}
+              />
+              <button type="submit" style={styles.primaryButton}>
+                {activeProfileId ? "Save profile" : "Create profile"}
+              </button>
+            </form>
+          </aside>
+
+          <div style={styles.list}>
+            {loading && <p style={styles.empty}>Loading threads…</p>}
+            {error && (
+              <div style={styles.errorCard}>
+                <strong>Could not load inbox.</strong>
+                <span>{error}</span>
+              </div>
+            )}
+            {!loading && !error && threads.length === 0 && <p style={styles.empty}>No threads yet.</p>}
+            {!loading && !error && threads.map((thread) => (
+              <Link key={thread.id} href={`/threads/${thread.id}`} style={styles.threadCard}>
+                <span style={styles.threadTitle}>{thread.title}</span>
+                <span style={styles.threadMeta}>{thread.id}</span>
+                <span style={styles.threadMeta}>Updated {new Date(thread.updated_at).toLocaleString()}</span>
+              </Link>
+            ))}
+          </div>
         </section>
       )}
     </main>
@@ -135,7 +236,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     gap: 20,
-    alignItems: "flex-start"
+    alignItems: "flex-start",
+    flexWrap: "wrap"
   },
   back: {
     width: "fit-content",
@@ -182,6 +284,54 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 24,
     background: "rgba(255, 251, 243, 0.72)"
   },
+  viewerLayout: {
+    maxWidth: 980,
+    margin: "0 auto",
+    display: "grid",
+    gridTemplateColumns: "minmax(280px, 320px) minmax(0, 1fr)",
+    gap: 18,
+    alignItems: "start"
+  },
+  profileCard: {
+    display: "grid",
+    gap: 16,
+    padding: 20,
+    border: "1px solid rgba(39, 31, 22, 0.1)",
+    borderRadius: 24,
+    background: "rgba(255, 251, 243, 0.72)"
+  },
+  profileHeader: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12
+  },
+  profileList: {
+    display: "grid",
+    gap: 8
+  },
+  profileListItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    width: "100%",
+    border: "1px solid rgba(39, 31, 22, 0.1)",
+    borderRadius: 16,
+    padding: "12px 14px",
+    background: "rgba(255, 255, 255, 0.5)",
+    color: "#1c1915",
+    cursor: "pointer",
+    textAlign: "left"
+  },
+  profileListItemActive: {
+    border: "1px solid rgba(162, 79, 47, 0.35)",
+    background: "rgba(162, 79, 47, 0.08)"
+  },
+  profileEditor: {
+    display: "grid",
+    gap: 12
+  },
   input: {
     width: "100%",
     border: "1px solid rgba(39, 31, 22, 0.18)",
@@ -211,8 +361,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800
   },
   list: {
-    maxWidth: 980,
-    margin: "0 auto",
     display: "grid",
     gap: 12
   },

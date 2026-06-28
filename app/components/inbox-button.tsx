@@ -2,34 +2,68 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-
-const STORAGE_KEY = "agentbox_admin_key";
+import {
+  getActiveViewerProfile,
+  loadViewerProfiles,
+  setActiveViewerProfileId,
+  upsertViewerProfile,
+  type ViewerProfile
+} from "./viewer-profiles";
 
 type InboxButtonProps = {
   className?: string;
   label?: string;
 };
 
+function loadDraftState() {
+  const savedProfiles = loadViewerProfiles();
+  const active = getActiveViewerProfile();
+  return {
+    profiles: savedProfiles,
+    selectedId: active?.id ?? savedProfiles[0]?.id ?? "",
+    name: active?.name ?? "",
+    key: active?.adminKey ?? ""
+  };
+}
+
 export function InboxButton({ className, label = "View inbox" }: InboxButtonProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [key, setKey] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(STORAGE_KEY) ?? "";
-  });
+  const [profiles, setProfiles] = useState<ViewerProfile[]>(() => loadDraftState().profiles);
+  const [selectedId, setSelectedId] = useState(() => loadDraftState().selectedId);
+  const [name, setName] = useState(() => loadDraftState().name);
+  const [key, setKey] = useState(() => loadDraftState().key);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const trimmedName = name.trim();
     const trimmed = key.trim();
-    if (!trimmed) return;
-    window.localStorage.setItem(STORAGE_KEY, trimmed);
+    if (!trimmedName || !trimmed) return;
+    const profile = upsertViewerProfile({
+      id: selectedId || null,
+      name: trimmedName,
+      adminKey: trimmed
+    });
+    setProfiles(loadViewerProfiles());
+    setSelectedId(profile.id);
     setOpen(false);
     router.push("/threads");
   }
 
   return (
     <>
-      <button className={className} type="button" onClick={() => setOpen(true)}>
+      <button
+        className={className}
+        type="button"
+        onClick={() => {
+          const state = loadDraftState();
+          setProfiles(state.profiles);
+          setSelectedId(state.selectedId);
+          setName(state.name);
+          setKey(state.key);
+          setOpen(true);
+        }}
+      >
         {label}
       </button>
       {open && (
@@ -37,9 +71,40 @@ export function InboxButton({ className, label = "View inbox" }: InboxButtonProp
           <form style={styles.modal} onSubmit={submit} onClick={(event) => event.stopPropagation()}>
             <div>
               <p style={styles.eyebrow}>Agentbox inbox</p>
-              <h2 style={styles.title}>Enter your admin key</h2>
-              <p style={styles.copy}>The key is stored only in this browser and used to load the read-only thread viewer.</p>
+              <h2 style={styles.title}>Open a viewer profile</h2>
+              <p style={styles.copy}>Save multiple admin keys in this browser and choose which profile to use for the read-only inbox.</p>
             </div>
+            {profiles.length > 0 && (
+              <label style={styles.field}>
+                <span style={styles.label}>Saved profiles</span>
+                <select
+                  value={selectedId}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    const profile = profiles.find((entry) => entry.id === nextId) ?? null;
+                    setSelectedId(nextId);
+                    setActiveViewerProfileId(nextId);
+                    setName(profile?.name ?? "");
+                    setKey(profile?.adminKey ?? "");
+                  }}
+                  style={styles.input}
+                >
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>{profile.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label style={styles.field}>
+              <span style={styles.label}>Profile name</span>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Production"
+                type="text"
+                style={styles.input}
+              />
+            </label>
             <input
               autoFocus
               value={key}
@@ -49,8 +114,19 @@ export function InboxButton({ className, label = "View inbox" }: InboxButtonProp
               style={styles.input}
             />
             <div style={styles.actions}>
+              <button
+                type="button"
+                style={styles.secondary}
+                onClick={() => {
+                  setSelectedId("");
+                  setName("");
+                  setKey("");
+                }}
+              >
+                New profile
+              </button>
               <button type="button" style={styles.secondary} onClick={() => setOpen(false)}>Cancel</button>
-              <button type="submit" style={styles.primary}>Open inbox</button>
+              <button type="submit" style={styles.primary}>Save and open</button>
             </div>
           </form>
         </div>
@@ -109,6 +185,17 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#fff",
     color: "#1c1915",
     font: "inherit"
+  },
+  field: {
+    display: "grid",
+    gap: 8
+  },
+  label: {
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "#756d63"
   },
   actions: {
     display: "flex",
