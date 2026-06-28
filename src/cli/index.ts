@@ -2,7 +2,17 @@ import { basename, dirname, join } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { lookup } from "mime-types";
 import { Command } from "commander";
-import { parseProfilesConfig, resolveProfileSelection } from "../core/profiles";
+import {
+  defaultConfigPath,
+  maskSecret,
+  parseProfilesConfig,
+  readProfileStore,
+  removeProfile,
+  resolveProfileSelection,
+  sanitizeUrl,
+  saveProfile,
+  setActiveProfile
+} from "../core/profiles";
 
 type RequestOptions = {
   method?: string;
@@ -42,6 +52,7 @@ type RuntimeConfig = {
   profileName: string;
   baseUrl: string;
   apiKey: string;
+  source: "config" | "env" | "legacy-env";
 };
 
 function commandProfileName(command?: Command): string | null {
@@ -49,32 +60,46 @@ function commandProfileName(command?: Command): string | null {
   return options?.profile ?? null;
 }
 
-function runtimeConfig(command?: Command): RuntimeConfig {
+function isCommand(value: unknown): value is Command {
+  return typeof value === "object"
+    && value !== null
+    && "optsWithGlobals" in value
+    && typeof (value as { optsWithGlobals?: unknown }).optsWithGlobals === "function";
+}
+
+function commandJson(command?: Command | null): boolean {
+  const options = command?.optsWithGlobals() as { json?: boolean } | undefined;
+  return options?.json ?? false;
+}
+
+async function runtimeConfig(command?: Command): Promise<RuntimeConfig> {
   const profileName = commandProfileName(command);
-  const profile = resolveProfileSelection({ profileName: profileName ?? null });
+  const profile = await resolveProfileSelection({ profileName: profileName ?? null });
   if (profile) {
     return {
       profileName: profile.name,
       baseUrl: profile.baseUrl,
-      apiKey: profile.apiKey
+      apiKey: profile.apiKey,
+      source: profile.source
     };
   }
 
   const value = process.env.AGENTBOX_BASE_URL ?? process.env.AGENTBOX_URL;
-  if (!value) throw new Error("Set AGENTBOX_BASE_URL or configure AGENTBOX_PROFILES.");
+  if (!value) throw new Error(`Set AGENTBOX_BASE_URL or configure profiles in ${defaultConfigPath()}.`);
 
   const apiKey = process.env.AGENTBOX_API_KEY;
-  if (!apiKey) throw new Error("Set AGENTBOX_API_KEY or configure AGENTBOX_PROFILES.");
+  if (!apiKey) throw new Error(`Set AGENTBOX_API_KEY or configure profiles in ${defaultConfigPath()}.`);
 
   return {
     profileName: "default",
     baseUrl: value.replace(/\/$/, ""),
-    apiKey
+    apiKey,
+    source: "legacy-env"
   };
 }
 
-function endpoint(path: string, command?: Command): URL {
-  const config = runtimeConfig(command);
+async function endpoint(path: string, command?: Command): Promise<URL> {
+  const config = await runtimeConfig(command);
   const url = new URL(path, `${config.baseUrl}/`);
   url.searchParams.set("key", config.apiKey);
   return url;
@@ -83,7 +108,7 @@ function endpoint(path: string, command?: Command): URL {
 
 async function request(path: string, options: RequestOptions = {}, command?: Command) {
   const headers = new Headers(options.headers);
-  const response = await fetch(endpoint(path, command), { ...options, headers });
+  const response = await fetch(await endpoint(path, command), { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
 
@@ -151,8 +176,8 @@ async function runDoctor(command?: Command): Promise<DoctorCheck[]> {
   };
 
   try {
-    const config = runtimeConfig(command);
-    add({ name: "profile", status: "pass", detail: config.profileName });
+    const config = await runtimeConfig(command);
+    add({ name: "profile", status: "pass", detail: `${config.profileName} (${config.source})` });
     add({ name: "base URL", status: "pass", detail: config.baseUrl });
   } catch (error) {
     add({ name: "profile", status: "fail", detail: error instanceof Error ? error.message : String(error) });
@@ -160,14 +185,15 @@ async function runDoctor(command?: Command): Promise<DoctorCheck[]> {
   }
 
   try {
-    const config = runtimeConfig(command);
-    add({ name: "API key", status: "pass", detail: `Profile ${config.profileName} includes an API key` });
+    const config = await runtimeConfig(command);
+    add({ name: "API key", status: "pass", detail: `Profile ${config.profileName} includes key ${maskSecret(config.apiKey)}` });
   } catch (error) {
     add({ name: "API key", status: "fail", detail: error instanceof Error ? error.message : String(error) });
   }
 
   try {
-    const response = await fetch(new URL("/api/health", `${runtimeConfig(command).baseUrl}/`));
+    const config = await runtimeConfig(command);
+    const response = await fetch(new URL("/api/health", `${config.baseUrl}/`));
     add({ name: "health endpoint", status: response.ok ? "pass" : "fail", detail: `HTTP ${response.status}` });
   } catch (error) {
     add({ name: "health endpoint", status: "fail", detail: error instanceof Error ? error.message : String(error) });
@@ -198,8 +224,8 @@ async function runDoctor(command?: Command): Promise<DoctorCheck[]> {
   }
 
   try {
-    const url = endpoint("/api/mcp", command);
-    add({ name: "ChatGPT MCP URL", status: "pass", detail: url.toString() });
+    const url = await endpoint("/api/mcp", command);
+    add({ name: "ChatGPT MCP URL", status: "pass", detail: sanitizeUrl(url) });
   } catch (error) {
     add({ name: "ChatGPT MCP URL", status: "fail", detail: error instanceof Error ? error.message : String(error) });
   }
@@ -224,49 +250,156 @@ program
   .name("agentbox")
   .description("CLI for Agentbox, a small threaded message relay for ChatGPT and local agents.")
   .version("0.1.0")
-  .option("-p, --profile <name>", "use a named profile from AGENTBOX_PROFILES");
+  .option("-p, --profile <name>", "use a named profile");
 
-program
+const profilesCommand = program
   .command("profiles")
-  .description("List configured CLI profiles.")
+  .description("Inspect and manage CLI profiles.");
+
+profilesCommand
   .option("--json", "print raw JSON")
-  .action(async (options, command) => {
-    const profiles = parseProfilesConfig(process.env.AGENTBOX_PROFILES);
+  .action(async (_options, command) => {
+    if (!isCommand(command)) throw new Error("Unexpected command state.");
+    const envProfiles = parseProfilesConfig(process.env.AGENTBOX_PROFILES);
+    const store = await readProfileStore();
     const selectedName = commandProfileName(command) ?? process.env.AGENTBOX_PROFILE ?? null;
     const legacyBaseUrl = process.env.AGENTBOX_BASE_URL ?? process.env.AGENTBOX_URL;
-    const listedProfiles = profiles.length > 0
-      ? profiles
-      : legacyBaseUrl && process.env.AGENTBOX_API_KEY
-        ? [{ name: "default", baseUrl: legacyBaseUrl.replace(/\/$/, "") }]
-        : [];
+    const resolved = await resolveProfileSelection({ profileName: selectedName });
+    const source = envProfiles.length > 0
+      ? "env"
+      : store.profiles.length > 0
+        ? "config"
+        : legacyBaseUrl && process.env.AGENTBOX_API_KEY
+          ? "legacy-env"
+          : "none";
+    const listedProfiles = source === "env"
+      ? envProfiles.map((profile) => ({ ...profile, source: "env" as const }))
+      : source === "config"
+        ? store.profiles.map((profile) => ({ ...profile, source: "config" as const }))
+        : source === "legacy-env"
+          ? [{ name: "default", baseUrl: legacyBaseUrl!.replace(/\/$/, ""), apiKey: process.env.AGENTBOX_API_KEY!, source: "legacy-env" as const }]
+          : [];
     const data = {
-      active_profile: selectedName ?? (listedProfiles[0]?.name ?? "default"),
+      source,
+      config_path: defaultConfigPath(),
+      active_profile: resolved?.name ?? null,
+      stored_active_profile: store.activeProfileName,
       profiles: listedProfiles.map((profile) => ({
+        name: profile.name,
+        base_url: profile.baseUrl,
+        source: profile.source
+      }))
+    };
+
+    if (commandJson(command)) return printJson(data);
+
+    if (listedProfiles.length === 0) {
+      console.log(`No CLI profiles configured. Add one with "agentbox profiles add" or set AGENTBOX_BASE_URL and AGENTBOX_API_KEY.`);
+      console.log(`Config path: ${data.config_path}`);
+      return;
+    }
+
+    console.log(`Config path: ${data.config_path}`);
+    console.log(`Source: ${data.source}`);
+    for (const profile of data.profiles) {
+      const prefix = profile.name === data.active_profile ? "*" : " ";
+      console.log(`${prefix} ${profile.name}\t${profile.base_url}\t${profile.source}`);
+    }
+  });
+
+profilesCommand
+  .command("add")
+  .description("Create or update a stored CLI profile.")
+  .argument("<name>", "profile name")
+  .requiredOption("--base-url <url>", "Agentbox deployment base URL")
+  .requiredOption("--api-key <key>", "Agentbox API key")
+  .option("--activate", "make this the active stored profile")
+  .option("--json", "print raw JSON")
+  .action(async (name, options, command) => {
+    const store = await saveProfile({
+      name,
+      baseUrl: options.baseUrl,
+      apiKey: options.apiKey
+    }, { activate: options.activate });
+    const result = {
+      saved_profile: name,
+      active_profile: store.activeProfileName,
+      config_path: defaultConfigPath(),
+      profiles: store.profiles.map((profile) => ({
         name: profile.name,
         base_url: profile.baseUrl
       }))
     };
+    if (commandJson(command)) return printJson(result);
+    console.log(`Saved profile "${name}" in ${result.config_path}.`);
+    if (store.activeProfileName === name) console.log(`Active profile: ${name}`);
+  });
 
-    if (options.json) return printJson(data);
+profilesCommand
+  .command("remove")
+  .description("Delete a stored CLI profile.")
+  .argument("<name>", "profile name")
+  .option("--json", "print raw JSON")
+  .action(async (name, _options, command) => {
+    const store = await removeProfile(name);
+    const result = {
+      removed_profile: name,
+      active_profile: store.activeProfileName,
+      config_path: defaultConfigPath(),
+      profiles: store.profiles.map((profile) => ({
+        name: profile.name,
+        base_url: profile.baseUrl
+      }))
+    };
+    if (commandJson(command)) return printJson(result);
+    console.log(`Removed profile "${name}".`);
+    console.log(`Active profile: ${result.active_profile ?? "none"}`);
+  });
 
-    if (listedProfiles.length === 0) {
-      console.log("No CLI profiles configured. Set AGENTBOX_PROFILES or the legacy AGENTBOX_BASE_URL and AGENTBOX_API_KEY.");
-      return;
+profilesCommand
+  .command("use")
+  .description("Switch the active stored CLI profile.")
+  .argument("<name>", "profile name")
+  .option("--json", "print raw JSON")
+  .action(async (name, _options, command) => {
+    const store = await setActiveProfile(name);
+    const result = {
+      active_profile: store.activeProfileName,
+      config_path: defaultConfigPath()
+    };
+    if (commandJson(command)) return printJson(result);
+    console.log(`Active profile: ${result.active_profile}`);
+  });
+
+profilesCommand
+  .command("show")
+  .description("Show the resolved profile for this invocation.")
+  .argument("[name]", "profile name to inspect")
+  .option("--json", "print raw JSON")
+  .action(async (name, _options, command) => {
+    const resolved = await resolveProfileSelection({ profileName: name ?? commandProfileName(command) });
+    if (!resolved) {
+      throw new Error(`No CLI profile resolved. Add one with "agentbox profiles add" or set AGENTBOX_BASE_URL and AGENTBOX_API_KEY.`);
     }
-
-    for (const profile of data.profiles) {
-      const prefix = profile.name === data.active_profile ? "*" : " ";
-      console.log(`${prefix} ${profile.name}\t${profile.base_url}`);
-    }
+    const result = {
+      name: resolved.name,
+      base_url: resolved.baseUrl,
+      api_key_masked: maskSecret(resolved.apiKey),
+      source: resolved.source,
+      config_path: defaultConfigPath()
+    };
+    if (commandJson(command)) return printJson(result);
+    console.log(`${result.name}\t${result.base_url}\t${result.source}\t${result.api_key_masked}`);
   });
 
 program
   .command("doctor")
   .description("Check local CLI configuration and the Agentbox deployment.")
   .option("--json", "print raw JSON")
-  .action(async (options, command) => {
+  .action(async (_options, command) => {
+    if (!isCommand(command)) throw new Error("Unexpected command state.");
     const checks = await runDoctor(command);
-    if (options.json) return printJson({ checks });
+    if (commandJson(command)) return printJson({ checks });
     printDoctor(checks);
   });
 
@@ -277,7 +410,7 @@ program
   .option("--json", "print raw JSON")
   .action(async (options, command) => {
     const data = await request(`/api/threads?limit=${Number(options.limit)}`, {}, command);
-    if (options.json) return printJson(data);
+    if (commandJson(command)) return printJson(data);
 
     for (const thread of data.threads) {
       console.log(`${thread.id}\t${thread.updated_at}\t${thread.title}`);
@@ -296,7 +429,7 @@ program
       body: JSON.stringify({ title })
     }, command);
 
-    if (options.json) return printJson(data);
+    if (commandJson(command)) return printJson(data);
     console.log(`${data.thread.id}\t${data.thread.title}`);
   });
 
@@ -307,7 +440,7 @@ program
   .option("--json", "print raw JSON")
   .action(async (threadId, options, command) => {
     const data = await request(`/api/threads/${encodeURIComponent(threadId)}`, {}, command);
-    if (options.json) return printJson(data);
+    if (commandJson(command)) return printJson(data);
     printThread(data.thread);
   });
 
@@ -338,7 +471,7 @@ program
 
     const result = { thread_id: threadId, output_dir: outputDir, downloads };
 
-    if (options.json) return printJson(result);
+    if (commandJson(command)) return printJson(result);
     if (downloads.length === 0) {
       console.log(`No attachments found for ${threadId}.`);
       return;
@@ -383,7 +516,7 @@ program
       }, command);
     }
 
-    if (options.json) return printJson(data);
+    if (commandJson(command)) return printJson(data);
     console.log(data.message.id);
   });
 
