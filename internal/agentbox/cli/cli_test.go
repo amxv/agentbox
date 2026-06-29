@@ -15,7 +15,22 @@ import (
 	"agentbox/internal/agentbox/httpapi"
 	"agentbox/internal/agentbox/service"
 	"agentbox/internal/agentbox/types"
+	"agentbox/internal/agentbox/version"
 )
+
+func TestCLIGlobalVersionFlags(t *testing.T) {
+	for _, args := range [][]string{{"--version"}, {"-V"}, {"version"}} {
+		var out bytes.Buffer
+		var stderr bytes.Buffer
+		runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil)}
+		if code := runner.Run(args); code != 0 {
+			t.Fatalf("%v failed: code=%d stderr=%s", args, code, stderr.String())
+		}
+		if got := strings.TrimSpace(out.String()); got != version.Version {
+			t.Fatalf("%v output = %q, want %q", args, got, version.Version)
+		}
+	}
+}
 
 func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())

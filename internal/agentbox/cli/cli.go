@@ -107,8 +107,14 @@ func (r *Runner) run(args []string) error {
 	global.SetOutput(io.Discard)
 	profileName := global.String("profile", "", "use a named profile")
 	global.StringVar(profileName, "p", "", "use a named profile")
+	showVersion := global.Bool("version", false, "output the version number")
+	global.BoolVar(showVersion, "V", false, "output the version number")
 	if err := global.Parse(args); err != nil {
 		return err
+	}
+	if *showVersion {
+		fmt.Fprintln(r.Stdout, version.Version)
+		return nil
 	}
 	rest := global.Args()
 	if len(rest) == 0 {
