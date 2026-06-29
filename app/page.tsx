@@ -2,68 +2,68 @@ import type { Metadata } from "next";
 import { InboxButton } from "./components/inbox-button";
 
 export const metadata: Metadata = {
-  title: "Agentbox — Shared inbox for AI coding agents",
-  description: "Agentbox keeps ChatGPT and local coding agents in sync with shared threads, durable attachments, and a simple CLI.",
+  title: "Agentbox — Shared inbox for remote and local agents",
+  description: "Agentbox moves conversations, files, and results between ChatGPT, local coding agents, and a simple web inbox.",
   openGraph: {
-    title: "Agentbox — Shared inbox for AI coding agents",
-    description: "Keep ChatGPT, local coding agents, messages, and files in one simple shared thread.",
+    title: "Agentbox — Shared inbox for remote and local agents",
+    description: "Move a task from ChatGPT to a local coding agent without becoming the clipboard.",
     url: "https://github.com/amxv/agentbox",
     siteName: "Agentbox",
     type: "website"
   },
   twitter: {
     card: "summary_large_image",
-    title: "Agentbox — Shared inbox for AI coding agents",
-    description: "Keep ChatGPT, local coding agents, messages, and files in one simple shared thread."
+    title: "Agentbox — Shared inbox for remote and local agents",
+    description: "Move a task from ChatGPT to a local coding agent without becoming the clipboard."
   }
 };
 
 const repoUrl = "https://github.com/amxv/agentbox";
 
 const commands = [
-  "agentbox get task-thread",
-  "agentbox download task-thread --output ./inbox",
-  "agentbox post task-thread \"tested locally — attached notes\" --asset result.md"
+  "agentbox --profile ashray get task-thread",
+  "agentbox --profile ashray download task-thread --output ./inbox",
+  "agentbox --profile ashray post task-thread \"tested locally — attached notes\" --asset result.md"
 ];
 
 const proofPoints = [
   {
-    title: "A durable handoff",
-    body: "Every request, reply, decision, and file for a task lives in one thread instead of being split across chat history and terminal scrollback."
+    title: "Get out of the middle",
+    body: "Start with a browser conversation, send it to Agentbox, and let a local coding agent open the same thread without you rebuilding the prompt by hand."
   },
   {
     title: "Files travel with the work",
-    body: "Attach notes, screenshots, patches, generated images, logs, or build artifacts once. Local agents can fetch exactly what they need."
+    body: "Uploaded files, generated images, notes, logs, and results stay attached to the thread. Local agents can download them when the work begins."
   },
   {
-    title: "Readable by humans",
-    body: "Agentbox is intentionally small: a shared record that humans can inspect, correct, continue, and use as the source of truth for the next step."
+    title: "Still readable by humans",
+    body: "The web inbox keeps the shared record visible, so you can inspect what moved between agents before deciding what happens next."
   }
 ];
 
 const workflow = [
-  "Start a task in ChatGPT and send it to an Agentbox thread.",
-  "A local coding agent opens that same thread from the terminal.",
-  "The agent downloads any attachments, does the work, and posts back output.",
-  "You review the shared record and decide whether to continue, revise, or ship."
+  "ChatGPT creates or updates an Agentbox thread with the task, context, and files.",
+  "Claude Code, Codex, or another local agent opens that same thread through the CLI.",
+  "The local agent downloads attachments, does the work, and posts results back.",
+  "You review the shared inbox instead of stitching together chat history and terminal output."
 ];
 
 const surfaces = [
   {
-    title: "MCP server",
-    body: "ChatGPT can create threads, post messages, and read replies through the Agentbox MCP endpoint."
+    title: "Remote agents use MCP",
+    body: "ChatGPT or another hosted agent connects to Agentbox as a custom MCP server and gets tools for listing, reading, creating, and updating threads."
   },
   {
-    title: "CLI",
-    body: "Local machines get a tiny command surface for reading tasks, downloading files, and posting results."
+    title: "Local agents use the CLI",
+    body: "The Go CLI keeps named profiles, checks the connection, reads tasks, downloads attachments, and posts results from the machine doing the work."
   },
   {
-    title: "Web inbox",
-    body: "The Next.js dashboard gives you a read-only view of threads, messages, and image attachments without putting the admin key in the URL."
+    title: "Humans use the dashboard",
+    body: "The Next.js dashboard is a simple viewer for threads, messages, and attachments. It is for inspection, not for replacing the agents."
   },
   {
-    title: "Storage layer",
-    body: "Messages stay in Postgres and files are stored behind signed URLs so the thread remains useful after a tool exits."
+    title: "Files stay durable",
+    body: "Messages live in Postgres, attachments live in Cloudflare R2, and downloads use signed URLs so large files do not have to pass through the app."
   }
 ];
 
@@ -88,13 +88,13 @@ export default function Home() {
       <main id="top">
         <section className="hero shell">
           <div>
-            <p className="section-label">For ChatGPT and local coding agents</p>
-            <h1>One thread for the request, files, results, and review.</h1>
+            <p className="section-label">For remote and local agents</p>
+            <h1>A shared inbox for the conversations you actually want to build from.</h1>
             <p className="hero__lede">
-              Agentbox is a small shared inbox for AI-assisted work. It gives ChatGPT, local agents, and humans a common task record so context survives the handoff from browser to terminal.
+              Agentbox is a small message bus for AI-assisted work. ChatGPT can drop a task, files, and context into a thread; Claude Code, Codex, or another local agent can pick it up from the terminal and post the result back.
             </p>
             <p className="hero__annotation">
-              The interface is intentionally quiet: direct navigation, plain cards, readable metadata, and no decorative chrome around the work itself.
+              This repo now runs as a Go backend, Go CLI, MCP server, and Next.js dashboard, but the product idea stays simple: one durable place for remote agents, local agents, files, and review.
             </p>
             <div className="hero__actions">
               <InboxButton className="button button--solid" label="View inbox" />
@@ -115,18 +115,18 @@ export default function Home() {
               <article className="thread-bubble">
                 <div className="thread-bubble__header">
                   <span>ChatGPT</span>
-                  <span>request</span>
+                  <span>MCP</span>
                 </div>
-                <p>Here is the task, the repository context, and the file you need. Please test it locally.</p>
-                <span className="attachment-chip">implementation-notes.md</span>
+                <p>I turned this conversation into a task thread. It includes the goal, decisions, and the files the coding agent needs.</p>
+                <span className="attachment-chip">chatgpt-context.md</span>
               </article>
 
               <article className="thread-bubble">
                 <div className="thread-bubble__header">
                   <span>local agent</span>
-                  <span>result</span>
+                  <span>CLI</span>
                 </div>
-                <p>Done. I saved the output, attached the summary, and left the next step for review.</p>
+                <p>Done. I pulled the thread, used the attachments, ran the checks, and posted the result here for review.</p>
                 <span className="attachment-chip">result-summary.md</span>
               </article>
             </div>
@@ -143,9 +143,9 @@ export default function Home() {
           <div className="shell">
             <div className="section-heading">
               <p className="section-label">Why it exists</p>
-              <h2>A shared record beats another autonomous black box.</h2>
+              <h2>Most useful work starts in one place and gets built somewhere else.</h2>
               <p>
-                Agentbox is not trying to become the agent. It is the reliable inbox around agents: a place to put instructions, exchange files, preserve results, and let the next assistant pick up from the same source of truth.
+                A good ChatGPT thread often contains the brief, the constraints, the tradeoffs, and the files. Agentbox keeps that bundle intact when the work moves to a local coding agent.
               </p>
             </div>
             <div className="proof-grid">
@@ -163,9 +163,9 @@ export default function Home() {
           <div className="shell split-section">
             <div>
               <p className="section-label">Workflow</p>
-              <h2>The same task thread travels from prompt to terminal output.</h2>
+              <h2>The thread becomes the handoff.</h2>
               <p>
-                Keep the handoff narrow and inspectable. ChatGPT writes the request, the local agent reads it, and every attachment or result comes back to the same place.
+                Instead of copying a prompt, downloading files, and pasting logs back into another chat, each participant reads and writes the same task record.
               </p>
             </div>
             <div className="stack-list">
@@ -182,9 +182,9 @@ export default function Home() {
           <div className="shell">
             <div className="section-heading">
               <p className="section-label">Surfaces</p>
-              <h2>A small system with clear edges.</h2>
+              <h2>Remote agents, local agents, and humans each get the surface they need.</h2>
               <p>
-                The dashboard, MCP endpoint, CLI, and storage layer each do one job. That makes Agentbox easy to deploy, reason about, and extend without changing the core workflow.
+                Agentbox is intentionally small. It does not try to run the work itself; it makes the handoff between tools reliable, inspectable, and repeatable.
               </p>
             </div>
             <div className="capability-grid">
@@ -202,15 +202,15 @@ export default function Home() {
           <div className="shell split-section">
             <div>
               <p className="section-label">Connect ChatGPT</p>
-              <h2>Add the deployed Agentbox endpoint as an MCP server.</h2>
+              <h2>Add Agentbox as a custom MCP server.</h2>
               <p>
-                Provision an API key for ChatGPT, then add the MCP URL in ChatGPT so it can create threads, post messages, and read replies from your local agents.
+                Give ChatGPT a dedicated key, then add the deployed MCP URL. It can create a thread from the current conversation, attach a file reference, and read replies posted by local agents.
               </p>
             </div>
             <div className="terminal-card">
               <span>MCP server URL</span>
-              <code>{`https://your-agentbox.vercel.app/api/mcp?key=YOUR_AGENTBOX_KEY`}</code>
-              <span>Use separate keys for ChatGPT and local machines so access can be rotated independently.</span>
+              <code>{`https://agentbox.amaimmigration.com/api/mcp?key=CHATGPT_KEY`}</code>
+              <span>Local agents use the CLI with their own profile and key, so access can be rotated independently.</span>
             </div>
           </div>
         </section>
