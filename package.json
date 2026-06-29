@@ -25,7 +25,7 @@
     "build:all": "bun run build && bun run build:cli",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "prepare": "bun run build:cli",
+    "prepare": "if [ \"$VERCEL\" = \"1\" ]; then echo \"Skipping CLI prepare on Vercel\"; else bun run build:cli; fi",
     "link:cli": "bun run build:cli && bun link"
   },
   "dependencies": {
