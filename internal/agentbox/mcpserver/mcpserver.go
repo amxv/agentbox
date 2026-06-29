@@ -29,9 +29,10 @@ func NewHTTPHandler(actor types.Actor, svc *service.Service) http.Handler {
 			return New(actor, svc)
 		},
 		&mcp.StreamableHTTPOptions{
-			Stateless:      true,
-			JSONResponse:   true,
-			SessionTimeout: 0,
+			Stateless:                   true,
+			JSONResponse:                true,
+			SessionTimeout:              0,
+			DisableLocalhostProtection: true,
 		},
 	)
 }

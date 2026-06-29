@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"agentbox/internal/agentbox/assets"
@@ -58,6 +60,28 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	fileParams, ok := meta["openai/fileParams"].([]any)
 	if !ok || len(fileParams) != 1 || fileParams[0] != "file" {
 		t.Fatalf("file params meta = %#v", meta["openai/fileParams"])
+	}
+}
+
+func TestStreamableHTTPAllowsForwardedProductionHost(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	handler := NewHTTPHandler(types.Actor{Name: "tester", KeyName: "test"}, svc)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.0.0"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(body))
+	req.Host = "agentbox-black.vercel.app"
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "application/json, text/event-stream")
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code == http.StatusForbidden {
+		t.Fatalf("unexpected host protection rejection: %s", res.Body.String())
+	}
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
 	}
 }
 
