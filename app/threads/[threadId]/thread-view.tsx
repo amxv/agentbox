@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { getActiveViewerProfile } from "../../components/viewer-profiles";
+import { useEffect, useMemo, useState } from "react";
+
+const STORAGE_KEY = "agentbox_admin_key";
 
 type Asset = {
   id: string;
@@ -29,6 +30,21 @@ type Thread = {
   messages: Message[];
 };
 
+function formatDate(value: string) {
+  return new Date(value).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 export function ThreadView({ threadId }: { threadId: string }) {
   const router = useRouter();
   const [thread, setThread] = useState<Thread | null>(null);
@@ -36,8 +52,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const profile = getActiveViewerProfile();
-    if (!profile) {
+    const key = window.localStorage.getItem(STORAGE_KEY);
+    if (!key) {
       router.replace("/threads");
       return;
     }
@@ -59,195 +75,90 @@ export function ThreadView({ threadId }: { threadId: string }) {
       }
     }
 
-    void loadThread(profile.adminKey);
+    void loadThread(key);
   }, [router, threadId]);
 
+  const assetCount = useMemo(() => {
+    return thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0;
+  }, [thread]);
+
   return (
-    <main style={styles.shell}>
-      <header style={styles.header}>
-        <Link href="/threads" style={styles.back}>← Inbox</Link>
-        <div>
-          <p style={styles.eyebrow}>Read-only thread</p>
-          <h1 style={styles.title}>{thread?.title ?? "Thread"}</h1>
-          <p style={styles.copy}>{thread?.id ?? threadId}{thread ? ` · Updated ${new Date(thread.updated_at).toLocaleString()}` : ""}</p>
+    <div className="dashboard-page">
+      <header className="site-header">
+        <div className="shell site-header__inner">
+          <Link className="brand" href="/threads">
+            <span className="brand__eyebrow">Agentbox</span>
+            <span className="brand__title">Back to inbox</span>
+          </Link>
+          <nav className="site-nav" aria-label="Thread navigation">
+            <Link className="site-nav__link" href="/threads">Inbox</Link>
+            <Link className="site-nav__link" href="/">Home</Link>
+          </nav>
         </div>
       </header>
 
-      <section style={styles.messages}>
-        {loading && <p style={styles.empty}>Loading thread…</p>}
-        {error && (
-          <div style={styles.errorCard}>
-            <strong>Could not load thread.</strong>
-            <span>{error}</span>
-          </div>
-        )}
-        {!loading && !error && thread?.messages.length === 0 && <p style={styles.empty}>No messages yet.</p>}
-        {!loading && !error && thread?.messages.map((message) => (
-          <article key={message.id} style={styles.messageCard}>
-            <div style={styles.messageHeader}>
-              <strong>{message.author}</strong>
-              <span>{new Date(message.created_at).toLocaleString()}</span>
+      <main className="dashboard-main shell">
+        <section className="dashboard-header">
+          <div className="dashboard-header__row">
+            <div>
+              <p className="section-label">Read-only thread</p>
+              <h1 className="dashboard-title">{thread?.title ?? "Thread"}</h1>
+              <p className="dashboard-copy mono">
+                {thread?.id ?? threadId}{thread ? ` · Updated ${formatDate(thread.updated_at)}` : ""}
+              </p>
             </div>
-            <pre style={styles.body}>{message.body || "(empty message)"}</pre>
-            {message.assets.length > 0 && (
-              <div style={styles.assets}>
-                <span style={styles.assetLabel}>Attachments</span>
-                {message.assets.map((asset) => (
-                  <div key={asset.id} style={styles.assetCard}>
-                    {asset.preview_url && (
-                      <a href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer" style={styles.previewLink}>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={asset.preview_url} alt={asset.file_name} style={styles.previewImage} loading="lazy" />
-                      </a>
-                    )}
-                    <div style={styles.assetRow}>
-                      <span>{asset.file_name}</span>
-                      <span>{asset.mime_type ?? "unknown type"} · {asset.size_bytes} bytes</span>
-                    </div>
-                    {asset.download_url && (
-                      <a href={asset.download_url} target="_blank" rel="noreferrer" style={styles.downloadLink}>Open attachment</a>
-                    )}
-                  </div>
-                ))}
+            {thread && (
+              <div className="card">
+                <p className="stat-label">Contents</p>
+                <h2 className="card-title">{thread.messages.length} messages</h2>
+                <p className="copy">{assetCount} attachments in this thread.</p>
               </div>
             )}
-          </article>
-        ))}
-      </section>
-    </main>
+          </div>
+        </section>
+
+        <section className="message-list" aria-label="Thread messages">
+          {loading && <p className="empty-state">Loading thread…</p>}
+          {error && (
+            <div className="error-card">
+              <strong>Could not load thread.</strong>
+              <span>{error}</span>
+            </div>
+          )}
+          {!loading && !error && thread?.messages.length === 0 && <p className="empty-state">No messages yet.</p>}
+          {!loading && !error && thread?.messages.map((message) => (
+            <article key={message.id} className="message-card">
+              <div className="message-header">
+                <strong className="message-author">{message.author}</strong>
+                <span className="message-date">{formatDate(message.created_at)}</span>
+              </div>
+              <pre className="message-body">{message.body || "(empty message)"}</pre>
+              {message.assets.length > 0 && (
+                <div className="asset-list">
+                  <span className="asset-label">Attachments</span>
+                  {message.assets.map((asset) => (
+                    <div key={asset.id} className="asset-card">
+                      {asset.preview_url && (
+                        <a className="preview-link" href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img className="preview-image" src={asset.preview_url} alt={asset.file_name} loading="lazy" />
+                        </a>
+                      )}
+                      <div className="asset-row">
+                        <span className="thread-title">{asset.file_name}</span>
+                        <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+                      </div>
+                      {asset.download_url && (
+                        <a className="download-link" href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          ))}
+        </section>
+      </main>
+    </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  shell: {
-    minHeight: "100vh",
-    padding: "32px",
-    background: "#f6f1e8",
-    color: "#1c1915",
-    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-  },
-  header: {
-    maxWidth: 980,
-    margin: "0 auto 24px",
-    display: "grid",
-    gap: 18
-  },
-  back: {
-    width: "fit-content",
-    color: "#a24f2f",
-    textDecoration: "none",
-    fontWeight: 700
-  },
-  eyebrow: {
-    margin: "0 0 8px",
-    color: "#a24f2f",
-    fontSize: 12,
-    fontWeight: 800,
-    letterSpacing: "0.12em",
-    textTransform: "uppercase"
-  },
-  title: {
-    margin: "0 0 10px",
-    fontSize: "clamp(34px, 5vw, 62px)",
-    letterSpacing: "-0.055em",
-    lineHeight: 0.95,
-    fontFamily: "ui-serif, Georgia, Cambria, Times New Roman, Times, serif"
-  },
-  copy: {
-    margin: 0,
-    color: "#5e574f",
-    fontSize: 15
-  },
-  messages: {
-    maxWidth: 980,
-    margin: "0 auto",
-    display: "grid",
-    gap: 14
-  },
-  messageCard: {
-    display: "grid",
-    gap: 14,
-    padding: 18,
-    border: "1px solid rgba(39, 31, 22, 0.1)",
-    borderRadius: 20,
-    background: "rgba(255, 251, 243, 0.72)"
-  },
-  messageHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 16,
-    color: "#756d63",
-    fontSize: 13
-  },
-  body: {
-    margin: 0,
-    whiteSpace: "pre-wrap",
-    overflowWrap: "break-word",
-    color: "#29231d",
-    lineHeight: 1.55,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-    fontSize: 13
-  },
-  assets: {
-    display: "grid",
-    gap: 8,
-    borderTop: "1px solid rgba(39, 31, 22, 0.08)",
-    paddingTop: 12
-  },
-  assetLabel: {
-    color: "#a24f2f",
-    fontSize: 12,
-    fontWeight: 800,
-    letterSpacing: "0.1em",
-    textTransform: "uppercase"
-  },
-  assetCard: {
-    display: "grid",
-    gap: 10,
-    border: "1px solid rgba(39, 31, 22, 0.08)",
-    borderRadius: 16,
-    padding: 12,
-    background: "rgba(255, 255, 255, 0.32)"
-  },
-  previewLink: {
-    display: "block",
-    overflow: "hidden",
-    borderRadius: 14,
-    border: "1px solid rgba(39, 31, 22, 0.08)",
-    background: "#efe7d9"
-  },
-  previewImage: {
-    display: "block",
-    width: "100%",
-    maxHeight: 520,
-    objectFit: "contain"
-  },
-  assetRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    color: "#5e574f",
-    fontSize: 13
-  },
-  downloadLink: {
-    width: "fit-content",
-    color: "#a24f2f",
-    fontSize: 13,
-    fontWeight: 800,
-    textDecoration: "none"
-  },
-  empty: {
-    maxWidth: 980,
-    margin: "24px auto",
-    color: "#756d63"
-  },
-  errorCard: {
-    display: "grid",
-    gap: 4,
-    border: "1px solid rgba(162, 79, 47, 0.28)",
-    borderRadius: 18,
-    padding: 16,
-    background: "rgba(162, 79, 47, 0.08)",
-    color: "#7b371f"
-  }
-};
