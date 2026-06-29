@@ -37,22 +37,19 @@ const emptyViewerState = {
 };
 
 export function InboxView() {
-  const [profiles, setProfiles] = useState<ViewerProfile[]>(emptyViewerState.profiles);
-  const [activeProfileId, setActiveProfileIdState] = useState(emptyViewerState.activeProfileId);
-  const [draftName, setDraftName] = useState(emptyViewerState.draftName);
-  const [draftKey, setDraftKey] = useState(emptyViewerState.draftKey);
+  const [viewerState, setViewerState] = useState(emptyViewerState);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { profiles, activeProfileId, draftName, draftKey } = viewerState;
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
 
   useEffect(() => {
-    const state = initialViewerState();
-    setProfiles(state.profiles);
-    setActiveProfileIdState(state.activeProfileId);
-    setDraftName(state.draftName);
-    setDraftKey(state.draftKey);
+    const timeout = window.setTimeout(() => {
+      setViewerState(initialViewerState());
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
 
   useEffect(() => {
@@ -80,10 +77,12 @@ export function InboxView() {
 
   function syncProfiles(nextProfiles: ViewerProfile[], nextActiveId: string) {
     const active = nextProfiles.find((profile) => profile.id === nextActiveId) ?? null;
-    setProfiles(nextProfiles);
-    setActiveProfileIdState(nextActiveId);
-    setDraftName(active?.name ?? "");
-    setDraftKey(active?.adminKey ?? "");
+    setViewerState({
+      profiles: nextProfiles,
+      activeProfileId: nextActiveId,
+      draftName: active?.name ?? "",
+      draftKey: active?.adminKey ?? ""
+    });
     setThreads([]);
     setError(null);
   }
@@ -137,14 +136,14 @@ export function InboxView() {
           </div>
           <input
             value={draftName}
-            onChange={(event) => setDraftName(event.target.value)}
+            onChange={(event) => setViewerState((current) => ({ ...current, draftName: event.target.value }))}
             placeholder="Production"
             type="text"
             style={styles.input}
           />
           <input
             value={draftKey}
-            onChange={(event) => setDraftKey(event.target.value)}
+            onChange={(event) => setViewerState((current) => ({ ...current, draftKey: event.target.value }))}
             placeholder="ADMIN_KEY"
             type="password"
             style={styles.input}
@@ -163,9 +162,12 @@ export function InboxView() {
                 type="button"
                 style={styles.secondaryButton}
                 onClick={() => {
-                  setActiveProfileIdState("");
-                  setDraftName("");
-                  setDraftKey("");
+                  setViewerState((current) => ({
+                    ...current,
+                    activeProfileId: "",
+                    draftName: "",
+                    draftKey: ""
+                  }));
                 }}
               >
                 New
@@ -192,14 +194,14 @@ export function InboxView() {
             <form style={styles.profileEditor} onSubmit={saveProfile}>
               <input
                 value={draftName}
-                onChange={(event) => setDraftName(event.target.value)}
+                onChange={(event) => setViewerState((current) => ({ ...current, draftName: event.target.value }))}
                 placeholder="Profile name"
                 type="text"
                 style={styles.input}
               />
               <input
                 value={draftKey}
-                onChange={(event) => setDraftKey(event.target.value)}
+                onChange={(event) => setViewerState((current) => ({ ...current, draftKey: event.target.value }))}
                 placeholder="ADMIN_KEY"
                 type="password"
                 style={styles.input}
