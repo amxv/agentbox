@@ -456,7 +456,23 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 		add("authenticated API", "fail", err.Error())
 	} else {
 		add("authenticated API", "pass", fmt.Sprintf("%d thread(s) visible", len(listed.Threads)))
-		add("signed download URL", "skip", "No attachments found in recent threads")
+		asset, err := r.findRecentAsset(listed.Threads, profileName)
+		if err != nil {
+			add("signed download URL", "fail", err.Error())
+		} else if asset == nil {
+			add("signed download URL", "skip", "No attachments found in recent threads")
+		} else {
+			var signed struct {
+				DownloadURL string `json:"download_url"`
+			}
+			if err := r.request("/api/assets/"+url.PathEscape(asset.ID)+"/download-url", http.MethodGet, nil, nil, profileName, &signed); err != nil {
+				add("signed download URL", "fail", err.Error())
+			} else if signed.DownloadURL == "" {
+				add("signed download URL", "fail", asset.FileName)
+			} else {
+				add("signed download URL", "pass", asset.FileName)
+			}
+		}
 	}
 	endpoint, err := r.endpoint("/api/mcp", profileName)
 	if err != nil {
@@ -465,6 +481,24 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 		add("ChatGPT MCP URL", "pass", profiles.SanitizeURL(endpoint.String()))
 	}
 	return checks
+}
+
+func (r *Runner) findRecentAsset(threads []thread, profileName string) (*asset, error) {
+	for _, listed := range threads {
+		var detailed struct {
+			Thread thread `json:"thread"`
+		}
+		if err := r.request("/api/threads/"+url.PathEscape(listed.ID), http.MethodGet, nil, nil, profileName, &detailed); err != nil {
+			return nil, err
+		}
+		for _, message := range detailed.Thread.Messages {
+			if len(message.Assets) > 0 {
+				found := message.Assets[0]
+				return &found, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func (r *Runner) runList(args []string, profileName string) error {
@@ -640,7 +674,7 @@ func (r *Runner) runPost(args []string, profileName string) error {
 		}
 		body = string(bytes)
 	}
-	if body == "" && r.Stdin != os.Stdin {
+	if body == "" && shouldReadStdin(r.Stdin) {
 		bytes, err := io.ReadAll(r.Stdin)
 		if err != nil {
 			return err
@@ -669,6 +703,21 @@ func (r *Runner) runPost(args []string, profileName string) error {
 	}
 	fmt.Fprintln(r.Stdout, data.Message.ID)
 	return nil
+}
+
+func shouldReadStdin(reader io.Reader) bool {
+	if reader == nil {
+		return false
+	}
+	file, ok := reader.(*os.File)
+	if !ok {
+		return true
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice == 0
 }
 
 func multipartBody(body string, assetPath string) (*bytes.Reader, string, error) {

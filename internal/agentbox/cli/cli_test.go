@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -109,13 +110,102 @@ func TestCLIPostMultipartAsset(t *testing.T) {
 	}
 }
 
+func TestCLIPostReadsPipedStdin(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader([]byte("hello from stdin")), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "local", "--base-url", server.URL, "--api-key", "dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"create", "stdin thread"}); code != 0 {
+		t.Fatalf("create failed: stderr=%s", stderr.String())
+	}
+	threadID := strings.Split(strings.TrimSpace(out.String()), "\t")[0]
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"post", threadID}); code != 0 {
+		t.Fatalf("post failed: code=%d stderr=%s", code, stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", threadID, "--json"}); code != 0 {
+		t.Fatalf("get failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var payload struct {
+		Thread struct {
+			Messages []struct {
+				Body string `json:"body"`
+			} `json:"messages"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload.Thread.Messages[len(payload.Thread.Messages)-1].Body; got != "hello from stdin" {
+		t.Fatalf("stdin body = %q", got)
+	}
+}
+
+func TestCLIDoctorChecksSignedDownloadURL(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "local", "--base-url", server.URL, "--api-key", "dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"doctor"}); code != 0 {
+		t.Fatalf("doctor failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
+	}
+	if !strings.Contains(out.String(), "signed download URL") || !strings.Contains(out.String(), "seed.txt") {
+		t.Fatalf("doctor output = %s", out.String())
+	}
+}
+
+func TestShouldReadStdinForPipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	if !shouldReadStdin(reader) {
+		t.Fatal("expected pipe stdin to be readable")
+	}
+}
+
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := &db.MemoryRepository{}
 	fake := &assets.FakeStore{PublicBaseURL: "https://assets.example.com"}
 	svc := service.New(repo, fake)
-	_, err := svc.CreateThread(t.Context(), types.Actor{Name: "seed", KeyName: "seed"}, "Seed")
+	thread, err := svc.CreateThread(t.Context(), types.Actor{Name: "seed", KeyName: "seed"}, "Seed")
 	if err != nil {
+		t.Fatal(err)
+	}
+	textType := "text/plain"
+	if _, err := repo.PostMessage(t.Context(), thread.ID, "seed", "seed asset", &types.NewAsset{
+		StorageKey: "agentbox/seed/message/seed.txt",
+		FileName:   "seed.txt",
+		MimeType:   &textType,
+		SizeBytes:  int64(len("seed bytes")),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return httptest.NewServer(httpapi.NewServer(config.Config{}, svc))
