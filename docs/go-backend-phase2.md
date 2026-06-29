@@ -4,9 +4,21 @@ Phase 2 adds the Go module and backend core while the TypeScript API remains the
 
 ## Migration Entrypoint Strategy
 
-The Go repository ports the current idempotent `ensureSchema` behavior as `Repository.EnsureSchema(ctx)`. During this phase there is no public Go CLI migration command, because the final CLI command surface is scheduled for a later phase. The Go API can run schema creation at startup only when `AGENTBOX_AUTO_MIGRATE=true`; otherwise callers can invoke `EnsureSchema` from tests or rollout tooling.
+The Go repository ports the current idempotent `ensureSchema` behavior as `Repository.EnsureSchema(ctx)`. The migration entrypoint is now:
 
-This preserves the current lazy-schema compatibility path without claiming a finalized migration UX before the Go CLI is ported.
+```bash
+bun run db:migrate
+```
+
+which runs:
+
+```bash
+go run ./cmd/migrate
+```
+
+The Go API can still run schema creation at startup when `AGENTBOX_AUTO_MIGRATE=true`, but production rollout should prefer the explicit migration command.
+
+This preserves the current lazy-schema compatibility path while giving rollout a non-server migration command.
 
 ## Vercel Upload Behavior
 
@@ -16,4 +28,3 @@ The existing TypeScript implementation defaults to `AGENTBOX_MAX_FILE_SIZE_BYTES
 - `MultipartLimitBytes`: capped to 4,500,000 bytes whenever `VERCEL=1` or `VERCEL_ENV` is set.
 
 Until a direct-upload flow is implemented in a later phase, the Go Vercel deployment must not advertise 25 MiB multipart uploads through a function request body.
-

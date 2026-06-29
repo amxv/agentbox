@@ -91,6 +91,18 @@ bun run build
 bun run build:cli
 ```
 
+The active backend and CLI are implemented in Go:
+
+```bash
+go run ./cmd/api
+go run ./cmd/agentbox doctor
+bun run build:api
+bun run build:cli
+bun run build:cli:all
+```
+
+The Next.js dashboard remains the web frontend. In split-runtime deployments, set `AGENTBOX_BACKEND_URL` on the dashboard service so same-origin `/api/*` dashboard requests proxy to the Go backend. API, MCP, database, R2, migrations, and CLI behavior are owned by the Go code.
+
 ## Environment variables
 
 Required on the deployed server:
@@ -134,3 +146,4 @@ JSON:
 
 - [`docs/first-time-setup.md`](docs/first-time-setup.md)
 - [`docs/agentbox-spec.md`](docs/agentbox-spec.md)
+- [`docs/go-rollout.md`](docs/go-rollout.md)

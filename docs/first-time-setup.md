@@ -1,6 +1,6 @@
 # Agentbox First-Time Setup
 
-This guide walks through setting up Agentbox for the first time on Vercel with Postgres, Cloudflare R2, the remote MCP endpoint, and the local CLI.
+This guide walks through setting up Agentbox for the first time with the Go backend, Next.js dashboard, Postgres, Cloudflare R2, the remote MCP endpoint, and the local CLI.
 
 ## 1. Clone the repo
 
@@ -103,41 +103,69 @@ Install the Vercel CLI if needed:
 bun add -g vercel
 ```
 
-Link the repo to a Vercel project:
+Create two Vercel Services or projects from this repo:
+
+```text
+agentbox-go        framework: go
+agentbox-dashboard framework: nextjs
+```
+
+The Go service uses `go.mod` and `cmd/api/main.go`; the server listens on `PORT`. The dashboard service keeps the Next.js pages under `app/`.
+
+Service config templates are available at:
+
+```text
+deploy/vercel/backend/vercel.json
+deploy/vercel/dashboard/vercel.json
+```
+
+Link the repo once per service or configure the services in the Vercel dashboard:
 
 ```bash
 vercel link
 ```
 
-Set the required environment variables:
+Set the required environment variables on the Go backend service:
 
 ```bash
 vercel env add DATABASE_URL production
 vercel env add AGENTBOX_API_KEYS production
+vercel env add AGENTBOX_ADMIN_KEY production
 vercel env add R2_ACCOUNT_ID production
 vercel env add R2_ACCESS_KEY_ID production
 vercel env add R2_SECRET_ACCESS_KEY production
 vercel env add R2_BUCKET production
 vercel env add R2_PUBLIC_BASE_URL production
+vercel env add AGENTBOX_ENV production
 ```
 
-Optional environment variables:
+Optional backend environment variables:
 
 ```bash
 vercel env add AGENTBOX_ALLOWED_ORIGINS production
 vercel env add AGENTBOX_MAX_FILE_SIZE_BYTES production
+vercel env add AGENTBOX_DB_POOL_SIZE production
 ```
 
-Deploy:
+Set the dashboard service backend URL:
+
+```bash
+vercel env add AGENTBOX_BACKEND_URL production
+```
+
+Use the Go backend production URL as the value.
+
+Deploy both services:
 
 ```bash
 vercel --prod
 ```
 
-After deployment, note your production URL:
+After deployment, note the public same-origin product URL and the direct backend URL:
 
 ```text
 https://your-agentbox.vercel.app
+https://your-agentbox-go.vercel.app
 ```
 
 ## 6. Run database migrations
@@ -149,6 +177,8 @@ bun run db:migrate
 ```
 
 This creates the `threads`, `messages`, and `assets` tables if they do not already exist.
+
+For production, run migrations before shifting API/MCP traffic to the Go backend. For preview-only smoke tests, `AGENTBOX_AUTO_MIGRATE=true` can be used temporarily, but production should prefer the explicit migration command.
 
 ## 7. Smoke-test the server
 
@@ -183,6 +213,7 @@ curl "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY"
 For local development from the repo:
 
 ```bash
+bun run build:cli
 bun run link:cli
 ```
 
@@ -213,6 +244,14 @@ Post a message with an attached asset:
 ```bash
 agentbox post thr_xxx "Here is a screenshot." --asset screenshot.png
 ```
+
+Release binaries can be built with:
+
+```bash
+bun run build:cli:all
+```
+
+See [`go-rollout.md`](go-rollout.md) for the GitHub Releases, Homebrew tap, and optional npm-wrapper distribution plan.
 
 ## 9. Connect ChatGPT as an MCP client
 
