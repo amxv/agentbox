@@ -103,6 +103,14 @@ func (r *Runner) Run(args []string) int {
 }
 
 func (r *Runner) run(args []string) error {
+	if len(args) == 0 {
+		r.printTopLevelHelp()
+		return nil
+	}
+	if isHelpArg(args[0]) {
+		r.printTopLevelHelp()
+		return nil
+	}
 	global := flag.NewFlagSet("agentbox", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	profileName := global.String("profile", "", "use a named profile")
@@ -118,10 +126,15 @@ func (r *Runner) run(args []string) error {
 	}
 	rest := global.Args()
 	if len(rest) == 0 {
-		return errors.New("Usage: agentbox <command>")
+		r.printTopLevelHelp()
+		return nil
 	}
 	cmd := rest[0]
 	cmdArgs := rest[1:]
+	if len(cmdArgs) > 0 && isHelpArg(cmdArgs[0]) {
+		r.printCommandHelp(cmd)
+		return nil
+	}
 	switch cmd {
 	case "--version", "-v", "version":
 		fmt.Fprintln(r.Stdout, version.Version)
@@ -145,6 +158,73 @@ func (r *Runner) run(args []string) error {
 	default:
 		return fmt.Errorf("Unknown command %q.", cmd)
 	}
+}
+
+func (r *Runner) printTopLevelHelp() {
+	fmt.Fprintln(r.Stdout, `Usage: agentbox [options] <command>
+
+CLI for Agentbox, a small threaded message relay for ChatGPT and local agents.
+
+Options:
+  -p, --profile <name>    use a named profile
+  -V, --version           output the version number
+  -h, --help              display help
+
+Commands:
+  profiles                inspect and manage CLI profiles
+  doctor                  check profile, API, MCP, and attachment access
+  mcp-url                 print the full MCP URL for the selected profile
+  list                    list recent threads
+  create <title>          create a thread
+  get <thread-id>         read a thread
+  download <thread-id>    download all attachments from a thread
+  post <thread-id>        post a message to a thread
+
+Run "agentbox <command> --help" for command-specific usage.`)
+}
+
+func (r *Runner) printCommandHelp(command string) {
+	usage := map[string]string{
+		"profiles": `Usage: agentbox profiles [options] [command]
+
+Inspect and manage CLI profiles.
+
+Options:
+  --json                  print raw JSON
+  -h, --help              display help
+
+Commands:
+  add <name>              create or update a stored profile
+  remove <name>           delete a stored profile
+  use <name>              switch the active stored profile
+  show [name]             show the resolved profile`,
+		"doctor": `Usage: agentbox doctor [--json]
+
+Check profile, health, authenticated API access, signed download URLs, and MCP URL generation.`,
+		"mcp-url": `Usage: agentbox mcp-url [--json]
+
+Print the full MCP URL for the selected profile, including its API key.`,
+		"list": `Usage: agentbox list [-n <limit>] [--json]
+
+List recent Agentbox threads.`,
+		"create": `Usage: agentbox create <title> [--json]
+
+Create a new Agentbox thread.`,
+		"get": `Usage: agentbox get <thread-id> [--json]
+
+Read an Agentbox thread and its messages.`,
+		"download": `Usage: agentbox download <thread-id> [-o <dir>] [--json]
+
+Download all attachments from a thread to a local directory.`,
+		"post": `Usage: agentbox post <thread-id> [message] [-f <path>] [-a <path>] [--json]
+
+Post a message to a thread. If message is omitted and stdin is piped, the CLI reads the message body from stdin.`,
+	}
+	if text, ok := usage[command]; ok {
+		fmt.Fprintln(r.Stdout, text)
+		return
+	}
+	r.printTopLevelHelp()
 }
 
 func (r *Runner) runtimeConfig(profileName string) (RuntimeConfig, error) {
@@ -224,6 +304,10 @@ func (r *Runner) request(path string, method string, body io.Reader, headers map
 }
 
 func (r *Runner) runProfiles(args []string, globalProfileName string) error {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		r.printCommandHelp("profiles")
+		return nil
+	}
 	if len(args) == 0 || args[0] == "--json" {
 		fs := newFlagSet("profiles")
 		jsonOut := fs.Bool("json", false, "print raw JSON")
@@ -294,6 +378,10 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 		return nil
 	}
 	subcmd := args[0]
+	if len(args) > 1 && isHelpArg(args[1]) {
+		r.printProfilesSubcommandHelp(subcmd)
+		return nil
+	}
 	switch subcmd {
 	case "add":
 		fs := newFlagSet("profiles add")
@@ -393,6 +481,28 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 	default:
 		return fmt.Errorf("Unknown profiles command %q.", subcmd)
 	}
+}
+
+func (r *Runner) printProfilesSubcommandHelp(command string) {
+	usage := map[string]string{
+		"add": `Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--activate] [--json]
+
+Create or update a stored CLI profile.`,
+		"remove": `Usage: agentbox profiles remove <name> [--json]
+
+Delete a stored CLI profile.`,
+		"use": `Usage: agentbox profiles use <name> [--json]
+
+Switch the active stored CLI profile.`,
+		"show": `Usage: agentbox profiles show [name] [--json]
+
+Show the resolved profile for this invocation.`,
+	}
+	if text, ok := usage[command]; ok {
+		fmt.Fprintln(r.Stdout, text)
+		return
+	}
+	r.printCommandHelp("profiles")
 }
 
 func (r *Runner) runDoctor(args []string, profileName string) error {
@@ -858,6 +968,10 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 		}
 	}
 	return fs.Parse(append(flags, positionals...))
+}
+
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "--help" || arg == "help"
 }
 
 func numberOrZero(value string) int {

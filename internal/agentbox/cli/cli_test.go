@@ -32,6 +32,35 @@ func TestCLIGlobalVersionFlags(t *testing.T) {
 	}
 }
 
+func TestCLIHelpOutput(t *testing.T) {
+	cases := []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"--help"}, []string{"Usage: agentbox [options] <command>", "Commands:", "mcp-url"}},
+		{[]string{"-h"}, []string{"Usage: agentbox [options] <command>", "profiles"}},
+		{[]string{"profiles", "--help"}, []string{"Usage: agentbox profiles [options] [command]", "add <name>"}},
+		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
+		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
+	}
+	for _, tc := range cases {
+		var out bytes.Buffer
+		var stderr bytes.Buffer
+		runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil)}
+		if code := runner.Run(tc.args); code != 0 {
+			t.Fatalf("%v failed: code=%d stderr=%s", tc.args, code, stderr.String())
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("%v output missing %q:\n%s", tc.args, want, out.String())
+			}
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("%v wrote stderr: %s", tc.args, stderr.String())
+		}
+	}
+}
+
 func TestCLIMCPURLPrintsFullKeyURL(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
