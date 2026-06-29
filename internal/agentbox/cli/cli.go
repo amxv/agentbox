@@ -130,6 +130,8 @@ func (r *Runner) run(args []string) error {
 		return r.runProfiles(cmdArgs, *profileName)
 	case "doctor":
 		return r.runDoctor(cmdArgs, *profileName)
+	case "mcp-url":
+		return r.runMCPURL(cmdArgs, *profileName)
 	case "list":
 		return r.runList(cmdArgs, *profileName)
 	case "create":
@@ -422,6 +424,31 @@ func (r *Runner) runDoctor(args []string, profileName string) error {
 	if failed > 0 {
 		return fmt.Errorf("%d check%s failed.", failed, plural(failed))
 	}
+	return nil
+}
+
+func (r *Runner) runMCPURL(args []string, profileName string) error {
+	fs := newFlagSet("mcp-url")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	endpoint, err := r.endpoint("/api/mcp", profileName)
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		cfg, err := r.runtimeConfig(profileName)
+		if err != nil {
+			return err
+		}
+		return printJSON(r.Stdout, map[string]any{
+			"mcp_url": endpoint.String(),
+			"profile": cfg.ProfileName,
+			"source":  cfg.Source,
+		})
+	}
+	fmt.Fprintln(r.Stdout, endpoint.String())
 	return nil
 }
 

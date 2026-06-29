@@ -32,6 +32,38 @@ func TestCLIGlobalVersionFlags(t *testing.T) {
 	}
 }
 
+func TestCLIMCPURLPrintsFullKeyURL(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "local", "--base-url", server.URL, "--api-key", "dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"mcp-url"}); code != 0 {
+		t.Fatalf("mcp-url failed: code=%d stderr=%s", code, stderr.String())
+	}
+	want := server.URL + "/api/mcp?key=dev-key"
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Fatalf("mcp-url output = %q, want %q", got, want)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"mcp-url", "--json"}); code != 0 {
+		t.Fatalf("mcp-url --json failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), `"mcp_url": "`+want+`"`) || !strings.Contains(out.String(), `"profile": "local"`) {
+		t.Fatalf("mcp-url json output = %s", out.String())
+	}
+}
+
 func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
