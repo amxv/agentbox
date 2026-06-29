@@ -174,7 +174,11 @@ async function startGoServer(): Promise<{ baseUrl: string; close: () => Promise<
         close: async () => {
           if (child.exitCode !== null) return;
           try {
-            process.kill(-child.pid, "SIGTERM");
+            if (child.pid === undefined) {
+              child.kill();
+            } else {
+              process.kill(-child.pid, "SIGTERM");
+            }
           } catch {
             child.kill();
           }

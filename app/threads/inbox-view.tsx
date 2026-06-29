@@ -29,16 +29,31 @@ function initialViewerState() {
   };
 }
 
+const emptyViewerState = {
+  profiles: [] as ViewerProfile[],
+  activeProfileId: "",
+  draftName: "",
+  draftKey: ""
+};
+
 export function InboxView() {
-  const [profiles, setProfiles] = useState<ViewerProfile[]>(() => initialViewerState().profiles);
-  const [activeProfileId, setActiveProfileIdState] = useState(() => initialViewerState().activeProfileId);
-  const [draftName, setDraftName] = useState(() => initialViewerState().draftName);
-  const [draftKey, setDraftKey] = useState(() => initialViewerState().draftKey);
+  const [profiles, setProfiles] = useState<ViewerProfile[]>(emptyViewerState.profiles);
+  const [activeProfileId, setActiveProfileIdState] = useState(emptyViewerState.activeProfileId);
+  const [draftName, setDraftName] = useState(emptyViewerState.draftName);
+  const [draftKey, setDraftKey] = useState(emptyViewerState.draftKey);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? null;
+
+  useEffect(() => {
+    const state = initialViewerState();
+    setProfiles(state.profiles);
+    setActiveProfileIdState(state.activeProfileId);
+    setDraftName(state.draftName);
+    setDraftKey(state.draftKey);
+  }, []);
 
   useEffect(() => {
     if (!activeProfile) return;

@@ -1,5 +1,7 @@
+import { proxyToGoBackend } from "../_proxy/proxy";
+
 export const runtime = "nodejs";
 
-export async function GET() {
-  return Response.json({ ok: true, service: "agentbox" });
+export async function GET(request: Request) {
+  return proxyToGoBackend({ path: "/api/health", request });
 }
