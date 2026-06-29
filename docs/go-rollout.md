@@ -176,12 +176,8 @@ Validate the dashboard preview:
 6. Update local CLI profiles to the production same-origin URL.
 7. Keep the old TypeScript deployment available for rollback until production MCP, CLI, and dashboard traffic has been stable.
 
-## Archived TypeScript Code
+## Superseded TypeScript Code
 
-The superseded TypeScript backend, CLI, migration helper, and parity harness are archived under:
+The superseded TypeScript backend, CLI, migration helper, and parity harness were removed after the Go cutover. Use Git history if you need to inspect the old implementation.
 
-```text
-archive/typescript/
-```
-
-The active Next.js dashboard and dashboard proxy routes remain under `app/`.
+The active Next.js dashboard and dashboard proxy routes remain under `app/`; backend, MCP, migrations, and CLI behavior are owned by the Go code.
