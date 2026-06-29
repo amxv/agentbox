@@ -209,7 +209,7 @@ export default function Home() {
             </div>
             <div className="terminal-card">
               <span>MCP server URL</span>
-              <code>{`https://agentbox.amaimmigration.com/api/mcp?key=CHATGPT_KEY`}</code>
+              <code>{`https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY`}</code>
               <span>Local agents use the CLI with their own profile and key, so access can be rotated independently.</span>
             </div>
           </div>
