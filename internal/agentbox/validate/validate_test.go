@@ -1,6 +1,9 @@
 package validate
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidators(t *testing.T) {
 	if err := CreateThreadTitle(""); err == nil {
@@ -9,7 +12,7 @@ func TestValidators(t *testing.T) {
 	if err := CreateThreadTitle("ok"); err != nil {
 		t.Fatal(err)
 	}
-	if err := FileReference("not-a-url", "file_1"); err == nil || err.Error() != "Invalid URL" {
+	if err := FileReference("not-a-url", "file_1"); err == nil || !strings.Contains(err.Error(), `"message": "Invalid URL"`) {
 		t.Fatalf("expected invalid URL error, got %v", err)
 	}
 	if got := ClampSignedURLExpiry(1); got != 60 {

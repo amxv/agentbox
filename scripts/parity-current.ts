@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { closeDb } from "../src/core/db";
 
@@ -15,15 +15,6 @@ Object.assign(process.env, {
   R2_PUBLIC_BASE_URL: "https://public-r2.test"
 });
 
-const healthRoute = await import("../app/api/health/route");
-const threadsRoute = await import("../app/api/threads/route");
-const threadRoute = await import("../app/api/threads/[threadId]/route");
-const messagesRoute = await import("../app/api/threads/[threadId]/messages/route");
-const assetDownloadRoute = await import("../app/api/assets/[assetId]/download-url/route");
-const viewerThreadsRoute = await import("../app/api/viewer/threads/route");
-const viewerThreadRoute = await import("../app/api/viewer/threads/[threadId]/route");
-const mcpRoute = await import("../app/api/mcp/route");
-
 type HandlerContext = { params: Promise<Record<string, string>> };
 type Handler = (request: Request, context: HandlerContext) => Promise<Response> | Response;
 type RouteMatch = {
@@ -31,7 +22,17 @@ type RouteMatch = {
   params?: Record<string, string>;
 };
 
-function route(method: string, pathname: string): RouteMatch | null {
+async function createRouteMatcher(): Promise<(method: string, pathname: string) => RouteMatch | null> {
+  const healthRoute = await import("../app/api/health/route");
+  const threadsRoute = await import("../app/api/threads/route");
+  const threadRoute = await import("../app/api/threads/[threadId]/route");
+  const messagesRoute = await import("../app/api/threads/[threadId]/messages/route");
+  const assetDownloadRoute = await import("../app/api/assets/[assetId]/download-url/route");
+  const viewerThreadsRoute = await import("../app/api/viewer/threads/route");
+  const viewerThreadRoute = await import("../app/api/viewer/threads/[threadId]/route");
+  const mcpRoute = await import("../app/api/mcp/route");
+
+  return (method: string, pathname: string): RouteMatch | null => {
   if (method === "GET" && pathname === "/api/health") return { handler: healthRoute.GET as Handler };
   if (pathname === "/api/threads") {
     if (method === "GET") return { handler: threadsRoute.GET as Handler };
@@ -67,6 +68,7 @@ function route(method: string, pathname: string): RouteMatch | null {
   }
 
   return null;
+  };
 }
 
 async function writeWebResponse(source: Response, target: ServerResponse) {
@@ -98,6 +100,7 @@ function requestFromIncoming(req: IncomingMessage, baseUrl: string): Request {
 }
 
 async function startServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const route = await createRouteMatcher();
   const server = createServer(async (req, res) => {
     try {
       const baseUrl = `http://${req.headers.host}`;
@@ -128,11 +131,111 @@ async function startServer(): Promise<{ baseUrl: string; close: () => Promise<vo
   };
 }
 
+async function reservePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function startGoServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  console.error("[parity] reserving Go server port");
+  const port = await reservePort();
+  console.error(`[parity] starting Go server on ${port}`);
+  const child = spawn("go", ["run", "./cmd/api"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      AGENTBOX_ENV: "production",
+      AGENTBOX_API_KEYS: "primary:secret:test-author",
+      AGENTBOX_ADMIN_KEYS: "admin:admin-secret",
+      R2_PUBLIC_BASE_URL: "https://public-r2.test"
+    },
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+  child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+  const baseUrl = `http://127.0.0.1:${port}`;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (child.exitCode !== null) {
+      throw new Error(`Go server exited before health check. stdout=${stdout} stderr=${stderr}`);
+    }
+    try {
+      const response = await fetch(new URL("/api/health", baseUrl));
+      if (response.ok) return {
+        baseUrl,
+        close: async () => {
+          if (child.exitCode !== null) return;
+          try {
+            process.kill(-child.pid, "SIGTERM");
+          } catch {
+            child.kill();
+          }
+          await new Promise<void>((resolve) => child.once("close", () => resolve()));
+        }
+      };
+    } catch {
+      // Server is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  child.kill();
+  throw new Error(`Go server did not become healthy. stdout=${stdout} stderr=${stderr}`);
+}
+
 async function jsonFetch(baseUrl: string, path: string, init?: RequestInit) {
-  const response = await fetch(new URL(path, baseUrl), init);
+  const response = await fetch(new URL(path, baseUrl), {
+    signal: AbortSignal.timeout(15_000),
+    ...init
+  });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   return { response, data };
+}
+
+async function multipartPost(baseUrl: string, path: string) {
+  if (process.env.AGENTBOX_PARITY_GO_SERVER !== "1" && !process.env.AGENTBOX_PARITY_BASE_URL) {
+    const form = new FormData();
+    form.set("body", "Multipart message");
+    form.set("asset", new File([new Uint8Array([1, 2, 3, 4])], "report one.txt", { type: "text/plain" }));
+    return jsonFetch(baseUrl, path, { method: "POST", body: form });
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), "agentbox-parity-upload-"));
+  const file = join(dir, "upload.bin");
+  try {
+    await writeFile(file, new Uint8Array([1, 2, 3, 4]));
+    const response = spawnSync("curl", [
+      "-sS",
+      "-w",
+      "\n%{http_code}",
+      "-X",
+      "POST",
+      String(new URL(path, baseUrl)),
+      "-F",
+      "body=Multipart message",
+      "-F",
+      `asset=@${file};filename=report one.txt;type=text/plain;charset=utf-8`
+    ], { cwd: process.cwd(), encoding: "utf8" });
+    assert.equal(response.status, 0, response.stderr);
+    const splitAt = response.stdout.lastIndexOf("\n");
+    assert(splitAt >= 0, response.stdout);
+    const text = response.stdout.slice(0, splitAt);
+    const status = Number(response.stdout.slice(splitAt + 1));
+    return {
+      response: { status },
+      data: text ? JSON.parse(text) : null
+    };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 function assertId(value: unknown, prefix: string) {
@@ -265,12 +368,18 @@ async function runCliProfileParity() {
   }
 }
 
-async function runApiParity(baseUrl: string) {
+async function runApiParity(baseUrl: string, options: { skipDynamicR2MissingCheck?: boolean } = {}) {
+  const mark = (message: string) => {
+    if (process.env.AGENTBOX_PARITY_GO_SERVER === "1") console.error(`[parity] api: ${message}`);
+  };
+  mark("health");
   const health = await jsonFetch(baseUrl, "/api/health");
   assert.equal(health.response.status, 200);
   assert.deepEqual(health.data, { ok: true, service: "agentbox" });
 
+  mark("auth error");
   await assertError(baseUrl, "/api/threads?key=wrong", 401, "Unauthorized");
+  mark("invalid title");
   await assertError(baseUrl, "/api/threads?key=secret", 400, zodIssueError({
     origin: "string",
     code: "too_small",
@@ -283,8 +392,10 @@ async function runApiParity(baseUrl: string) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title: "" })
   });
+  mark("missing thread");
   await assertError(baseUrl, "/api/threads/thr_missing?key=secret", 404, "Thread not found.");
 
+  mark("create thread");
   const created = await jsonFetch(baseUrl, "/api/threads?key=secret", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -296,11 +407,13 @@ async function runApiParity(baseUrl: string) {
   assert.equal(created.data.thread.created_by, "test-author");
   const threadId = created.data.thread.id as string;
 
+  mark("list threads");
   const listed = await jsonFetch(baseUrl, "/api/threads?key=secret&limit=10");
   assert.equal(listed.response.status, 200);
   assert(Array.isArray(listed.data.threads));
   assertThreadShape(listed.data.threads[0]);
 
+  mark("post json message");
   const posted = await jsonFetch(baseUrl, `/api/threads/${encodeURIComponent(threadId)}/messages?key=secret`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -311,6 +424,7 @@ async function runApiParity(baseUrl: string) {
   assert.equal(posted.data.message.body, "JSON message");
   assert.deepEqual(posted.data.message.assets, []);
 
+  mark("invalid file reference");
   await assertError(baseUrl, `/api/threads/${encodeURIComponent(threadId)}/messages?key=secret`, 400, zodIssueError({
     code: "invalid_format",
     format: "url",
@@ -322,13 +436,8 @@ async function runApiParity(baseUrl: string) {
     body: JSON.stringify({ body: "bad file", file: { download_url: "not-a-url", file_id: "file_bad" } })
   });
 
-  const form = new FormData();
-  form.set("body", "Multipart message");
-  form.set("asset", new File([new Uint8Array([1, 2, 3, 4])], "report one.txt", { type: "text/plain" }));
-  const multipart = await jsonFetch(baseUrl, `/api/threads/${encodeURIComponent(threadId)}/messages?key=secret`, {
-    method: "POST",
-    body: form
-  });
+  mark("post multipart message");
+  const multipart = await multipartPost(baseUrl, `/api/threads/${encodeURIComponent(threadId)}/messages?key=secret`);
   assert.equal(multipart.response.status, 201);
   assertMessageShape(multipart.data.message);
   assert.equal(multipart.data.message.body, "Multipart message");
@@ -339,11 +448,13 @@ async function runApiParity(baseUrl: string) {
   assert.equal(multipart.data.message.assets[0].size_bytes, 4);
   const assetId = multipart.data.message.assets[0].id as string;
 
+  mark("get thread");
   const fetched = await jsonFetch(baseUrl, `/api/threads/${encodeURIComponent(threadId)}?key=secret`);
   assert.equal(fetched.response.status, 200);
   assertThreadShape(fetched.data.thread);
   assert.equal(fetched.data.thread.messages.length, 2);
 
+  mark("asset download url");
   const download = await jsonFetch(baseUrl, `/api/assets/${encodeURIComponent(assetId)}/download-url?key=secret&expires_in=1`);
   assert.equal(download.response.status, 200);
   assert.deepEqual(Object.keys(download.data).sort(), [
@@ -358,12 +469,14 @@ async function runApiParity(baseUrl: string) {
   assert.equal(download.data.expires_in, 60);
   assert.match(download.data.download_url, /^https:\/\/r2\.test\/agentbox\//);
 
+  mark("viewer list");
   const viewerList = await jsonFetch(baseUrl, "/api/viewer/threads?limit=500", {
     headers: { "x-agentbox-admin-key": "admin-secret" }
   });
   assert.equal(viewerList.response.status, 200);
   assert.equal(viewerList.data.threads.length, 1);
 
+  mark("viewer get");
   const viewerGet = await jsonFetch(baseUrl, `/api/viewer/threads/${encodeURIComponent(threadId)}`, {
     headers: { authorization: "Bearer admin-secret" }
   });
@@ -371,10 +484,13 @@ async function runApiParity(baseUrl: string) {
   assert.equal(viewerGet.data.thread.messages[1].assets[0].download_url.includes("X-Amz-Expires=300"), true);
   assert.equal(viewerGet.data.thread.messages[1].assets[0].preview_url, null);
 
-  process.env.AGENTBOX_TEST_FAKE_R2 = "0";
-  delete process.env.R2_BUCKET;
-  await assertError(baseUrl, `/api/assets/${encodeURIComponent(assetId)}/download-url?key=secret`, 500, "R2_BUCKET is required for asset downloads.");
-  process.env.AGENTBOX_TEST_FAKE_R2 = "1";
+  if (!options.skipDynamicR2MissingCheck) {
+    mark("missing R2 error");
+    process.env.AGENTBOX_TEST_FAKE_R2 = "0";
+    delete process.env.R2_BUCKET;
+    await assertError(baseUrl, `/api/assets/${encodeURIComponent(assetId)}/download-url?key=secret`, 500, "R2_BUCKET is required for asset downloads.");
+    process.env.AGENTBOX_TEST_FAKE_R2 = "1";
+  }
 
   return threadId;
 }
@@ -427,13 +543,36 @@ async function runMcpParity(baseUrl: string) {
   assert.equal(posted.result.structuredContent.message.body, "MCP message");
 }
 
-const server = await startServer();
-try {
-  await runApiParity(server.baseUrl);
-  await runMcpParity(server.baseUrl);
+const externalBaseUrl = process.env.AGENTBOX_PARITY_BASE_URL;
+if (process.env.AGENTBOX_PARITY_GO_SERVER === "1") {
+  const server = await startGoServer();
+  try {
+    console.error(`[parity] running API checks against ${server.baseUrl}`);
+    await runApiParity(server.baseUrl, { skipDynamicR2MissingCheck: true });
+    console.error("[parity] running MCP checks");
+    await runMcpParity(server.baseUrl);
+    console.error("[parity] running CLI profile checks");
+    await runCliProfileParity();
+    console.log(`Parity workflow passed against Go server ${server.baseUrl}`);
+  } finally {
+    await server.close();
+    await closeDb();
+  }
+} else if (externalBaseUrl) {
+  await runApiParity(externalBaseUrl, { skipDynamicR2MissingCheck: true });
+  await runMcpParity(externalBaseUrl);
   await runCliProfileParity();
-  console.log(`Current TypeScript parity workflow passed against ${server.baseUrl}`);
-} finally {
-  await server.close();
+  console.log(`Parity workflow passed against external server ${externalBaseUrl}`);
   await closeDb();
+} else {
+  const server = await startServer();
+  try {
+    await runApiParity(server.baseUrl);
+    await runMcpParity(server.baseUrl);
+    await runCliProfileParity();
+    console.log(`Current TypeScript parity workflow passed against ${server.baseUrl}`);
+  } finally {
+    await server.close();
+    await closeDb();
+  }
 }
