@@ -3,9 +3,12 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"agentbox/internal/agentbox/assets"
+	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/service"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
@@ -55,6 +58,21 @@ func (s *Server) build() *mcp.Server {
 		Annotations: annotations(true, false, false),
 	}, s.listThreads)
 	server.AddTool(&mcp.Tool{
+		Name:        "search_threads",
+		Title:       "Search threads",
+		Description: "Search Agentbox threads by keyword across titles and message bodies.",
+		InputSchema: objectSchema(map[string]any{
+			"query":         map[string]any{"type": "string", "minLength": 1},
+			"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+			"created_by":    map[string]any{"type": "string", "minLength": 1},
+			"updated_after": map[string]any{"type": "string", "format": "date-time"},
+		}, []string{"query"}),
+		OutputSchema: objectSchema(map[string]any{
+			"threads": map[string]any{"type": "array", "items": map[string]any{}},
+		}, []string{"threads"}),
+		Annotations: annotations(true, false, false),
+	}, s.searchThreads)
+	server.AddTool(&mcp.Tool{
 		Name:        "get_thread",
 		Title:       "Get thread",
 		Description: "Read an Agentbox thread and its messages.",
@@ -69,12 +87,15 @@ func (s *Server) build() *mcp.Server {
 	server.AddTool(&mcp.Tool{
 		Name:        "create_thread",
 		Title:       "Create thread",
-		Description: "Create a new Agentbox thread.",
+		Description: "Create a new Agentbox thread. Optionally include initial_message to create the first message in the same call.",
 		InputSchema: objectSchema(map[string]any{
-			"title": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
+			"title":             map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
+			"initial_message":   map[string]any{"type": "string"},
+			"body_content_type": map[string]any{"type": "string", "enum": []string{"auto", "text/plain", "text/markdown"}},
 		}, []string{"title"}),
 		OutputSchema: objectSchema(map[string]any{
-			"thread": map[string]any{},
+			"thread":  map[string]any{},
+			"message": map[string]any{},
 		}, []string{"thread"}),
 		Annotations: annotations(false, false, true),
 	}, s.createThread)
@@ -117,7 +138,7 @@ func (s *Server) listThreads(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		Limit *int `json:"limit"`
 	}
 	if err := decodeArgs(req, &input); err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	limit := 0
 	if input.Limit != nil {
@@ -128,9 +149,35 @@ func (s *Server) listThreads(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	}
 	threads, err := s.svc.ListThreads(ctx, limit)
 	if err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	return result("Listed Agentbox threads.", map[string]any{"threads": threads}), nil
+}
+
+func (s *Server) searchThreads(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		Query        string  `json:"query"`
+		Limit        *int    `json:"limit"`
+		CreatedBy    *string `json:"created_by"`
+		UpdatedAfter *string `json:"updated_after"`
+	}
+	if err := decodeArgs(req, &input); err != nil {
+		return errorResult(err), nil
+	}
+	limit := 0
+	if input.Limit != nil {
+		limit = *input.Limit
+	}
+	threads, err := s.svc.SearchThreads(ctx, types.SearchThreadParams{
+		Query:        input.Query,
+		Limit:        limit,
+		CreatedBy:    input.CreatedBy,
+		UpdatedAfter: input.UpdatedAfter,
+	})
+	if err != nil {
+		return errorResult(err), nil
+	}
+	return result("Searched Agentbox threads.", map[string]any{"threads": threads}), nil
 }
 
 func (s *Server) getThread(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -138,28 +185,37 @@ func (s *Server) getThread(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		ThreadID string `json:"thread_id"`
 	}
 	if err := decodeArgs(req, &input); err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	if err := validate.ThreadID(input.ThreadID); err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	thread, err := s.svc.GetThread(ctx, input.ThreadID)
 	if err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	return result("Fetched Agentbox thread.", map[string]any{"thread": thread}), nil
 }
 
 func (s *Server) createThread(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input struct {
-		Title string `json:"title"`
+		Title           string  `json:"title"`
+		InitialMessage  *string `json:"initial_message"`
+		BodyContentType *string `json:"body_content_type"`
 	}
 	if err := decodeArgs(req, &input); err != nil {
-		return nil, err
+		return errorResult(err), nil
+	}
+	if input.InitialMessage != nil {
+		thread, message, err := s.svc.CreateThreadWithMessage(ctx, s.actor, input.Title, *input.InitialMessage, input.BodyContentType)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return result("Created Agentbox thread with initial message.", map[string]any{"thread": thread, "message": message}), nil
 	}
 	thread, err := s.svc.CreateThread(ctx, s.actor, input.Title)
 	if err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	return result("Created Agentbox thread.", map[string]any{"thread": thread}), nil
 }
@@ -172,13 +228,13 @@ func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		File            json.RawMessage `json:"file"`
 	}
 	if err := decodeArgs(req, &raw); err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	var file *assets.ChatGPTFileInput
 	if len(raw.File) > 0 && string(raw.File) != "null" {
 		parsed, err := parseFileInput(raw.File)
 		if err != nil {
-			return nil, err
+			return errorResult(err), nil
 		}
 		file = parsed
 	}
@@ -189,7 +245,7 @@ func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		File:            file,
 	})
 	if err != nil {
-		return nil, err
+		return errorResult(err), nil
 	}
 	return result("Posted message to Agentbox.", map[string]any{"message": message}), nil
 }
@@ -225,10 +281,68 @@ func decodeArgs(req *mcp.CallToolRequest, target any) error {
 }
 
 func result(text string, structured map[string]any) *mcp.CallToolResult {
+	payload := jsonText(structured)
 	return &mcp.CallToolResult{
-		Content:           []mcp.Content{&mcp.TextContent{Text: text}},
+		Meta:              mcp.Meta{"agentbox/status": text},
+		Content:           []mcp.Content{&mcp.TextContent{Text: payload}},
 		StructuredContent: structured,
 	}
+}
+
+func errorResult(err error) *mcp.CallToolResult {
+	payload := errorPayload(err)
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: jsonText(payload)}},
+		StructuredContent: payload,
+		IsError:           true,
+	}
+}
+
+func jsonText(value map[string]any) string {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return `{"error":{"code":"INTERNAL_ERROR","message":"Failed to encode Agentbox MCP result."}}`
+	}
+	return string(bytes)
+}
+
+func errorPayload(err error) map[string]any {
+	code := "INTERNAL_ERROR"
+	message := "Agentbox could not complete the tool call."
+	var coded service.CodedError
+	if errors.As(err, &coded) {
+		code = coded.Code
+		message = coded.Message
+	} else if errors.Is(err, service.ErrThreadNotFound) {
+		code = "THREAD_NOT_FOUND"
+		message = service.ErrThreadNotFound.Error()
+	} else if errors.Is(err, messageformat.ErrInvalidContentType) {
+		code = "INVALID_ARGUMENT"
+		message = err.Error()
+	} else if isInvalidArgument(err) {
+		code = "INVALID_ARGUMENT"
+		message = err.Error()
+	}
+	return map[string]any{
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	}
+}
+
+func isInvalidArgument(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "too_small") ||
+		strings.Contains(message, "too_big") ||
+		strings.Contains(message, "invalid_format") ||
+		strings.Contains(message, "Too small: expected string") ||
+		message == "download_url and file_id are required" ||
+		message == "body_content_type must be text/plain, text/markdown, or auto" ||
+		strings.HasPrefix(message, "File was received as a plain string.")
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {

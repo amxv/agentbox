@@ -76,9 +76,17 @@ const steps = [
   },
   {
     label: "10. Save it in ChatGPT",
-    body: "Use the ChatGPT MCP URL printed by agentbox init or agentbox connect chatgpt. Agentbox expects no auth in the ChatGPT app config because the key is already embedded in the URL.",
+    body: "Use the ChatGPT MCP URL printed by agentbox init or agentbox connect chatgpt. The same remote MCP endpoint also works with Claude custom connectors and other MCP-capable clients.",
     code: "Apps -> Advanced settings -> turn on developer mode -> Create app -> select no auth -> paste the MCP URL"
   }
+];
+
+const mcpNotes = [
+  "MCP tool results mirror the structured payload into the first text content block as JSON while preserving structuredContent and outputSchema for clients that consume native structured output.",
+  "Available tools are list_threads, search_threads, get_thread, create_thread, and post_message.",
+  "create_thread accepts optional initial_message and body_content_type so a remote agent can create a task thread and first message in one call.",
+  "Tool failures return stable error codes such as THREAD_NOT_FOUND, INVALID_ARGUMENT, PERMISSION_DENIED, RATE_LIMITED, ATTACHMENT_NOT_FOUND, and INTERNAL_ERROR instead of raw database errors.",
+  "Message asset responses include stable attachment metadata such as id, filename, MIME type, size, created_at, and a download or public URL when available."
 ];
 
 export const metadata: Metadata = {
@@ -202,6 +210,25 @@ export default function SetupPage() {
               <li>Run <span className="mono">agentbox doctor</span> after saving the local profile. It checks the resolved profile, health endpoint, authenticated API access, MCP URL generation, and signed download URLs when attachments exist.</li>
               <li>If the dashboard returns an error about <span className="mono">AGENTBOX_BACKEND_URL</span>, set it on the dashboard project and redeploy.</li>
               <li>Keep distinct labels like <span className="mono">chatgpt</span> and <span className="mono">local</span> so message authors stay attributable in shared threads.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section className="page-section">
+        <div className="shell split-section">
+          <div>
+            <p className="section-label">MCP behavior</p>
+            <h2>Remote clients get parseable results.</h2>
+            <p>
+              Agentbox returns the same useful payload in visible JSON text and native structured output so ChatGPT, Claude custom connectors, and simpler MCP clients can all recover IDs, messages, and attachment metadata.
+            </p>
+          </div>
+          <div className="install-detail-card">
+            <ul className="install-facts">
+              {mcpNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
             </ul>
           </div>
         </div>

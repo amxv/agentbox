@@ -14,15 +14,17 @@ type Thread struct {
 }
 
 type Asset struct {
-	ID         string  `json:"id"`
-	MessageID  string  `json:"message_id"`
-	StorageKey string  `json:"storage_key"`
-	FileName   string  `json:"file_name"`
-	MimeType   *string `json:"mime_type"`
-	SizeBytes  int64   `json:"size_bytes"`
-	PublicURL  *string `json:"public_url"`
-	CreatedAt  string  `json:"created_at"`
-	CreatedBy  string  `json:"created_by"`
+	ID          string  `json:"id"`
+	MessageID   string  `json:"message_id"`
+	StorageKey  string  `json:"storage_key"`
+	FileName    string  `json:"file_name"`
+	Filename    string  `json:"filename"`
+	MimeType    *string `json:"mime_type"`
+	SizeBytes   int64   `json:"size_bytes"`
+	PublicURL   *string `json:"public_url"`
+	DownloadURL *string `json:"download_url,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+	CreatedBy   string  `json:"created_by"`
 }
 
 type Message struct {
@@ -53,6 +55,24 @@ type NewAsset struct {
 	MimeType   *string
 	SizeBytes  int64
 	PublicURL  *string
+}
+
+type SearchThreadResult struct {
+	ID                 string   `json:"id"`
+	Title              string   `json:"title"`
+	CreatedAt          string   `json:"created_at"`
+	UpdatedAt          string   `json:"updated_at"`
+	CreatedBy          string   `json:"created_by"`
+	MessageCount       int      `json:"message_count"`
+	LastMessagePreview string   `json:"last_message_preview"`
+	MatchedSnippets    []string `json:"matched_snippets"`
+}
+
+type SearchThreadParams struct {
+	Query        string
+	Limit        int
+	CreatedBy    *string
+	UpdatedAfter *string
 }
 
 type APIKey struct {

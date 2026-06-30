@@ -88,7 +88,7 @@ Local agent creates a file
 
 ## MCP Tools
 
-Agentbox exposes four MCP tools.
+Agentbox exposes five MCP tools.
 
 ### `list_threads`
 
@@ -111,6 +111,40 @@ Example result:
       "title": "Agentbox design",
       "created_at": "2026-06-28T10:00:00Z",
       "updated_at": "2026-06-28T10:15:00Z"
+    }
+  ]
+}
+```
+
+### `search_threads`
+
+Searches thread titles and message bodies.
+
+Input:
+
+```json
+{
+  "query": "deployment",
+  "limit": 10,
+  "created_by": "chatgpt",
+  "updated_after": "2026-06-28T00:00:00Z"
+}
+```
+
+Output:
+
+```json
+{
+  "threads": [
+    {
+      "id": "thr_123",
+      "title": "Agentbox deployment",
+      "created_at": "2026-06-28T10:00:00Z",
+      "updated_at": "2026-06-28T10:15:00Z",
+      "created_by": "chatgpt",
+      "message_count": 3,
+      "last_message_preview": "Deployment checks passed.",
+      "matched_snippets": ["Agentbox deployment"]
     }
   ]
 }
@@ -146,8 +180,11 @@ Output:
           {
             "id": "asset_001",
             "file_name": "homepage-banner.png",
+            "filename": "homepage-banner.png",
             "mime_type": "image/png",
-            "public_url": "https://assets.example.com/agentbox/homepage-banner.png"
+            "size_bytes": 124000,
+            "public_url": "https://assets.example.com/agentbox/homepage-banner.png",
+            "download_url": "https://assets.example.com/agentbox/homepage-banner.png"
           }
         ]
       }
@@ -158,13 +195,15 @@ Output:
 
 ### `create_thread`
 
-Creates a new thread.
+Creates a new thread. Callers may include `initial_message` to create the first message in the same call. The initial message uses automatic Markdown/plain-text detection unless `body_content_type` is set to `text/markdown` or `text/plain`.
 
 Input:
 
 ```json
 {
-  "title": "Agentbox design"
+  "title": "Agentbox design",
+  "initial_message": "Please implement the attached design.",
+  "body_content_type": "text/markdown"
 }
 ```
 
@@ -175,6 +214,13 @@ Output:
   "thread": {
     "id": "thr_123",
     "title": "Agentbox design",
+    "created_at": "2026-06-28T10:00:00Z"
+  },
+  "message": {
+    "id": "msg_001",
+    "thread_id": "thr_123",
+    "body": "Please implement the attached design.",
+    "body_content_type": "text/markdown",
     "created_at": "2026-06-28T10:00:00Z"
   }
 }

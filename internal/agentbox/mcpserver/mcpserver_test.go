@@ -41,13 +41,16 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	for _, tool := range tools.Tools {
 		byName[tool.Name] = tool
 	}
-	for _, name := range []string{"list_threads", "get_thread", "create_thread", "post_message"} {
+	for _, name := range []string{"list_threads", "search_threads", "get_thread", "create_thread", "post_message"} {
 		if byName[name] == nil {
 			t.Fatalf("missing tool %s in %#v", name, byName)
 		}
 	}
 	if !byName["list_threads"].Annotations.ReadOnlyHint {
 		t.Fatalf("list_threads annotations = %#v", byName["list_threads"].Annotations)
+	}
+	if !byName["search_threads"].Annotations.ReadOnlyHint {
+		t.Fatalf("search_threads annotations = %#v", byName["search_threads"].Annotations)
 	}
 	post := byName["post_message"]
 	if post.Annotations.ReadOnlyHint || post.Annotations.OpenWorldHint == nil || !*post.Annotations.OpenWorldHint {
@@ -112,13 +115,21 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "create_thread",
-		Arguments: map[string]any{"title": "MCP thread"},
+		Arguments: map[string]any{"title": "MCP thread", "initial_message": "Please run the narrow checks.", "body_content_type": "text/plain"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Content) != 1 || res.Content[0].(*mcp.TextContent).Text != "Created Agentbox thread." {
+	if len(res.Content) != 1 {
 		t.Fatalf("content = %#v", res.Content)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var fallback map[string]any
+	if err := json.Unmarshal([]byte(text), &fallback); err != nil {
+		t.Fatalf("content text is not JSON: %v text=%s", err, text)
+	}
+	if fallback["thread"] == nil || fallback["message"] == nil {
+		t.Fatalf("content fallback = %#v", fallback)
 	}
 	raw, err := json.Marshal(res.StructuredContent)
 	if err != nil {
@@ -129,11 +140,78 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 			ID        string `json:"id"`
 			CreatedBy string `json:"created_by"`
 		} `json:"thread"`
+		Message struct {
+			ThreadID        string  `json:"thread_id"`
+			Body            string  `json:"body"`
+			BodyContentType *string `json:"body_content_type"`
+		} `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if payload.Thread.ID == "" || payload.Thread.CreatedBy != "tester" {
 		t.Fatalf("payload = %#v", payload)
+	}
+	if payload.Message.ThreadID != payload.Thread.ID || payload.Message.Body != "Please run the narrow checks." || payload.Message.BodyContentType == nil || *payload.Message.BodyContentType != "text/plain" {
+		t.Fatalf("payload message = %#v", payload.Message)
+	}
+
+	search, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "search_threads",
+		Arguments: map[string]any{"query": "narrow", "limit": 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertJSONContentHasKey(t, search, "threads")
+
+	post, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "post_message",
+		Arguments: map[string]any{"thread_id": "thr_missing", "body": "hello"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !post.IsError {
+		t.Fatalf("expected MCP tool error, got %#v", post)
+	}
+	text = post.Content[0].(*mcp.TextContent).Text
+	var errPayload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(text), &errPayload); err != nil {
+		t.Fatalf("error content text is not JSON: %v text=%s", err, text)
+	}
+	if errPayload.Error.Code != "THREAD_NOT_FOUND" || strings.Contains(text, "SQLSTATE") || strings.Contains(text, "constraint") {
+		t.Fatalf("error payload = %#v text=%s", errPayload, text)
+	}
+}
+
+func assertJSONContentHasKey(t *testing.T, res *mcp.CallToolResult, key string) {
+	t.Helper()
+	if len(res.Content) == 0 {
+		t.Fatalf("missing content")
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatalf("content text is not JSON: %v text=%s", err, text)
+	}
+	if _, ok := payload[key]; !ok {
+		t.Fatalf("content JSON missing %s: %#v", key, payload)
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var structured map[string]any
+	if err := json.Unmarshal(raw, &structured); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := structured[key]; !ok {
+		t.Fatalf("structured content missing %s: %#v", key, structured)
 	}
 }

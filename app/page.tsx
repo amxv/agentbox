@@ -53,7 +53,7 @@ const workflow = [
 const surfaces = [
   {
     title: "Remote agents use MCP",
-    body: "ChatGPT or another hosted agent connects to Agentbox as a custom MCP server and gets tools for listing, reading, creating, and updating threads. This is the preferred install path for remote agents."
+    body: "ChatGPT, Claude, or another hosted agent connects to Agentbox as a custom MCP server and gets tools for listing, searching, reading, creating, and updating threads. Tool results include JSON in the visible content block plus structuredContent for clients that use native structured output."
   },
   {
     title: "Local agents use the CLI",
@@ -66,6 +66,10 @@ const surfaces = [
   {
     title: "Files stay durable",
     body: "Messages live in Postgres, attachments live in Cloudflare R2, and downloads use signed URLs so large files do not have to pass through the app."
+  },
+  {
+    title: "MCP results stay parseable",
+    body: "create_thread can create the first message, search_threads recovers older work by keyword, errors return stable codes, and attachment responses include first-class metadata such as filename, MIME type, size, and available download URLs."
   }
 ];
 
@@ -77,7 +81,7 @@ const installPaths = [
     steps: [
       "Ask an admin or operator to create a named API key for that agent.",
       "Use a clear name such as chatgpt or zodex-agent so thread activity is attributable.",
-      "Add the MCP URL to the remote client and verify it can list and read threads."
+      "Add the MCP URL to the remote client and verify it can list, search, and read threads."
     ],
     codeLabel: "MCP server URL",
     code: `${exampleAgentboxUrl}/api/mcp?key=<your-api-key>`,

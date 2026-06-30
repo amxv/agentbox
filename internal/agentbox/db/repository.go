@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"agentbox/internal/agentbox/config"
@@ -112,6 +113,69 @@ limit $1
 	return threads, rows.Err()
 }
 
+func (r *Repository) SearchThreads(ctx context.Context, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, err
+	}
+	var createdBy any
+	if params.CreatedBy != nil && *params.CreatedBy != "" {
+		createdBy = *params.CreatedBy
+	}
+	var updatedAfter any
+	if params.UpdatedAfter != nil && *params.UpdatedAfter != "" {
+		parsed, err := time.Parse(time.RFC3339, *params.UpdatedAfter)
+		if err != nil {
+			return nil, err
+		}
+		updatedAfter = parsed
+	}
+	pattern := "%" + params.Query + "%"
+	rows, err := r.pool.Query(ctx, `
+select
+  t.id,
+  t.title,
+  t.created_at,
+  t.updated_at,
+  t.created_by,
+  count(m.id)::int as message_count,
+  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc limit 1), '') as last_message_body,
+  coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $1 order by mm.created_at desc limit 1), '') as matched_message_body
+from threads t
+left join messages m on m.thread_id = t.id
+where ($2::text is null or t.created_by = $2)
+  and ($3::timestamptz is null or t.updated_at > $3)
+  and (
+    t.title ilike $1
+    or exists (select 1 from messages sm where sm.thread_id = t.id and sm.body ilike $1)
+  )
+group by t.id, t.title, t.created_at, t.updated_at, t.created_by
+order by t.updated_at desc
+limit $4
+`, pattern, createdBy, updatedAfter, params.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []types.SearchThreadResult{}
+	for rows.Next() {
+		var createdAt time.Time
+		var updatedAt time.Time
+		var lastBody string
+		var matchedBody string
+		result := types.SearchThreadResult{}
+		if err := rows.Scan(&result.ID, &result.Title, &createdAt, &updatedAt, &result.CreatedBy, &result.MessageCount, &lastBody, &matchedBody); err != nil {
+			return nil, err
+		}
+		result.CreatedAt = isoMillis(createdAt)
+		result.UpdatedAt = isoMillis(updatedAt)
+		result.LastMessagePreview = previewText(lastBody, 180)
+		result.MatchedSnippets = matchedSnippets(params.Query, result.Title, matchedBody)
+		results = append(results, result)
+	}
+	return results, rows.Err()
+}
+
 func (r *Repository) CreateThread(ctx context.Context, title string, author string) (types.Thread, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.Thread{}, err
@@ -123,6 +187,45 @@ values ($1, $2, $3)
 returning id, title, created_at, updated_at, created_by
 `, id, title, author)
 	return scanThread(row)
+}
+
+func (r *Repository) CreateThreadWithMessage(ctx context.Context, title string, author string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	threadID := "thr_" + uuid.NewString()
+	thread, err := scanThread(tx.QueryRow(ctx, `
+insert into threads (id, title, created_by)
+values ($1, $2, $3)
+returning id, title, created_at, updated_at, created_by
+`, threadID, title, author))
+	if err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
+	messageID := "msg_" + uuid.NewString()
+	message, err := scanMessage(tx.QueryRow(ctx, `
+insert into messages (id, thread_id, author, body, body_content_type)
+values ($1, $2, $3, $4, $5)
+returning id, thread_id, author, body, body_content_type, created_at
+`, messageID, thread.ID, author, body, bodyContentType), nil)
+	if err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
+	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where id = $1`, thread.ID); err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
+	return thread, message, nil
 }
 
 func (r *Repository) GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error) {
@@ -377,6 +480,8 @@ func scanAsset(row threadScanner) (types.Asset, error) {
 	)
 	asset.MimeType = mimeType
 	asset.PublicURL = publicURL
+	asset.Filename = asset.FileName
+	asset.DownloadURL = publicURL
 	asset.CreatedAt = isoMillis(createdAt)
 	return asset, err
 }
@@ -405,4 +510,26 @@ func StorageKey(threadID string, messageHint string, fileName string) string {
 
 func isoMillis(value time.Time) string {
 	return value.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func previewText(value string, max int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) <= max {
+		return value
+	}
+	if max <= 3 {
+		return value[:max]
+	}
+	return value[:max-3] + "..."
+}
+
+func matchedSnippets(query string, title string, body string) []string {
+	snippets := []string{}
+	if strings.Contains(strings.ToLower(title), strings.ToLower(query)) {
+		snippets = append(snippets, previewText(title, 180))
+	}
+	if body != "" {
+		snippets = append(snippets, previewText(body, 240))
+	}
+	return snippets
 }

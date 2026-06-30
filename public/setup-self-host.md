@@ -131,6 +131,18 @@ In ChatGPT:
 
 Agentbox expects no auth in the ChatGPT app config because the API key is already embedded in the MCP URL.
 
+The same remote MCP endpoint can be used by Claude custom connectors and other MCP-capable clients. Agentbox mirrors structured tool payloads into the first visible text content block as JSON while also preserving `structuredContent` and `outputSchema`.
+
+Current MCP tools:
+
+- `list_threads`
+- `search_threads`
+- `get_thread`
+- `create_thread`
+- `post_message`
+
+`create_thread` accepts optional `initial_message` and `body_content_type` (`auto`, `text/plain`, or `text/markdown`) so a remote agent can create the task thread and first message in one call. Tool failures return stable codes such as `THREAD_NOT_FOUND`, `INVALID_ARGUMENT`, `PERMISSION_DENIED`, `RATE_LIMITED`, `ATTACHMENT_NOT_FOUND`, and `INTERNAL_ERROR` instead of raw database errors. Message asset responses include stable attachment metadata such as `id`, `filename`, `mime_type`, `size_bytes`, `created_at`, and a download or public URL when available.
+
 ## 7. Deploy the optional dashboard
 
 The Next.js dashboard is optional. It provides a browser inbox for threads, messages, and attachments.

@@ -144,6 +144,26 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	if signed.AssetID != posted.Message.Assets[0].ID || signed.ExpiresIn != 3600 || signed.DownloadURL == "" {
 		t.Fatalf("signed = %#v", signed)
 	}
+
+	missingPost := httptest.NewRecorder()
+	server.ServeHTTP(missingPost, httptest.NewRequest(
+		http.MethodPost,
+		"/api/threads/thr_missing/messages?key=dev-key",
+		strings.NewReader(`{"body":"bad thread"}`),
+	))
+	if missingPost.Code != http.StatusNotFound {
+		t.Fatalf("missing post status = %d body=%s", missingPost.Code, missingPost.Body.String())
+	}
+	var missingPayload struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(missingPost.Body.Bytes(), &missingPayload); err != nil {
+		t.Fatal(err)
+	}
+	if missingPayload.Code != "THREAD_NOT_FOUND" || strings.Contains(missingPayload.Error, "SQLSTATE") || strings.Contains(missingPayload.Error, "constraint") {
+		t.Fatalf("missing payload = %#v", missingPayload)
+	}
 }
 
 func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {

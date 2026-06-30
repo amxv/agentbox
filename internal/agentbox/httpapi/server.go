@@ -244,7 +244,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 		File:            file,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"message": message})
@@ -301,7 +301,7 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, ac
 		MimeType:        mimeType,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"message": message})
@@ -326,7 +326,7 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if asset == nil {
-		writeError(w, http.StatusNotFound, "Asset not found.")
+		writeCodedError(w, http.StatusNotFound, "ATTACHMENT_NOT_FOUND", "Asset not found.")
 		return
 	}
 	expires := numberQuery(r, "expires_in", 300)
@@ -452,7 +452,56 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"error": message})
+	writeCodedError(w, status, errorCodeForStatus(status), message)
+}
+
+func writeCodedError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]any{"error": message, "code": code})
+}
+
+func writeServiceError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	code := "INVALID_ARGUMENT"
+	message := err.Error()
+	var coded service.CodedError
+	if errors.As(err, &coded) {
+		code = coded.Code
+		message = coded.Message
+		switch coded.Code {
+		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND":
+			status = http.StatusNotFound
+		case "PERMISSION_DENIED":
+			status = http.StatusForbidden
+		case "RATE_LIMITED":
+			status = http.StatusTooManyRequests
+		case "INTERNAL_ERROR":
+			status = http.StatusInternalServerError
+		default:
+			status = http.StatusBadRequest
+		}
+	} else if errors.Is(err, service.ErrThreadNotFound) {
+		status = http.StatusNotFound
+		code = "THREAD_NOT_FOUND"
+		message = service.ErrThreadNotFound.Error()
+	}
+	writeJSON(w, status, map[string]any{"error": message, "code": code})
+}
+
+func errorCodeForStatus(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "PERMISSION_DENIED"
+	case http.StatusForbidden:
+		return "PERMISSION_DENIED"
+	case http.StatusNotFound:
+		return "THREAD_NOT_FOUND"
+	case http.StatusTooManyRequests:
+		return "RATE_LIMITED"
+	case http.StatusInternalServerError:
+		return "INTERNAL_ERROR"
+	default:
+		return "INVALID_ARGUMENT"
+	}
 }
 
 func parseJSON(r *http.Request, target any) error {

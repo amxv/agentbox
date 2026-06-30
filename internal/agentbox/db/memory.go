@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"agentbox/internal/agentbox/types"
@@ -32,6 +33,58 @@ func (m *MemoryRepository) ListThreads(_ context.Context, limit int) ([]types.Th
 	return threads, nil
 }
 
+func (m *MemoryRepository) SearchThreads(_ context.Context, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	query := strings.ToLower(strings.TrimSpace(params.Query))
+	results := []types.SearchThreadResult{}
+	threads := append([]types.Thread(nil), m.Threads...)
+	sort.Slice(threads, func(i, j int) bool {
+		return threads[i].UpdatedAt > threads[j].UpdatedAt
+	})
+	for _, thread := range threads {
+		if params.CreatedBy != nil && *params.CreatedBy != "" && thread.CreatedBy != *params.CreatedBy {
+			continue
+		}
+		if params.UpdatedAfter != nil && *params.UpdatedAfter != "" && thread.UpdatedAt <= *params.UpdatedAfter {
+			continue
+		}
+		messageCount := 0
+		lastBody := ""
+		lastAt := ""
+		matchedBody := ""
+		titleMatches := strings.Contains(strings.ToLower(thread.Title), query)
+		for _, message := range m.Messages {
+			if message.ThreadID != thread.ID {
+				continue
+			}
+			messageCount++
+			if message.CreatedAt >= lastAt {
+				lastBody = message.Body
+				lastAt = message.CreatedAt
+			}
+			if matchedBody == "" && strings.Contains(strings.ToLower(message.Body), query) {
+				matchedBody = message.Body
+			}
+		}
+		if !titleMatches && matchedBody == "" {
+			continue
+		}
+		results = append(results, types.SearchThreadResult{
+			ID:                 thread.ID,
+			Title:              thread.Title,
+			CreatedAt:          thread.CreatedAt,
+			UpdatedAt:          thread.UpdatedAt,
+			CreatedBy:          thread.CreatedBy,
+			MessageCount:       messageCount,
+			LastMessagePreview: previewText(lastBody, 180),
+			MatchedSnippets:    matchedSnippets(params.Query, thread.Title, matchedBody),
+		})
+		if len(results) >= params.Limit {
+			break
+		}
+	}
+	return results, nil
+}
+
 func (m *MemoryRepository) CreateThread(_ context.Context, title string, author string) (types.Thread, error) {
 	now := isoMillis(time.Now())
 	thread := types.Thread{
@@ -43,6 +96,29 @@ func (m *MemoryRepository) CreateThread(_ context.Context, title string, author 
 	}
 	m.Threads = append(m.Threads, thread)
 	return thread, nil
+}
+
+func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, title string, author string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
+	now := isoMillis(time.Now())
+	thread := types.Thread{
+		ID:        "thr_" + uuid.NewString(),
+		Title:     title,
+		CreatedAt: now,
+		UpdatedAt: now,
+		CreatedBy: author,
+	}
+	message := types.Message{
+		ID:              "msg_" + uuid.NewString(),
+		ThreadID:        thread.ID,
+		Author:          author,
+		Body:            body,
+		BodyContentType: bodyContentType,
+		CreatedAt:       now,
+		Assets:          []types.Asset{},
+	}
+	m.Threads = append(m.Threads, thread)
+	m.Messages = append(m.Messages, message)
+	return thread, message, nil
 }
 
 func (m *MemoryRepository) GetThread(_ context.Context, threadID string) (*types.ThreadWithMessages, error) {
@@ -90,7 +166,7 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 		}
 	}
 	if threadIndex < 0 {
-		return types.Message{}, errors.New("insert or update on table \"messages\" violates foreign key constraint \"messages_thread_id_fkey\"")
+		return types.Message{}, errors.New("Thread not found.")
 	}
 
 	now := isoMillis(time.Now())
@@ -111,15 +187,17 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 	}
 
 	createdAsset := types.Asset{
-		ID:         "asset_" + uuid.NewString(),
-		MessageID:  message.ID,
-		StorageKey: asset.StorageKey,
-		FileName:   asset.FileName,
-		MimeType:   asset.MimeType,
-		SizeBytes:  asset.SizeBytes,
-		PublicURL:  asset.PublicURL,
-		CreatedAt:  now,
-		CreatedBy:  author,
+		ID:          "asset_" + uuid.NewString(),
+		MessageID:   message.ID,
+		StorageKey:  asset.StorageKey,
+		FileName:    asset.FileName,
+		Filename:    asset.FileName,
+		MimeType:    asset.MimeType,
+		SizeBytes:   asset.SizeBytes,
+		PublicURL:   asset.PublicURL,
+		DownloadURL: asset.PublicURL,
+		CreatedAt:   now,
+		CreatedBy:   author,
 	}
 	m.Assets = append(m.Assets, createdAsset)
 	message.Assets = []types.Asset{createdAsset}
