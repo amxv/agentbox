@@ -46,6 +46,18 @@ jobs:
       - name: Pack npm package
         run: npm pack ./npm/agentbox
 
+      - name: Prepare GitHub release assets
+        run: |
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('npm/agentbox/package.json', 'utf8')).version")
+          mkdir -p release-assets
+          cp "amxv-agentbox-${PACKAGE_VERSION}.tgz" "release-assets/amxv-agentbox-${PACKAGE_VERSION}.tgz"
+          tar -C npm/agentbox/vendor/darwin-arm64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-darwin-arm64.tar.gz" agentbox
+          tar -C npm/agentbox/vendor/darwin-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-darwin-amd64.tar.gz" agentbox
+          tar -C npm/agentbox/vendor/linux-arm64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-arm64.tar.gz" agentbox
+          tar -C npm/agentbox/vendor/linux-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-amd64.tar.gz" agentbox
+          cd npm/agentbox/vendor/windows-amd64
+          zip -q "../../../../release-assets/agentbox-${PACKAGE_VERSION}-windows-amd64.zip" agentbox.exe
+
       - name: Publish npm package
         working-directory: npm/agentbox
         env:
@@ -59,5 +71,6 @@ jobs:
         run: |
           PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('npm/agentbox/package.json', 'utf8')).version")
           gh release create "$GITHUB_REF_NAME" \
+            release-assets/* \
             --title "Agentbox CLI v${PACKAGE_VERSION}" \
             --notes "Published @amxv/agentbox@${PACKAGE_VERSION} to npm."
