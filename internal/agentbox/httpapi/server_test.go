@@ -57,6 +57,27 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 		t.Fatalf("created = %#v", created)
 	}
 
+	jsonPost := httptest.NewRecorder()
+	server.ServeHTTP(jsonPost, httptest.NewRequest(
+		http.MethodPost,
+		"/api/threads/"+created.Thread.ID+"/messages",
+		strings.NewReader(`{"body":"| A | B |\n| --- | --- |\n| 1 | 2 |"}`),
+	))
+	if jsonPost.Code != http.StatusCreated {
+		t.Fatalf("json post status = %d body=%s", jsonPost.Code, jsonPost.Body.String())
+	}
+	var jsonPosted struct {
+		Message struct {
+			BodyContentType *string `json:"body_content_type"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(jsonPost.Body.Bytes(), &jsonPosted); err != nil {
+		t.Fatal(err)
+	}
+	if jsonPosted.Message.BodyContentType == nil || *jsonPosted.Message.BodyContentType != "text/markdown" {
+		t.Fatalf("json message content type = %#v", jsonPosted.Message.BodyContentType)
+	}
+
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("body", "hello with asset"); err != nil {
@@ -82,8 +103,9 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 	var posted struct {
 		Message struct {
-			Body   string `json:"body"`
-			Assets []struct {
+			Body            string  `json:"body"`
+			BodyContentType *string `json:"body_content_type"`
+			Assets          []struct {
 				ID        string `json:"id"`
 				FileName  string `json:"file_name"`
 				SizeBytes int64  `json:"size_bytes"`
@@ -95,6 +117,9 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 	if posted.Message.Body != "hello with asset" || len(posted.Message.Assets) != 1 {
 		t.Fatalf("posted = %#v", posted)
+	}
+	if posted.Message.BodyContentType == nil || *posted.Message.BodyContentType != "text/plain" {
+		t.Fatalf("multipart message content type = %#v", posted.Message.BodyContentType)
 	}
 	if posted.Message.Assets[0].FileName != "hello.txt" || posted.Message.Assets[0].SizeBytes != int64(len("asset body")) {
 		t.Fatalf("asset = %#v", posted.Message.Assets[0])
@@ -126,7 +151,7 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.PostMessage(t.Context(), thread.ID, "author", "body", &types.NewAsset{
+	if _, err := repo.PostMessage(t.Context(), thread.ID, "author", "body", nil, &types.NewAsset{
 		StorageKey: "agentbox/thread/message/image.png",
 		FileName:   "image.png",
 		MimeType:   &imageType,

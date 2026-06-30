@@ -54,8 +54,11 @@ create table if not exists messages (
   thread_id text not null references threads(id) on delete cascade,
   author text not null,
   body text not null,
+  body_content_type text,
   created_at timestamptz not null default now()
 );
+
+alter table messages add column if not exists body_content_type text;
 
 create table if not exists assets (
   id text primary key,
@@ -132,7 +135,7 @@ where id = $1
 	}
 
 	messageRows, err := r.pool.Query(ctx, `
-select id, thread_id, author, body, created_at
+select id, thread_id, author, body, body_content_type, created_at
 from messages
 where thread_id = $1
 order by created_at asc
@@ -208,7 +211,7 @@ where id = $1
 	return &asset, nil
 }
 
-func (r *Repository) PostMessage(ctx context.Context, threadID string, author string, body string, asset *types.NewAsset) (types.Message, error) {
+func (r *Repository) PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.Message{}, err
 	}
@@ -222,10 +225,10 @@ func (r *Repository) PostMessage(ctx context.Context, threadID string, author st
 
 	messageID := "msg_" + uuid.NewString()
 	message, err := scanMessage(tx.QueryRow(ctx, `
-insert into messages (id, thread_id, author, body)
-values ($1, $2, $3, $4)
-returning id, thread_id, author, body, created_at
-`, messageID, threadID, author, body), nil)
+insert into messages (id, thread_id, author, body, body_content_type)
+values ($1, $2, $3, $4, $5)
+returning id, thread_id, author, body, body_content_type, created_at
+`, messageID, threadID, author, body, bodyContentType), nil)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -269,8 +272,10 @@ func scanThread(row threadScanner) (types.Thread, error) {
 
 func scanMessage(row threadScanner, assets []types.Asset) (types.Message, error) {
 	var createdAt time.Time
+	var bodyContentType *string
 	var message types.Message
-	err := row.Scan(&message.ID, &message.ThreadID, &message.Author, &message.Body, &createdAt)
+	err := row.Scan(&message.ID, &message.ThreadID, &message.Author, &message.Body, &bodyContentType, &createdAt)
+	message.BodyContentType = bodyContentType
 	message.CreatedAt = isoMillis(createdAt)
 	if assets == nil {
 		message.Assets = []types.Asset{}

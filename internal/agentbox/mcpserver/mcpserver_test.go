@@ -57,6 +57,13 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	if got := meta["openai/toolInvocation/invoked"]; got != "Posted to Agentbox" {
 		t.Fatalf("post_message meta = %#v", meta)
 	}
+	schemaJSON, err := json.Marshal(post.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(schemaJSON), "body_content_type") || !strings.Contains(string(schemaJSON), "text/markdown") {
+		t.Fatalf("post_message schema = %s", schemaJSON)
+	}
 	fileParams, ok := meta["openai/fileParams"].([]any)
 	if !ok || len(fileParams) != 1 || fileParams[0] != "file" {
 		t.Fatalf("file params meta = %#v", meta["openai/fileParams"])

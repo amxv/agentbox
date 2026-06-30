@@ -30,6 +30,9 @@ func TestServiceThreadAndMessageFlow(t *testing.T) {
 	if message.Author != "author" || len(message.Assets) != 0 {
 		t.Fatalf("unexpected message: %#v", message)
 	}
+	if message.BodyContentType == nil || *message.BodyContentType != "text/plain" {
+		t.Fatalf("message content type = %#v", message.BodyContentType)
+	}
 
 	got, err := svc.GetThread(context.Background(), thread.ID)
 	if err != nil {

@@ -29,9 +29,9 @@ func NewHTTPHandler(actor types.Actor, svc *service.Service) http.Handler {
 			return New(actor, svc)
 		},
 		&mcp.StreamableHTTPOptions{
-			Stateless:                   true,
-			JSONResponse:                true,
-			SessionTimeout:              0,
+			Stateless:                  true,
+			JSONResponse:               true,
+			SessionTimeout:             0,
 			DisableLocalhostProtection: true,
 		},
 	)
@@ -82,10 +82,11 @@ func (s *Server) build() *mcp.Server {
 		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}, "openai/toolInvocation/invoking": "Posting to Agentbox…", "openai/toolInvocation/invoked": "Posted to Agentbox"},
 		Name:        "post_message",
 		Title:       "Post message",
-		Description: "Post a Markdown message to an Agentbox thread. To attach a file from ChatGPT, pass the uploaded conversation file ID, for example file_abc123. Do not pass a local filesystem path or plain filename.",
+		Description: "Post a message to an Agentbox thread. Messages default to auto-detected Markdown/plain rendering; set body_content_type to text/markdown or text/plain when you know the format. To attach a file from ChatGPT, pass the uploaded conversation file ID, for example file_abc123. Do not pass a local filesystem path or plain filename.",
 		InputSchema: objectSchema(map[string]any{
-			"thread_id": map[string]any{"type": "string", "minLength": 1},
-			"body":      map[string]any{"type": "string"},
+			"thread_id":         map[string]any{"type": "string", "minLength": 1},
+			"body":              map[string]any{"type": "string"},
+			"body_content_type": map[string]any{"type": "string", "enum": []string{"auto", "text/plain", "text/markdown"}},
 			"file": map[string]any{
 				"anyOf": []any{
 					map[string]any{
@@ -165,9 +166,10 @@ func (s *Server) createThread(ctx context.Context, req *mcp.CallToolRequest) (*m
 
 func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var raw struct {
-		ThreadID string          `json:"thread_id"`
-		Body     string          `json:"body"`
-		File     json.RawMessage `json:"file"`
+		ThreadID        string          `json:"thread_id"`
+		Body            string          `json:"body"`
+		BodyContentType *string         `json:"body_content_type"`
+		File            json.RawMessage `json:"file"`
 	}
 	if err := decodeArgs(req, &raw); err != nil {
 		return nil, err
@@ -181,9 +183,10 @@ func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		file = parsed
 	}
 	message, err := s.svc.PostMessage(ctx, s.actor, service.PostMessageParams{
-		ThreadID: raw.ThreadID,
-		Body:     raw.Body,
-		File:     file,
+		ThreadID:        raw.ThreadID,
+		Body:            raw.Body,
+		BodyContentType: raw.BodyContentType,
+		File:            file,
 	})
 	if err != nil {
 		return nil, err

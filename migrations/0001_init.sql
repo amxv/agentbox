@@ -11,6 +11,7 @@ create table if not exists messages (
   thread_id text not null references threads(id) on delete cascade,
   author text not null,
   body text not null,
+  body_content_type text,
   created_at timestamptz not null default now()
 );
 

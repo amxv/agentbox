@@ -146,8 +146,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	}
 
 	var input struct {
-		Body *string                     `json:"body"`
-		File *types.ChatGPTFileReference `json:"file"`
+		Body            *string                     `json:"body"`
+		BodyContentType *string                     `json:"body_content_type"`
+		File            *types.ChatGPTFileReference `json:"file"`
 	}
 	if err := parseJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -171,9 +172,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 		}
 	}
 	message, err := s.service.PostMessage(r.Context(), *actor, service.PostMessageParams{
-		ThreadID: threadID,
-		Body:     body,
-		File:     file,
+		ThreadID:        threadID,
+		Body:            body,
+		BodyContentType: input.BodyContentType,
+		File:            file,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -193,6 +195,10 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	body := r.FormValue("body")
+	var bodyContentType *string
+	if value := r.FormValue("body_content_type"); value != "" {
+		bodyContentType = &value
+	}
 	var bytes []byte
 	var fileName string
 	var mimeType *string
@@ -221,11 +227,12 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	message, err := s.service.PostMessageWithAsset(r.Context(), *actor, service.PostMessageWithAssetParams{
-		ThreadID: threadID,
-		Body:     body,
-		Bytes:    bytes,
-		FileName: fileName,
-		MimeType: mimeType,
+		ThreadID:        threadID,
+		Body:            body,
+		BodyContentType: bodyContentType,
+		Bytes:           bytes,
+		FileName:        fileName,
+		MimeType:        mimeType,
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

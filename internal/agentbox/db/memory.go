@@ -80,7 +80,7 @@ func (m *MemoryRepository) GetAsset(_ context.Context, assetID string) (*types.A
 	return nil, nil
 }
 
-func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, author string, body string, asset *types.NewAsset) (types.Message, error) {
+func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error) {
 	var threadIndex = -1
 	for i, thread := range m.Threads {
 		if thread.ID == threadID {
@@ -94,12 +94,13 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 
 	now := isoMillis(time.Now())
 	message := types.Message{
-		ID:        "msg_" + uuid.NewString(),
-		ThreadID:  threadID,
-		Author:    author,
-		Body:      body,
-		CreatedAt: now,
-		Assets:    []types.Asset{},
+		ID:              "msg_" + uuid.NewString(),
+		ThreadID:        threadID,
+		Author:          author,
+		Body:            body,
+		BodyContentType: bodyContentType,
+		CreatedAt:       now,
+		Assets:          []types.Asset{},
 	}
 	m.Messages = append(m.Messages, message)
 	m.Threads[threadIndex].UpdatedAt = isoMillis(time.Now())

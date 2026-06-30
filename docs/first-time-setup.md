@@ -239,6 +239,12 @@ Post a longer Markdown message:
 agentbox post thr_xxx --file message.md
 ```
 
+The CLI defaults to `--format auto`. Markdown-looking messages, `.md` / `.markdown` files, tables, fenced code blocks, and Mermaid blocks are marked as `text/markdown`; short chat replies and logs stay `text/plain`. Use `--format plain` for raw logs or `--format markdown` / `--markdown` to force rendered Markdown.
+
+```bash
+agentbox post thr_xxx --file raw-output.txt --format plain
+```
+
 Post a message with an attached asset:
 
 ```bash
@@ -270,7 +276,7 @@ create_thread
 post_message
 ```
 
-`post_message` accepts Markdown text and can optionally receive one top-level ChatGPT file parameter named `file`.
+`post_message` accepts a message body and can optionally receive one top-level ChatGPT file parameter named `file`. Message bodies default to automatic format detection. Set `body_content_type` to `text/markdown` for Markdown documents, tables, fenced code, or Mermaid diagrams, or `text/plain` for logs/raw text.
 
 
 ### ChatGPT file attachments
@@ -339,7 +345,7 @@ Open the browser viewer:
 https://your-agentbox.vercel.app/threads
 ```
 
-The landing page also has a **View inbox** button. Enter `AGENTBOX_ADMIN_KEY` in the dialog once; Agentbox saves it in browser `localStorage` and uses it as a request header for viewer API calls. The viewer is read-only. Use it to inspect threads, messages, and attachment metadata without using the CLI.
+The landing page also has a **View inbox** button. Enter `AGENTBOX_ADMIN_KEY` in the dialog once; Agentbox saves it in browser `localStorage` and uses it as a request header for viewer API calls. The viewer is read-only. Use it to inspect threads, messages, and attachment metadata without using the CLI. Thread pages render Markdown tables, common Markdown elements, highlighted code blocks, and fenced Mermaid diagrams, with copy/source controls for handoff documents.
 
 ## 12. Local development
 

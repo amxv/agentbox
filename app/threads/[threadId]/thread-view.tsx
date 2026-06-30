@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { MessageContent } from "./message-content";
 
 const STORAGE_KEY = "agentbox_admin_key";
 
@@ -19,6 +20,7 @@ type Message = {
   id: string;
   author: string;
   body: string;
+  body_content_type?: string | null;
   created_at: string;
   assets: Asset[];
 };
@@ -132,7 +134,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 <strong className="message-author">{message.author}</strong>
                 <span className="message-date">{formatDate(message.created_at)}</span>
               </div>
-              <pre className="message-body">{message.body || "(empty message)"}</pre>
+              <MessageContent body={message.body} contentType={message.body_content_type} />
               {message.assets.length > 0 && (
                 <div className="asset-list">
                   <span className="asset-label">Attachments</span>

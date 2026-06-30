@@ -26,12 +26,13 @@ type Asset struct {
 }
 
 type Message struct {
-	ID        string  `json:"id"`
-	ThreadID  string  `json:"thread_id"`
-	Author    string  `json:"author"`
-	Body      string  `json:"body"`
-	CreatedAt string  `json:"created_at"`
-	Assets    []Asset `json:"assets"`
+	ID              string  `json:"id"`
+	ThreadID        string  `json:"thread_id"`
+	Author          string  `json:"author"`
+	Body            string  `json:"body"`
+	BodyContentType *string `json:"body_content_type"`
+	CreatedAt       string  `json:"created_at"`
+	Assets          []Asset `json:"assets"`
 }
 
 type ThreadWithMessages struct {

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"agentbox/internal/agentbox/assets"
+	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
 )
@@ -17,7 +18,7 @@ type Repository interface {
 	CreateThread(ctx context.Context, title string, author string) (types.Thread, error)
 	GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error)
 	GetAsset(ctx context.Context, assetID string) (*types.Asset, error)
-	PostMessage(ctx context.Context, threadID string, author string, body string, asset *types.NewAsset) (types.Message, error)
+	PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error)
 }
 
 type Service struct {
@@ -62,6 +63,10 @@ func (s *Service) PostMessage(ctx context.Context, actor types.Actor, params Pos
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
 	}
+	bodyContentType, err := messageformat.Resolve(params.BodyContentType, params.Body, "")
+	if err != nil {
+		return types.Message{}, err
+	}
 	var newAsset *types.NewAsset
 	if params.File != nil {
 		asset, err := s.assets.UploadChatGPTFile(ctx, params.ThreadID, *params.File)
@@ -70,11 +75,15 @@ func (s *Service) PostMessage(ctx context.Context, actor types.Actor, params Pos
 		}
 		newAsset = &asset
 	}
-	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, newAsset)
+	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAsset)
 }
 
 func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, params PostMessageWithAssetParams) (types.Message, error) {
 	if err := validate.PostMessage(params.ThreadID); err != nil {
+		return types.Message{}, err
+	}
+	bodyContentType, err := messageformat.Resolve(params.BodyContentType, params.Body, "")
+	if err != nil {
 		return types.Message{}, err
 	}
 	var newAsset *types.NewAsset
@@ -90,7 +99,7 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, p
 		}
 		newAsset = &asset
 	}
-	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, newAsset)
+	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAsset)
 }
 
 func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset, expiresInSeconds int) (string, error) {
@@ -103,15 +112,17 @@ func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset,
 }
 
 type PostMessageParams struct {
-	ThreadID string
-	Body     string
-	File     *assets.ChatGPTFileInput
+	ThreadID        string
+	Body            string
+	BodyContentType *string
+	File            *assets.ChatGPTFileInput
 }
 
 type PostMessageWithAssetParams struct {
-	ThreadID string
-	Body     string
-	Bytes    []byte
-	FileName string
-	MimeType *string
+	ThreadID        string
+	Body            string
+	BodyContentType *string
+	Bytes           []byte
+	FileName        string
+	MimeType        *string
 }

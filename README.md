@@ -38,7 +38,7 @@ create_thread
 post_message
 ```
 
-`post_message` supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass `/mnt/data/...` paths or plain filenames.
+`post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. It also supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass local sandbox paths or plain filenames.
 
 ## CLI commands
 
@@ -49,6 +49,7 @@ agentbox create "Design thread"
 agentbox get thr_xxx
 agentbox post thr_xxx "Message body"
 agentbox post thr_xxx --file message.md
+agentbox post thr_xxx --file raw-output.txt --format plain
 agentbox post thr_xxx --file message.md --asset screenshot.png
 agentbox download thr_xxx
 agentbox download thr_xxx --output ./downloads
@@ -64,7 +65,7 @@ Agentbox includes a simple browser viewer for inspecting threads and attachments
 https://your-agentbox.vercel.app/threads
 ```
 
-Set `AGENTBOX_ADMIN_KEY` in the deployment environment. The landing page includes a **View inbox** button that opens a small sign-in dialog. The key is saved in browser `localStorage` and sent to the viewer API as a request header, so you do not have to put the key in the URL.
+Set `AGENTBOX_ADMIN_KEY` in the deployment environment. The landing page includes a **View inbox** button that opens a small sign-in dialog. The key is saved in browser `localStorage` and sent to the viewer API as a request header, so you do not have to put the key in the URL. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
 
 ## API
 

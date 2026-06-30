@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/profiles"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/version"
@@ -46,12 +47,13 @@ type asset struct {
 }
 
 type message struct {
-	ID        string  `json:"id"`
-	ThreadID  string  `json:"thread_id"`
-	Author    string  `json:"author"`
-	Body      string  `json:"body"`
-	CreatedAt string  `json:"created_at"`
-	Assets    []asset `json:"assets"`
+	ID              string  `json:"id"`
+	ThreadID        string  `json:"thread_id"`
+	Author          string  `json:"author"`
+	Body            string  `json:"body"`
+	BodyContentType *string `json:"body_content_type"`
+	CreatedAt       string  `json:"created_at"`
+	Assets          []asset `json:"assets"`
 }
 
 type thread struct {
@@ -216,9 +218,9 @@ Read an Agentbox thread and its messages.`,
 		"download": `Usage: agentbox download <thread-id> [-o <dir>] [--json]
 
 Download all attachments from a thread to a local directory.`,
-		"post": `Usage: agentbox post <thread-id> [message] [-f <path>] [-a <path>] [--json]
+		"post": `Usage: agentbox post <thread-id> [message] [-f <path>] [-a <path>] [--format auto|markdown|plain] [--json]
 
-Post a message to a thread. If message is omitted and stdin is piped, the CLI reads the message body from stdin.`,
+Post a message to a thread. If message is omitted and stdin is piped, the CLI reads the message body from stdin. The default format is auto; .md/.markdown files, Markdown tables, fenced code blocks, and Mermaid blocks are marked as Markdown. Use --plain for raw logs or --markdown to force Markdown rendering.`,
 	}
 	if text, ok := usage[command]; ok {
 		fmt.Fprintln(r.Stdout, text)
@@ -798,6 +800,9 @@ func (r *Runner) runPost(args []string, profileName string) error {
 	fs.StringVar(filePath, "f", "", "read message body from a Markdown/text file")
 	assetPath := fs.String("asset", "", "attach a local file")
 	fs.StringVar(assetPath, "a", "", "attach a local file")
+	format := fs.String("format", messageformat.Auto, "message body format: auto, markdown, or plain")
+	markdown := fs.Bool("markdown", false, "render message body as Markdown")
+	plain := fs.Bool("plain", false, "render message body as plain text")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -824,16 +829,24 @@ func (r *Runner) runPost(args []string, profileName string) error {
 		}
 		body = string(bytes)
 	}
+	requestedFormat, err := requestedBodyContentType(*format, *markdown, *plain)
+	if err != nil {
+		return err
+	}
+	bodyContentType, err := messageformat.Resolve(requestedFormat, body, *filePath)
+	if err != nil {
+		return err
+	}
 	var data struct {
 		Message types.Message `json:"message"`
 	}
 	if *assetPath == "" {
-		payload, _ := json.Marshal(map[string]string{"body": body})
+		payload, _ := json.Marshal(map[string]string{"body": body, "body_content_type": bodyContentType})
 		if err := r.request("/api/threads/"+url.PathEscape(threadID)+"/messages", http.MethodPost, bytes.NewReader(payload), map[string]string{"content-type": "application/json"}, profileName, &data); err != nil {
 			return err
 		}
 	} else {
-		payload, contentType, err := multipartBody(body, *assetPath)
+		payload, contentType, err := multipartBody(body, bodyContentType, *assetPath)
 		if err != nil {
 			return err
 		}
@@ -846,6 +859,33 @@ func (r *Runner) runPost(args []string, profileName string) error {
 	}
 	fmt.Fprintln(r.Stdout, data.Message.ID)
 	return nil
+}
+
+func requestedBodyContentType(format string, markdown bool, plain bool) (*string, error) {
+	if markdown && plain {
+		return nil, errors.New("Use only one of --markdown or --plain.")
+	}
+	if markdown {
+		value := messageformat.Markdown
+		return &value, nil
+	}
+	if plain {
+		value := messageformat.Plain
+		return &value, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", messageformat.Auto:
+		value := messageformat.Auto
+		return &value, nil
+	case "markdown", "md", messageformat.Markdown:
+		value := messageformat.Markdown
+		return &value, nil
+	case "plain", "text", messageformat.Plain:
+		value := messageformat.Plain
+		return &value, nil
+	default:
+		return nil, errors.New("--format must be auto, markdown, or plain")
+	}
 }
 
 func shouldReadStdin(reader io.Reader) bool {
@@ -863,10 +903,13 @@ func shouldReadStdin(reader io.Reader) bool {
 	return info.Mode()&os.ModeCharDevice == 0
 }
 
-func multipartBody(body string, assetPath string) (*bytes.Reader, string, error) {
+func multipartBody(body string, bodyContentType string, assetPath string) (*bytes.Reader, string, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	if err := writer.WriteField("body", body); err != nil {
+		return nil, "", err
+	}
+	if err := writer.WriteField("body_content_type", bodyContentType); err != nil {
 		return nil, "", err
 	}
 	file, err := os.Open(assetPath)

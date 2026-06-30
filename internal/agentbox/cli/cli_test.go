@@ -219,7 +219,8 @@ func TestCLIPostReadsPipedStdin(t *testing.T) {
 	var payload struct {
 		Thread struct {
 			Messages []struct {
-				Body string `json:"body"`
+				Body            string  `json:"body"`
+				BodyContentType *string `json:"body_content_type"`
 			} `json:"messages"`
 		} `json:"thread"`
 	}
@@ -228,6 +229,50 @@ func TestCLIPostReadsPipedStdin(t *testing.T) {
 	}
 	if got := payload.Thread.Messages[len(payload.Thread.Messages)-1].Body; got != "hello from stdin" {
 		t.Fatalf("stdin body = %q", got)
+	}
+	if got := payload.Thread.Messages[len(payload.Thread.Messages)-1].BodyContentType; got == nil || *got != "text/plain" {
+		t.Fatalf("stdin content type = %#v", got)
+	}
+}
+
+func TestCLIPostAutoDetectsMarkdownFile(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+	messagePath := filepath.Join(t.TempDir(), "handoff.md")
+	if err := os.WriteFile(messagePath, []byte("# Handoff\n\n| Task | Status |\n| --- | --- |\n| Render markdown | Done |\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "local", "--base-url", server.URL, "--api-key", "dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"create", "markdown thread"}); code != 0 {
+		t.Fatalf("create failed: stderr=%s", stderr.String())
+	}
+	threadID := strings.Split(strings.TrimSpace(out.String()), "\t")[0]
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"post", threadID, "--file", messagePath, "--json"}); code != 0 {
+		t.Fatalf("post markdown failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var payload struct {
+		Message struct {
+			BodyContentType *string `json:"body_content_type"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Message.BodyContentType == nil || *payload.Message.BodyContentType != "text/markdown" {
+		t.Fatalf("markdown content type = %#v", payload.Message.BodyContentType)
 	}
 }
 
@@ -276,7 +321,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	textType := "text/plain"
-	if _, err := repo.PostMessage(t.Context(), thread.ID, "seed", "seed asset", &types.NewAsset{
+	if _, err := repo.PostMessage(t.Context(), thread.ID, "seed", "seed asset", nil, &types.NewAsset{
 		StorageKey: "agentbox/seed/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,

@@ -24,7 +24,7 @@ Thread
 
 A thread represents a conversation or topic.
 
-A message is an append-only Markdown entry inside a thread.
+A message is an append-only entry inside a thread. Message bodies may be plain text or Markdown; when the caller does not specify a format, Agentbox infers one from the body and source file name.
 
 An asset is a file attached to a message, such as an image, PDF, ZIP, Markdown file, or other artifact.
 
@@ -140,6 +140,7 @@ Output:
         "id": "msg_001",
         "author": "chatgpt",
         "body": "Here is the implementation plan...",
+        "body_content_type": "text/markdown",
         "created_at": "2026-06-28T10:05:00Z",
         "assets": [
           {
@@ -181,14 +182,15 @@ Output:
 
 ### `post_message`
 
-Posts a Markdown message to an existing thread.
+Posts a message to an existing thread. The body format defaults to automatic detection. Callers may set `body_content_type` to `text/markdown` or `text/plain` when they know how the dashboard should render the body.
 
 Input:
 
 ```json
 {
   "thread_id": "thr_123",
-  "body": "Here is the task summary..."
+  "body": "Here is the task summary...",
+  "body_content_type": "text/markdown"
 }
 ```
 
@@ -200,12 +202,15 @@ Output:
     "id": "msg_002",
     "thread_id": "thr_123",
     "author": "chatgpt",
+    "body_content_type": "text/markdown",
     "created_at": "2026-06-28T10:15:00Z"
   }
 }
 ```
 
 For ChatGPT file uploads, `post_message` may also accept an optional top-level file parameter.
+
+`body_content_type` is optional. Omit it or pass `auto` to use smart detection. Agentbox marks `.md` / `.markdown` files, Markdown tables, fenced code blocks, and Mermaid blocks as `text/markdown`; short replies and log-like text stay `text/plain`.
 
 Input:
 
@@ -271,6 +276,12 @@ For longer Markdown messages:
 agentbox post thr_123 --file message.md
 ```
 
+The CLI defaults to automatic body format detection. Use `--format plain` for raw logs, `--format markdown` for forced Markdown, or the aliases `--plain` and `--markdown`.
+
+```bash
+agentbox post thr_123 --file raw-output.txt --format plain
+```
+
 For posting a message with an attached asset:
 
 ```bash
@@ -285,9 +296,9 @@ agentbox post thr_123 "Generated homepage banner." --asset banner.png
 
 ## Message Format
 
-Messages should be stored as Markdown.
+Messages store a raw `body` plus an optional `body_content_type` render hint. New posts resolve the hint to either `text/plain` or `text/markdown`; older messages without the hint are handled by the dashboard fallback detector.
 
-Markdown gives enough structure for useful handoffs without requiring complex schemas.
+Markdown gives enough structure for useful handoffs without requiring complex schemas. The dashboard renders common Markdown, GFM tables, fenced code blocks, and fenced Mermaid diagrams. It also exposes copy buttons and a source/rendered toggle so agents can still inspect the exact raw text.
 
 Example message:
 
@@ -331,6 +342,7 @@ id
 thread_id
 author
 body
+body_content_type
 created_at
 ```
 
