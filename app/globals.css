@@ -446,6 +446,30 @@ pre,
   font-weight: 500;
 }
 
+.setup-page {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.setup-steps {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.setup-step-card {
+  display: grid;
+  gap: 1rem;
+  padding: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.compact-stack {
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
 .key-card {
   grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 1fr);
   gap: 2rem;
@@ -499,6 +523,13 @@ pre,
   gap: 2rem;
   padding: 3rem 0;
   border-top: 1px solid var(--line);
+}
+
+.cta-band__actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .site-footer {

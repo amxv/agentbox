@@ -28,6 +28,7 @@ type Runner struct {
 	Stderr     io.Writer
 	Stdin      io.Reader
 	HTTPClient *http.Client
+	RunExternal ExternalCommandFunc
 }
 
 type RuntimeConfig struct {
@@ -81,6 +82,7 @@ func NewRunner() *Runner {
 		Stderr:     os.Stderr,
 		Stdin:      os.Stdin,
 		HTTPClient: http.DefaultClient,
+		RunExternal: defaultExternalCommand,
 	}
 }
 
@@ -96,6 +98,9 @@ func (r *Runner) Run(args []string) int {
 	}
 	if r.HTTPClient == nil {
 		r.HTTPClient = http.DefaultClient
+	}
+	if r.RunExternal == nil {
+		r.RunExternal = defaultExternalCommand
 	}
 	if err := r.run(args); err != nil {
 		fmt.Fprintln(r.Stderr, err.Error())
@@ -147,6 +152,14 @@ func (r *Runner) run(args []string) error {
 		return r.runDoctor(cmdArgs, *profileName)
 	case "mcp-url":
 		return r.runMCPURL(cmdArgs, *profileName)
+	case "init":
+		return r.runInit(cmdArgs, *profileName)
+	case "connect":
+		return r.runConnect(cmdArgs, *profileName)
+	case "deploy":
+		return r.runDeploy(cmdArgs, *profileName)
+	case "keys":
+		return r.runKeys(cmdArgs)
 	case "list":
 		return r.runList(cmdArgs, *profileName)
 	case "create":
@@ -176,6 +189,10 @@ Commands:
   profiles                inspect and manage CLI profiles
   doctor                  check profile, API, MCP, and attachment access
   mcp-url                 print the full MCP URL for the selected profile
+  init                    save a local profile and optionally verify it
+  connect                 print ChatGPT MCP setup instructions
+  deploy                  help deploy Agentbox to Vercel
+  keys                    generate and manage labeled API keys
   list                    list recent threads
   create <title>          create a thread
   get <thread-id>         read a thread
@@ -206,6 +223,23 @@ Check profile, health, authenticated API access, signed download URLs, and MCP U
 		"mcp-url": `Usage: agentbox mcp-url [--json]
 
 Print the full MCP URL for the selected profile, including its API key.`,
+		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--api-key <key>] [--skip-doctor] [--json]
+
+Save a local CLI profile, prompting for any missing values.`,
+		"connect": `Usage: agentbox connect chatgpt [--json]
+
+Print the MCP URL for the selected profile plus the ChatGPT app setup steps.`,
+		"deploy": `Usage: agentbox deploy vercel [options]
+
+Link backend/dashboard Vercel projects, set env vars, deploy both services, and optionally save a local CLI profile.`,
+		"keys": `Usage: agentbox keys [command]
+
+Generate and manage labeled API keys for AGENTBOX_API_KEYS.
+
+Commands:
+  create <label>          generate a labeled API key
+  list                    show configured key labels
+  revoke <label>          remove a labeled API key`,
 		"list": `Usage: agentbox list [-n <limit>] [--json]
 
 List recent Agentbox threads.`,

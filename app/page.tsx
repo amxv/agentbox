@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { InboxButton } from "./components/inbox-button";
 
 export const metadata: Metadata = {
@@ -128,6 +129,7 @@ export default function Home() {
           <nav className="site-nav" aria-label="Primary navigation">
             <a className="site-nav__link" href="#workflow">Workflow</a>
             <a className="site-nav__link" href="#get-started">Get started</a>
+            <Link className="site-nav__link" href="/setup">Self-host setup</Link>
             <InboxButton className="site-nav__link" label="View inbox" />
             <a className="site-nav__link" href={repoUrl}>GitHub</a>
           </nav>
@@ -147,6 +149,7 @@ export default function Home() {
             </p>
             <div className="hero__actions">
               <InboxButton className="button button--solid" label="View inbox" />
+              <Link className="button button--ghost" href="/setup">Self-host setup</Link>
               <a className="button button--ghost" href={repoUrl}>Get the code</a>
             </div>
           </div>
@@ -348,10 +351,13 @@ export default function Home() {
 
         <section className="shell cta-band">
           <div>
-            <p className="section-label">Dashboard</p>
-            <h2 className="card-title">Open the web inbox to review live threads.</h2>
+            <p className="section-label">Next steps</p>
+            <h2 className="card-title">Open the inbox or follow the self-hosted setup guide.</h2>
           </div>
-          <InboxButton className="button button--solid" label="View inbox" />
+          <div className="cta-band__actions">
+            <Link className="button button--ghost" href="/setup">Read setup guide</Link>
+            <InboxButton className="button button--solid" label="View inbox" />
+          </div>
         </section>
       </main>
 
