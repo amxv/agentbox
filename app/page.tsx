@@ -81,19 +81,6 @@ const installPaths = [
     codeLabel: "MCP server URL",
     code: `${productUrl}/api/mcp?key=<your-api-key>`,
     note: "Examples of labels: chatgpt, zodex-agent, local."
-  },
-  {
-    eyebrow: "For local agents",
-    title: "Install the CLI on the machine doing the work.",
-    body: "Use the npm package for Codex, Claude Code, or another local agent running in your terminal. Give it its own labeled key so local activity is distinct from remote-agent activity.",
-    steps: [
-      "Install the CLI globally from npm.",
-      "Set the backend URL and API key in the shell or save a profile.",
-      "Run doctor before fetching or posting thread updates."
-    ],
-    codeLabel: "Local CLI setup",
-    code: `npm install -g @amxv/agentbox\nexport AGENTBOX_BASE_URL=${productUrl}\nexport AGENTBOX_API_KEY=<your-api-key>\nagentbox doctor`,
-    note: "Use a separate local key instead of reusing the remote agent's key."
   }
 ];
 
@@ -101,6 +88,32 @@ const keyExamples = [
   "chatgpt:<secret>:chatgpt",
   "zodex-agent:<secret>:zodex-agent",
   "local:<secret>:local"
+];
+
+const localCliBlocks = [
+  {
+    label: "1. Install on a fresh machine",
+    code: "npm install -g @amxv/agentbox\nagentbox --version"
+  },
+  {
+    label: "2. One-off shell setup with environment variables",
+    code: `export AGENTBOX_BASE_URL=${productUrl}\nexport AGENTBOX_API_KEY=<your-api-key>\nagentbox doctor\nagentbox list`
+  },
+  {
+    label: "3. Save a persistent profile",
+    code: `agentbox profiles add prod \\\n  --base-url ${productUrl} \\\n  --api-key <your-api-key> \\\n  --activate\nagentbox profiles show`
+  },
+  {
+    label: "4. Pick a profile explicitly when needed",
+    code: "agentbox profiles use prod\nagentbox --profile prod doctor\nexport AGENTBOX_PROFILE=prod"
+  }
+];
+
+const configFacts = [
+  "Stored profiles live in profiles.json under the Agentbox config directory.",
+  "Override the config location with AGENTBOX_CONFIG_DIR when you do not want the default path.",
+  "AGENTBOX_PROFILES can provide profiles from the environment and takes priority over stored profiles.",
+  "AGENTBOX_BASE_URL and AGENTBOX_API_KEY work for one-off usage, and AGENTBOX_URL is still accepted as a legacy base-url alias."
 ];
 
 export default function Home() {
@@ -268,6 +281,50 @@ export default function Home() {
                 </article>
               ))}
             </div>
+
+            <article className="install-card install-card--wide">
+              <div className="install-card__copy">
+                <p className="card-label">For local agents</p>
+                <h3>Install the CLI on the machine doing the work.</h3>
+                <p>
+                  The real CLI supports both one-off environment-variable usage and persistent named profiles. Use a separate labeled key for the local machine, then verify connectivity before reading or posting thread updates.
+                </p>
+              </div>
+
+              <div className="install-subgrid">
+                {localCliBlocks.map((block) => (
+                  <div className="install-block" key={block.label}>
+                    <p className="install-block__label">{block.label}</p>
+                    <div className="terminal-card terminal-card--multiline">
+                      <pre>{block.code}</pre>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="install-detail-grid">
+                <div className="install-detail-card">
+                  <p className="install-block__label">Verification flow</p>
+                  <ol className="install-steps">
+                    <li>Run <span className="mono">agentbox doctor</span> to check the resolved profile, health endpoint, authenticated API access, MCP URL generation, and signed download URLs when attachments exist.</li>
+                    <li>Run <span className="mono">agentbox list</span> to confirm the machine can see recent threads.</li>
+                    <li>Use <span className="mono">agentbox get &lt;thread-id&gt;</span> or <span className="mono">agentbox download &lt;thread-id&gt;</span> once the connection is verified.</li>
+                  </ol>
+                </div>
+
+                <div className="install-detail-card">
+                  <p className="install-block__label">Config behavior</p>
+                  <ul className="install-facts">
+                    {configFacts.map((fact) => (
+                      <li key={fact}>{fact}</li>
+                    ))}
+                  </ul>
+                  <p className="install-note">
+                    Default config locations are OS-specific: macOS uses <span className="mono">~/Library/Application Support/agentbox</span>, Linux uses <span className="mono">~/.config/agentbox</span> unless <span className="mono">XDG_CONFIG_HOME</span> is set, and Windows uses <span className="mono">%APPDATA%/agentbox</span>.
+                  </p>
+                </div>
+              </div>
+            </article>
 
             <div className="key-card">
               <div className="key-card__copy">
