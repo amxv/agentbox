@@ -80,7 +80,7 @@ After the backend is live and migrated, create two DB-backed API keys through th
 ```bash
 agentbox init \
   --profile-name prod \
-  --base-url https://your-agentbox-go.vercel.app \
+  --base-url https://youragentbox.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
   --local-key-name local \
   --chatgpt-key-name chatgpt
@@ -103,7 +103,7 @@ agentbox keys create worker --admin-key "$AGENTBOX_ADMIN_KEY"
 agentbox keys revoke worker --admin-key "$AGENTBOX_ADMIN_KEY"
 ```
 
-If the CLI cannot resolve a backend URL from the active profile, pass `--base-url https://your-agentbox-go.vercel.app`.
+If the CLI cannot resolve a backend URL from the active profile, pass `--base-url https://youragentbox.vercel.app`.
 
 ## 7. Connect ChatGPT
 
@@ -128,7 +128,7 @@ The Next.js dashboard is optional. It owns `/`, `/threads`, and same-origin prox
 ```bash
 vercel link --yes --project agentbox
 vercel env rm AGENTBOX_BACKEND_URL production --yes
-printf 'https://your-agentbox-go.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production
+printf 'https://youragentbox.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production
 vercel --prod --yes -A deploy/vercel/dashboard/vercel.json
 ```
 
@@ -152,7 +152,7 @@ agentbox list
 Or call the backend directly with a DB-backed API key:
 
 ```bash
-curl -X POST "https://your-agentbox-go.vercel.app/api/threads?key=LOCAL_KEY" \
+curl -X POST "https://youragentbox.vercel.app/api/threads?key=LOCAL_KEY" \
   -H "Content-Type: application/json" \
   -d '{"title":"First Agentbox thread"}'
 ```
@@ -183,7 +183,7 @@ bun run build
 For normal API or MCP requests, confirm the URL includes a DB-backed API key:
 
 ```text
-https://your-agentbox-go.vercel.app/api/mcp?key=your-api-key
+https://youragentbox.vercel.app/api/mcp?key=your-api-key
 ```
 
 For admin routes and the viewer, confirm `AGENTBOX_ADMIN_KEY` is set on the backend and the request sends `x-agentbox-admin-key` or bearer auth.

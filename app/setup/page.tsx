@@ -62,12 +62,12 @@ const steps = [
   {
     label: "7. Initialize API keys",
     body: "Use the admin key once to create a local CLI key and a ChatGPT key in Postgres. The local key is saved to your profile; the ChatGPT key is printed with the MCP URL.",
-    code: "agentbox init \\\n  --profile-name prod \\\n  --base-url https://your-agentbox-go.vercel.app \\\n  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\n  --local-key-name local \\\n  --chatgpt-key-name chatgpt\n\nagentbox doctor\nagentbox list"
+    code: "agentbox init \\\n  --profile-name prod \\\n  --base-url https://youragentbox.vercel.app \\\n  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\n  --local-key-name local \\\n  --chatgpt-key-name chatgpt\n\nagentbox doctor\nagentbox list"
   },
   {
     label: "8. Deploy the optional web dashboard",
     body: "The dashboard owns /, /threads, and same-origin proxy routes under app/api/*. It is optional; the Go backend is the required service.",
-    code: "vercel link --yes --project agentbox\nvercel env rm AGENTBOX_BACKEND_URL production --yes\nprintf 'https://your-agentbox-go.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production\nvercel --prod --yes -A deploy/vercel/dashboard/vercel.json"
+    code: "vercel link --yes --project agentbox\nvercel env rm AGENTBOX_BACKEND_URL production --yes\nprintf 'https://youragentbox.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production\nvercel --prod --yes -A deploy/vercel/dashboard/vercel.json"
   },
   {
     label: "9. Manage keys later",
@@ -116,6 +116,7 @@ export default function SetupPage() {
           </p>
           <div className="hero__actions">
             <a className="button button--solid" href="#steps">Start setup</a>
+            <a className="button button--ghost" href="/setup-self-host.md">Raw Markdown</a>
             <Link className="button button--ghost" href="/">Back to home</Link>
           </div>
         </div>
@@ -213,6 +214,7 @@ export default function SetupPage() {
         </div>
         <div className="cta-band__actions">
           <Link className="button button--ghost" href="/">Back to landing page</Link>
+          <a className="button button--ghost" href="/setup-self-host.md">Open raw Markdown</a>
           <a className="button button--solid" href="#steps">Review steps</a>
         </div>
       </section>

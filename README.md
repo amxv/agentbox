@@ -149,7 +149,7 @@ API keys are stored in Postgres and managed through the Go backend admin API. Af
 ```bash
 agentbox init \
   --profile-name prod \
-  --base-url https://your-agentbox-go.vercel.app \
+  --base-url https://youragentbox.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
   --local-key-name local \
   --chatgpt-key-name chatgpt

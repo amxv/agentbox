@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 };
 
 const repoUrl = "https://github.com/amxv/agentbox";
-const productUrl = "https://agentbox.ashray.xyz";
+const exampleAgentboxUrl = "https://youragentbox.vercel.app";
 
 const commands = [
   "agentbox --profile ashray get task-thread",
@@ -80,7 +80,7 @@ const installPaths = [
       "Add the MCP URL to the remote client and verify it can list and read threads."
     ],
     codeLabel: "MCP server URL",
-    code: `${productUrl}/api/mcp?key=<your-api-key>`,
+    code: `${exampleAgentboxUrl}/api/mcp?key=<your-api-key>`,
     note: "Examples of labels: chatgpt, zodex-agent, local."
   }
 ];
@@ -98,11 +98,11 @@ const localCliBlocks = [
   },
   {
     label: "2. One-off shell setup with environment variables",
-    code: `export AGENTBOX_BASE_URL=${productUrl}\nexport AGENTBOX_API_KEY=<your-api-key>\nagentbox doctor\nagentbox list`
+    code: `export AGENTBOX_BASE_URL=${exampleAgentboxUrl}\nexport AGENTBOX_API_KEY=<your-api-key>\nagentbox doctor\nagentbox list`
   },
   {
     label: "3. Save a persistent profile",
-    code: `agentbox profiles add prod \\\n  --base-url ${productUrl} \\\n  --api-key <your-api-key> \\\n  --activate\nagentbox profiles show`
+    code: `agentbox profiles add prod \\\n  --base-url ${exampleAgentboxUrl} \\\n  --api-key <your-api-key> \\\n  --activate\nagentbox profiles show`
   },
   {
     label: "4. Pick a profile explicitly when needed",
