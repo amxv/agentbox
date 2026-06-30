@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -51,3 +51,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('npm/agentbox/package.json', 'utf8')).version")
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Agentbox CLI v${PACKAGE_VERSION}" \
+            --notes "Published @amxv/agentbox@${PACKAGE_VERSION} to npm."
