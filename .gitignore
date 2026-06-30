@@ -1,6 +1,10 @@
 node_modules
 .next
 dist
+npm/agentbox/LICENSE
+npm/agentbox/vendor/
+npm/agentbox/bin/agentbox
+npm/agentbox/bin/agentbox.exe
 .env
 .env.*
 .vercel

@@ -1,0 +1,40 @@
+{
+  "name": "@amxv/agentbox",
+  "version": "0.1.0",
+  "description": "Install the Agentbox Go CLI from npm.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "agentbox": "./bin/agentbox.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "vendor",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "install": "node ./scripts/install.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amxv/agentbox.git"
+  },
+  "homepage": "https://github.com/amxv/agentbox#readme",
+  "bugs": {
+    "url": "https://github.com/amxv/agentbox/issues"
+  },
+  "keywords": [
+    "agentbox",
+    "cli",
+    "mcp",
+    "go"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

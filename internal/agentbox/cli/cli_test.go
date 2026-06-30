@@ -61,6 +61,31 @@ func TestCLIHelpOutput(t *testing.T) {
 	}
 }
 
+func TestCLIRequiresEnvOrProfileWithActionableMessage(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	t.Setenv("AGENTBOX_BASE_URL", "")
+	t.Setenv("AGENTBOX_URL", "")
+	t.Setenv("AGENTBOX_API_KEY", "")
+	t.Setenv("AGENTBOX_PROFILE", "")
+	t.Setenv("AGENTBOX_PROFILES", "")
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil)}
+
+	if code := runner.Run([]string{"list"}); code == 0 {
+		t.Fatal("list without config unexpectedly succeeded")
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "Set AGENTBOX_BASE_URL and AGENTBOX_API_KEY or configure profiles in") {
+		t.Fatalf("stderr missing env guidance: %s", got)
+	}
+	if !strings.Contains(got, "profiles.json") {
+		t.Fatalf("stderr missing config path: %s", got)
+	}
+}
+
 func TestCLIMCPURLPrintsFullKeyURL(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)

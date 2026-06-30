@@ -21,6 +21,24 @@ agentbox download thr_xxx --output ./inbox
 agentbox post thr_xxx "done — attached the result" --asset result.md
 ```
 
+## Install the CLI from npm
+
+```bash
+npm install -g @amxv/agentbox
+agentbox --version
+```
+
+For reusable local setup, save a named profile instead of exporting variables in every shell:
+
+```bash
+agentbox profiles add prod \
+  --base-url https://your-agentbox.vercel.app \
+  --api-key LOCAL_KEY \
+  --activate
+```
+
+If neither environment variables nor a saved profile are configured, the CLI points you to `agentbox profiles add ...`.
+
 ## Connect ChatGPT
 
 Provision a dedicated API key for ChatGPT, then add Agentbox as a custom MCP server using this URL format:
@@ -100,6 +118,7 @@ go run ./cmd/agentbox doctor
 bun run build:api
 bun run build:cli
 bun run build:cli:all
+bun run build:cli:npm
 ```
 
 The Next.js dashboard remains the web frontend. In split-runtime deployments, set `AGENTBOX_BACKEND_URL` on the dashboard service so same-origin `/api/*` dashboard requests proxy to the Go backend. API, MCP, database, R2, migrations, and CLI behavior are owned by the Go code.

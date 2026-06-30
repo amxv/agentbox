@@ -235,7 +235,7 @@ func (r *Runner) runtimeConfig(profileName string) (RuntimeConfig, error) {
 		return RuntimeConfig{}, err
 	}
 	if resolved == nil {
-		return RuntimeConfig{}, fmt.Errorf("Set AGENTBOX_BASE_URL or configure profiles in %s.", profiles.DefaultConfigPath())
+		return RuntimeConfig{}, fmt.Errorf("Set AGENTBOX_BASE_URL and AGENTBOX_API_KEY or configure profiles in %s.", profiles.DefaultConfigPath())
 	}
 	return RuntimeConfig{
 		ProfileName: resolved.Name,
