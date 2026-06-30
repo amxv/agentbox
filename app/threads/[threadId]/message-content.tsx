@@ -41,7 +41,7 @@ export function MessageContent({ body, contentType }: { body: string; contentTyp
         <div className="message-actions">
           <CopyButton value={body} label="Copy message" />
           <button className="mini-button" type="button" onClick={() => setShowSource(true)}>
-            Source
+            Raw
           </button>
         </div>
       </div>

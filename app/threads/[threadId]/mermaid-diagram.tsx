@@ -37,7 +37,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     <div className="mermaid-card">
       <div className="message-toolbar">
         <span className="format-badge">Mermaid diagram</span>
-        <CopyButton value={chart} label="Copy source" />
+        <CopyButton value={chart} label="Copy diagram code" />
       </div>
       {state.status === "loading" && <p className="empty-state compact">Rendering diagram…</p>}
       {state.status === "ready" && <div className="mermaid-output" dangerouslySetInnerHTML={{ __html: state.svg }} />}

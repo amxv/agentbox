@@ -64,16 +64,22 @@ function normalizeLanguage(className?: string) {
 }
 
 type CodeProps = ComponentPropsWithoutRef<"code"> & {
-  inline?: boolean;
+  node?: {
+    position?: {
+      start?: { line?: number };
+      end?: { line?: number };
+    };
+  };
 };
 
 type TableProps = ComponentPropsWithoutRef<"table">;
 
-function CodeBlock({ inline, className, children, ...props }: CodeProps) {
+function CodeBlock({ className, children, node, ...props }: CodeProps) {
   const code = textFromNode(children).replace(/\n$/, "");
   const language = normalizeLanguage(className);
+  const isBlock = Boolean(language) || node?.position?.start?.line !== node?.position?.end?.line;
 
-  if (inline) {
+  if (!isBlock) {
     return <code className="markdown-inline-code" {...props}>{children}</code>;
   }
 
