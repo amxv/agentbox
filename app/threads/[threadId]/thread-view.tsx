@@ -47,11 +47,25 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+function getMessagePreview(body: string) {
+  const normalized = body.replace(/\s+/g, " ").trim();
+  if (!normalized) return "Empty message";
+  return normalized.length > 150 ? `${normalized.slice(0, 150)}…` : normalized;
+}
+
+function getMessageKind(contentType?: string | null) {
+  if (!contentType) return "Auto";
+  if (contentType.includes("markdown")) return "Markdown";
+  if (contentType.includes("plain")) return "Plain text";
+  return contentType;
+}
+
 export function ThreadView({ threadId }: { threadId: string }) {
   const router = useRouter();
   const [thread, setThread] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     const key = window.localStorage.getItem(STORAGE_KEY);
@@ -83,6 +97,18 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const assetCount = useMemo(() => {
     return thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0;
   }, [thread]);
+
+  function toggleMessage(messageId: string) {
+    setExpandedMessages((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }
 
   return (
     <div className="dashboard-page">
@@ -128,37 +154,62 @@ export function ThreadView({ threadId }: { threadId: string }) {
             </div>
           )}
           {!loading && !error && thread?.messages.length === 0 && <p className="empty-state">No messages yet.</p>}
-          {!loading && !error && thread?.messages.map((message) => (
-            <article key={message.id} className="message-card">
-              <div className="message-header">
-                <strong className="message-author">{message.author}</strong>
-                <span className="message-date">{formatDate(message.created_at)}</span>
-              </div>
-              <MessageContent body={message.body} contentType={message.body_content_type} />
-              {message.assets.length > 0 && (
-                <div className="asset-list">
-                  <span className="asset-label">Attachments</span>
-                  {message.assets.map((asset) => (
-                    <div key={asset.id} className="asset-card">
-                      {asset.preview_url && (
-                        <a className="preview-link" href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img className="preview-image" src={asset.preview_url} alt={asset.file_name} loading="lazy" />
-                        </a>
-                      )}
-                      <div className="asset-row">
-                        <span className="thread-title">{asset.file_name}</span>
-                        <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+          {!loading && !error && thread?.messages.map((message, index) => {
+            const isExpanded = expandedMessages.has(message.id);
+            const panelId = `message-panel-${message.id}`;
+            return (
+              <article key={message.id} className={isExpanded ? "message-card message-card--expanded" : "message-card"}>
+                <button
+                  type="button"
+                  className="message-toggle"
+                  aria-expanded={isExpanded}
+                  aria-controls={panelId}
+                  onClick={() => toggleMessage(message.id)}
+                >
+                  <span className="message-toggle__main">
+                    <span className="message-index">#{index + 1}</span>
+                    <span className="message-heading">
+                      <strong className="message-author">{message.author}</strong>
+                      <span className="message-preview">{getMessagePreview(message.body)}</span>
+                    </span>
+                  </span>
+                  <span className="message-toggle__meta">
+                    <span>{getMessageKind(message.body_content_type)}</span>
+                    {message.assets.length > 0 && <span>{message.assets.length} attachments</span>}
+                    <span>{formatDate(message.created_at)}</span>
+                    <span className="message-chevron" aria-hidden="true">⌄</span>
+                  </span>
+                </button>
+                {isExpanded && (
+                  <div id={panelId} className="message-panel">
+                    <MessageContent body={message.body} contentType={message.body_content_type} />
+                    {message.assets.length > 0 && (
+                      <div className="asset-list">
+                        <span className="asset-label">Attachments</span>
+                        {message.assets.map((asset) => (
+                          <div key={asset.id} className="asset-card">
+                            {asset.preview_url && (
+                              <a className="preview-link" href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img className="preview-image" src={asset.preview_url} alt={asset.file_name} loading="lazy" />
+                              </a>
+                            )}
+                            <div className="asset-row">
+                              <span className="thread-title">{asset.file_name}</span>
+                              <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+                            </div>
+                            {asset.download_url && (
+                              <a className="download-link" href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                      {asset.download_url && (
-                        <a className="download-link" href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </article>
-          ))}
+                    )}
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </section>
       </main>
     </div>
