@@ -37,6 +37,10 @@ function registerLanguages() {
 const languageAliases: Record<string, string> = {
   sh: "bash",
   shell: "bash",
+  shellscript: "bash",
+  "shell-session": "bash",
+  console: "bash",
+  terminal: "bash",
   zsh: "bash",
   js: "javascript",
   jsx: "javascript",
@@ -90,11 +94,12 @@ function CodeBlock({ className, children, node, ...props }: CodeProps) {
   registerLanguages();
   const supported = language && hljs.getLanguage(language);
   const highlighted = supported ? hljs.highlight(code, { language, ignoreIllegals: true }).value : null;
+  const label = language ?? "code";
 
   return (
     <div className="code-card">
       <div className="message-toolbar">
-        <span className="format-badge">{supported ? language : "code"}</span>
+        <span className="format-badge">{label}</span>
         <CopyButton value={code} label="Copy code" />
       </div>
       <pre className="markdown-code-block">

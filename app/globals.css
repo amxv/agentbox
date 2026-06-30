@@ -655,12 +655,17 @@ pre,
   white-space: pre;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: var(--surface);
+  background: #fbfbfc;
   padding: 0.9rem;
-  color: var(--ink);
+  color: #1f2328;
   font-family: var(--font-mono);
   font-size: 0.85rem;
   line-height: 1.55;
+}
+
+.markdown-code-block code {
+  display: block;
+  min-width: max-content;
 }
 
 .markdown-table-scroll {
@@ -709,8 +714,39 @@ pre,
 }
 
 .mermaid-output svg {
+  display: block;
+  margin: 0 auto;
   max-width: 100%;
   height: auto;
+}
+
+.mermaid-backdrop {
+  padding: 1rem;
+}
+
+.mermaid-modal {
+  width: min(96vw, 1200px);
+  max-height: min(92vh, 960px);
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.mermaid-modal__title {
+  margin-top: 0.25rem;
+}
+
+.mermaid-output--fullscreen {
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  min-height: 0;
+  height: 100%;
+  max-height: calc(92vh - 7.5rem);
+  padding: 1.25rem;
+}
+
+.mermaid-output--fullscreen svg {
+  max-height: 100%;
 }
 
 .mermaid-error {
@@ -723,31 +759,88 @@ pre,
   padding: 0.75rem;
 }
 
-.hljs-keyword,
-.hljs-selector-tag,
-.hljs-title.function_ {
-  font-weight: 650;
-}
-
-.hljs-string,
-.hljs-number,
-.hljs-literal,
-.hljs-built_in,
-.hljs-title.class_ {
-  color: var(--ink);
+.hljs {
+  color: #1f2328;
+  background: transparent;
 }
 
 .hljs-comment,
 .hljs-quote {
-  color: var(--faint);
+  color: #6e7781;
   font-style: italic;
 }
 
-.hljs-attr,
+.hljs-doctag,
+.hljs-keyword,
+.hljs-formula {
+  color: #8250df;
+}
+
+.hljs-name,
+.hljs-selector-tag,
+.hljs-deletion,
+.hljs-subst {
+  color: #cf222e;
+}
+
+.hljs-literal,
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: #0550ae;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
 .hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #0a7f42;
+}
+
+.hljs-attr,
 .hljs-variable,
-.hljs-template-variable {
-  color: var(--muted);
+.hljs-template-variable,
+.hljs-type,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #953800;
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+  color: #0f4c81;
+}
+
+.hljs-built_in,
+.hljs-function .hljs-title,
+.hljs-class .hljs-title {
+  color: #b35900;
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-meta .hljs-function,
+.hljs-meta .hljs-title,
+.hljs-section {
+  color: #116329;
+}
+
+.hljs-tag,
+.hljs-property {
+  color: #1b5fbf;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
 }
 
 .asset-list {
