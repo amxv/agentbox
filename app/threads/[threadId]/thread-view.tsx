@@ -177,7 +177,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                     <span>{getMessageKind(message.body_content_type)}</span>
                     {message.assets.length > 0 && <span>{message.assets.length} attachments</span>}
                     <span>{formatDate(message.created_at)}</span>
-                    <span className="message-chevron" aria-hidden="true">⌄</span>
+                    <span className="message-chevron" aria-hidden="true" />
                   </span>
                 </button>
                 {isExpanded && (
