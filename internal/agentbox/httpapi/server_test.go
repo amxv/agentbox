@@ -60,6 +60,28 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 		t.Fatalf("created = %#v", created)
 	}
 
+	createWithMessage := httptest.NewRecorder()
+	server.ServeHTTP(createWithMessage, httptest.NewRequest(http.MethodPost, "/api/threads?key=dev-key", strings.NewReader(`{"title":"Initial API","initial_message":"first body","body_content_type":"text/plain"}`)))
+	if createWithMessage.Code != http.StatusCreated {
+		t.Fatalf("create with message status = %d body=%s", createWithMessage.Code, createWithMessage.Body.String())
+	}
+	var initialCreated struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Message struct {
+			ThreadID        string  `json:"thread_id"`
+			Body            string  `json:"body"`
+			BodyContentType *string `json:"body_content_type"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(createWithMessage.Body.Bytes(), &initialCreated); err != nil {
+		t.Fatal(err)
+	}
+	if initialCreated.Message.ThreadID != initialCreated.Thread.ID || initialCreated.Message.Body != "first body" || initialCreated.Message.BodyContentType == nil || *initialCreated.Message.BodyContentType != "text/plain" {
+		t.Fatalf("initial created = %#v", initialCreated)
+	}
+
 	jsonPost := httptest.NewRecorder()
 	server.ServeHTTP(jsonPost, httptest.NewRequest(
 		http.MethodPost,
@@ -143,6 +165,26 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 	if signed.AssetID != posted.Message.Assets[0].ID || signed.ExpiresIn != 3600 || signed.DownloadURL == "" {
 		t.Fatalf("signed = %#v", signed)
+	}
+
+	search := httptest.NewRecorder()
+	server.ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/api/threads?key=dev-key&query=asset&limit=5", nil))
+	if search.Code != http.StatusOK {
+		t.Fatalf("search status = %d body=%s", search.Code, search.Body.String())
+	}
+	var searchPayload struct {
+		Threads []struct {
+			ID                 string   `json:"id"`
+			MessageCount       int      `json:"message_count"`
+			LastMessagePreview string   `json:"last_message_preview"`
+			MatchedSnippets    []string `json:"matched_snippets"`
+		} `json:"threads"`
+	}
+	if err := json.Unmarshal(search.Body.Bytes(), &searchPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(searchPayload.Threads) == 0 || searchPayload.Threads[0].MessageCount == 0 || searchPayload.Threads[0].LastMessagePreview == "" {
+		t.Fatalf("search payload = %#v", searchPayload)
 	}
 
 	missingPost := httptest.NewRecorder()

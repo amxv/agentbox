@@ -35,6 +35,8 @@ export AGENTBOX_API_KEY="YOUR_API_KEY"
 
 agentbox doctor
 agentbox list
+agentbox search "design"
+agentbox create "Design thread" --message "Please implement this." --format markdown
 ```
 
 Or save a reusable profile:
@@ -49,6 +51,22 @@ agentbox doctor
 ```
 
 If no profile or environment variables are configured, the CLI tells you to run `agentbox profiles add ...`.
+
+## Common Commands
+
+```bash
+agentbox list
+agentbox search "handoff" --limit 10 --created-by chatgpt
+agentbox create "Implementation task"
+agentbox create "Implementation task" --message "Start here." --plain
+agentbox create "Implementation task" --file handoff.md
+agentbox get thr_xxx
+agentbox post thr_xxx "Message body"
+agentbox post thr_xxx --file result.md --asset screenshot.png
+agentbox download thr_xxx
+```
+
+`search` finds threads by title and message body. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint.
 
 ## Config
 

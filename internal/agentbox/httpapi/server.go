@@ -67,6 +67,22 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit := numberQuery(r, "limit", 50)
+		if query := strings.TrimSpace(r.URL.Query().Get("query")); query != "" {
+			createdBy := optionalQuery(r, "created_by")
+			updatedAfter := optionalQuery(r, "updated_after")
+			threads, err := s.service.SearchThreads(r.Context(), types.SearchThreadParams{
+				Query:        query,
+				Limit:        limit,
+				CreatedBy:    createdBy,
+				UpdatedAfter: updatedAfter,
+			})
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+			return
+		}
 		threads, err := s.service.ListThreads(r.Context(), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -79,10 +95,21 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var input struct {
-			Title string `json:"title"`
+			Title           string  `json:"title"`
+			InitialMessage  *string `json:"initial_message"`
+			BodyContentType *string `json:"body_content_type"`
 		}
 		if err := parseJSON(r, &input); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if input.InitialMessage != nil {
+			thread, message, err := s.service.CreateThreadWithMessage(r.Context(), *actor, input.Title, *input.InitialMessage, input.BodyContentType)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, map[string]any{"thread": thread, "message": message})
 			return
 		}
 		thread, err := s.service.CreateThread(r.Context(), *actor, input.Title)
@@ -531,6 +558,14 @@ func numberQuery(r *http.Request, name string, fallback int) int {
 		return fallback
 	}
 	return int(value)
+}
+
+func optionalQuery(r *http.Request, name string) *string {
+	value := strings.TrimSpace(r.URL.Query().Get(name))
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func splitFirst(value string) (string, string, bool) {

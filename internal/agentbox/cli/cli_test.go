@@ -47,6 +47,8 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "admin API"}},
 		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "DB-backed"}},
 		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "admin API"}},
+		{[]string{"search", "--help"}, []string{"Usage: agentbox search <query>", "message counts"}},
+		{[]string{"create", "--help"}, []string{"--message <body>", "first message"}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
@@ -154,6 +156,33 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 
 	out.Reset()
 	stderr.Reset()
+	code = runner.Run([]string{"create", "Initial CLI thread", "--message", "first message from cli", "--plain", "--json"})
+	if code != 0 {
+		t.Fatalf("create with message failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var createdWithMessage struct {
+		Thread struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"thread"`
+		Message struct {
+			ThreadID        string  `json:"thread_id"`
+			Body            string  `json:"body"`
+			BodyContentType *string `json:"body_content_type"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &createdWithMessage); err != nil {
+		t.Fatal(err)
+	}
+	if createdWithMessage.Thread.Title != "Initial CLI thread" || createdWithMessage.Message.ThreadID != createdWithMessage.Thread.ID || createdWithMessage.Message.Body != "first message from cli" {
+		t.Fatalf("created with message = %#v", createdWithMessage)
+	}
+	if createdWithMessage.Message.BodyContentType == nil || *createdWithMessage.Message.BodyContentType != "text/plain" {
+		t.Fatalf("created message content type = %#v", createdWithMessage.Message.BodyContentType)
+	}
+
+	out.Reset()
+	stderr.Reset()
 	code = runner.Run([]string{"post", threadID, "hello from cli"})
 	if code != 0 {
 		t.Fatalf("post failed: code=%d stderr=%s", code, stderr.String())
@@ -180,6 +209,37 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"threads"`) || !strings.Contains(out.String(), "CLI thread") {
 		t.Fatalf("list output = %s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	code = runner.Run([]string{"search", "first message", "--json"})
+	if code != 0 {
+		t.Fatalf("search failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var searchPayload struct {
+		Threads []struct {
+			Title              string   `json:"title"`
+			MessageCount       int      `json:"message_count"`
+			LastMessagePreview string   `json:"last_message_preview"`
+			MatchedSnippets    []string `json:"matched_snippets"`
+		} `json:"threads"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &searchPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(searchPayload.Threads) == 0 || searchPayload.Threads[0].Title != "Initial CLI thread" || searchPayload.Threads[0].MessageCount != 1 || searchPayload.Threads[0].LastMessagePreview == "" {
+		t.Fatalf("search payload = %#v", searchPayload)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	code = runner.Run([]string{"search", "first message", "--created-by", "dev"})
+	if code != 0 {
+		t.Fatalf("search text failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Initial CLI thread") || !strings.Contains(out.String(), "first message from cli") {
+		t.Fatalf("search text output = %s", out.String())
 	}
 }
 

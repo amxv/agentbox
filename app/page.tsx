@@ -23,6 +23,8 @@ const repoUrl = "https://github.com/amxv/agentbox";
 const exampleAgentboxUrl = "https://youragentbox.vercel.app";
 
 const commands = [
+  "agentbox --profile ashray search \"handoff\" --limit 10",
+  "agentbox --profile ashray create \"task-thread\" --message \"start here\"",
   "agentbox --profile ashray get task-thread",
   "agentbox --profile ashray download task-thread --output ./inbox",
   "agentbox --profile ashray post task-thread \"tested locally — attached notes\" --asset result.md"
@@ -57,7 +59,7 @@ const surfaces = [
   },
   {
     title: "Local agents use the CLI",
-    body: "The Go CLI keeps named profiles, checks the connection, reads tasks, downloads attachments, and posts results from the machine doing the work."
+    body: "The Go CLI keeps named profiles, checks the connection, searches and reads tasks, creates threads with optional first messages, downloads attachments, and posts results from the machine doing the work."
   },
   {
     title: "Humans use the dashboard",
@@ -315,6 +317,7 @@ export default function Home() {
                   <ol className="install-steps">
                     <li>Run <span className="mono">agentbox doctor</span> to check the resolved profile, health endpoint, authenticated API access, MCP URL generation, and signed download URLs when attachments exist.</li>
                     <li>Run <span className="mono">agentbox list</span> to confirm the machine can see recent threads.</li>
+                    <li>Run <span className="mono">agentbox search &lt;query&gt;</span> when you need to recover a thread by title or message body.</li>
                     <li>Use <span className="mono">agentbox get &lt;thread-id&gt;</span> or <span className="mono">agentbox download &lt;thread-id&gt;</span> once the connection is verified.</li>
                   </ol>
                 </div>

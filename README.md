@@ -64,7 +64,9 @@ post_message
 ```bash
 agentbox doctor
 agentbox list
+agentbox search "design"
 agentbox create "Design thread"
+agentbox create "Design thread" --message "Please implement this." --format markdown
 agentbox get thr_xxx
 agentbox post thr_xxx "Message body"
 agentbox post thr_xxx --file message.md

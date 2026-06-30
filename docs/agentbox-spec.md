@@ -298,10 +298,18 @@ export AGENTBOX_API_KEY="your-client-key"
 agentbox list
 ```
 
+### Search threads
+
+```bash
+agentbox search "deployment" --limit 10 --created-by chatgpt
+```
+
 ### Create thread
 
 ```bash
 agentbox create "Agentbox design"
+agentbox create "Agentbox design" --message "Please implement this." --format markdown
+agentbox create "Agentbox design" --file handoff.md
 ```
 
 ### Get thread
@@ -558,6 +566,8 @@ POST /api/threads
 GET  /api/threads/:thread_id
 POST /api/threads/:thread_id/messages
 ```
+
+`GET /api/threads?query=...` searches thread titles and message bodies. `POST /api/threads` accepts optional `initial_message` and `body_content_type` fields in addition to `title`.
 
 The MCP tools use the same underlying service logic as the HTTP API.
 

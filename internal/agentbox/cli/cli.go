@@ -39,12 +39,14 @@ type RuntimeConfig struct {
 }
 
 type asset struct {
-	ID         string  `json:"id"`
-	FileName   string  `json:"file_name"`
-	MimeType   *string `json:"mime_type"`
-	SizeBytes  int64   `json:"size_bytes"`
-	PublicURL  *string `json:"public_url"`
-	StorageKey string  `json:"storage_key"`
+	ID          string  `json:"id"`
+	FileName    string  `json:"file_name"`
+	Filename    string  `json:"filename"`
+	MimeType    *string `json:"mime_type"`
+	SizeBytes   int64   `json:"size_bytes"`
+	PublicURL   *string `json:"public_url"`
+	DownloadURL *string `json:"download_url"`
+	StorageKey  string  `json:"storage_key"`
 }
 
 type message struct {
@@ -64,6 +66,17 @@ type thread struct {
 	UpdatedAt string    `json:"updated_at"`
 	CreatedBy string    `json:"created_by"`
 	Messages  []message `json:"messages,omitempty"`
+}
+
+type searchThreadResult struct {
+	ID                 string   `json:"id"`
+	Title              string   `json:"title"`
+	CreatedAt          string   `json:"created_at"`
+	UpdatedAt          string   `json:"updated_at"`
+	CreatedBy          string   `json:"created_by"`
+	MessageCount       int      `json:"message_count"`
+	LastMessagePreview string   `json:"last_message_preview"`
+	MatchedSnippets    []string `json:"matched_snippets"`
 }
 
 type doctorCheck struct {
@@ -162,6 +175,8 @@ func (r *Runner) run(args []string) error {
 		return r.runKeys(cmdArgs, *profileName)
 	case "list":
 		return r.runList(cmdArgs, *profileName)
+	case "search":
+		return r.runSearch(cmdArgs, *profileName)
 	case "create":
 		return r.runCreate(cmdArgs, *profileName)
 	case "get":
@@ -194,6 +209,7 @@ Commands:
   deploy                  print self-hosting deployment guidance
   keys                    manage DB-backed API keys
   list                    list recent threads
+  search <query>          search threads by title and message body
   create <title>          create a thread
   get <thread-id>         read a thread
   download <thread-id>    download all attachments from a thread
@@ -243,9 +259,12 @@ Commands:
 		"list": `Usage: agentbox list [-n <limit>] [--json]
 
 List recent Agentbox threads.`,
-		"create": `Usage: agentbox create <title> [--json]
+		"search": `Usage: agentbox search <query> [-n <limit>] [--created-by <name>] [--updated-after <timestamp>] [--json]
 
-Create a new Agentbox thread.`,
+Search Agentbox threads by title and message body. Results include message counts, last-message previews, and matched snippets.`,
+		"create": `Usage: agentbox create <title> [--message <body> | --file <path>] [--format auto|markdown|plain] [--json]
+
+Create a new Agentbox thread. Use --message or --file to create the first message in the same request. The default format is auto; use --plain or --markdown to force body_content_type.`,
 		"get": `Usage: agentbox get <thread-id> [--json]
 
 Read an Agentbox thread and its messages.`,
@@ -329,9 +348,13 @@ func (r *Runner) request(path string, method string, body io.Reader, headers map
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var payload struct {
 			Error string `json:"error"`
+			Code  string `json:"code"`
 		}
 		_ = json.Unmarshal(bytes, &payload)
 		if payload.Error != "" {
+			if payload.Code != "" {
+				return fmt.Errorf("%s: %s", payload.Code, payload.Error)
+			}
 			return errors.New(payload.Error)
 		}
 		return fmt.Errorf("Request failed with HTTP %d", res.StatusCode)
@@ -703,26 +726,106 @@ func (r *Runner) runList(args []string, profileName string) error {
 	return nil
 }
 
-func (r *Runner) runCreate(args []string, profileName string) error {
-	fs := newFlagSet("create")
+func (r *Runner) runSearch(args []string, profileName string) error {
+	fs := newFlagSet("search")
+	limit := fs.String("limit", "20", "maximum number of results")
+	fs.StringVar(limit, "n", "20", "maximum number of results")
+	createdBy := fs.String("created-by", "", "filter by thread creator")
+	updatedAfter := fs.String("updated-after", "", "filter by RFC3339 updated_at timestamp")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox create <title> [--json]")
+		return errors.New("Usage: agentbox search <query> [-n <limit>] [--created-by <name>] [--updated-after <timestamp>] [--json]")
 	}
-	payload, _ := json.Marshal(map[string]string{"title": fs.Arg(0)})
+	query := url.Values{}
+	query.Set("query", fs.Arg(0))
+	query.Set("limit", strconv.Itoa(numberOrZero(*limit)))
+	if strings.TrimSpace(*createdBy) != "" {
+		query.Set("created_by", strings.TrimSpace(*createdBy))
+	}
+	if strings.TrimSpace(*updatedAfter) != "" {
+		query.Set("updated_after", strings.TrimSpace(*updatedAfter))
+	}
 	var data struct {
-		Thread thread `json:"thread"`
+		Threads []searchThreadResult `json:"threads"`
 	}
-	if err := r.request("/api/threads", http.MethodPost, bytes.NewReader(payload), map[string]string{"content-type": "application/json"}, profileName, &data); err != nil {
+	if err := r.request("/api/threads?"+query.Encode(), http.MethodGet, nil, nil, profileName, &data); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(r.Stdout, data)
+	}
+	for _, thread := range data.Threads {
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%d\t%s\n", thread.ID, thread.UpdatedAt, thread.MessageCount, thread.Title)
+		if thread.LastMessagePreview != "" {
+			fmt.Fprintf(r.Stdout, "  %s\n", thread.LastMessagePreview)
+		}
+		for _, snippet := range thread.MatchedSnippets {
+			if snippet != "" && snippet != thread.LastMessagePreview {
+				fmt.Fprintf(r.Stdout, "  match: %s\n", snippet)
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Runner) runCreate(args []string, profileName string) error {
+	fs := newFlagSet("create")
+	messageBody := fs.String("message", "", "create the first message with this body")
+	fs.StringVar(messageBody, "m", "", "create the first message with this body")
+	filePath := fs.String("file", "", "read the first message body from a Markdown/text file")
+	fs.StringVar(filePath, "f", "", "read the first message body from a Markdown/text file")
+	format := fs.String("format", messageformat.Auto, "initial message body format: auto, markdown, or plain")
+	markdown := fs.Bool("markdown", false, "render initial message body as Markdown")
+	plain := fs.Bool("plain", false, "render initial message body as plain text")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox create <title> [--message <body> | --file <path>] [--format auto|markdown|plain] [--json]")
+	}
+	if *messageBody != "" && *filePath != "" {
+		return errors.New("Use only one of --message or --file.")
+	}
+	body := *messageBody
+	if *filePath != "" {
+		bytes, err := os.ReadFile(*filePath)
+		if err != nil {
+			return err
+		}
+		body = string(bytes)
+	}
+	payload := map[string]string{"title": fs.Arg(0)}
+	if body != "" || *filePath != "" || *messageBody != "" {
+		requestedFormat, err := requestedBodyContentType(*format, *markdown, *plain)
+		if err != nil {
+			return err
+		}
+		bodyContentType, err := messageformat.Resolve(requestedFormat, body, *filePath)
+		if err != nil {
+			return err
+		}
+		payload["initial_message"] = body
+		payload["body_content_type"] = bodyContentType
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	var data struct {
+		Thread  thread         `json:"thread"`
+		Message *types.Message `json:"message,omitempty"`
+	}
+	if err := r.request("/api/threads", http.MethodPost, bytes.NewReader(payloadBytes), map[string]string{"content-type": "application/json"}, profileName, &data); err != nil {
 		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
 	}
 	fmt.Fprintf(r.Stdout, "%s\t%s\n", data.Thread.ID, data.Thread.Title)
+	if data.Message != nil && data.Message.ID != "" {
+		fmt.Fprintf(r.Stdout, "%s\tinitial message\n", data.Message.ID)
+	}
 	return nil
 }
 
