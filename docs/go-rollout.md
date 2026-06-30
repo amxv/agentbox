@@ -51,8 +51,7 @@ Set these on the Go backend service:
 
 ```text
 DATABASE_URL
-AGENTBOX_API_KEYS
-AGENTBOX_ADMIN_KEYS or AGENTBOX_ADMIN_KEY
+AGENTBOX_ADMIN_KEY
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -71,6 +70,19 @@ R2_PUBLIC_BASE_URL
 ```
 
 `AGENTBOX_AUTO_MIGRATE=true` is acceptable for a preview smoke test but should not be the production default. Production rollout should run `bun run db:migrate` once before traffic is cut over.
+
+API keys are not managed through Vercel environment rewrites. After the backend is deployed and migrated, create the first local and ChatGPT keys through the backend admin API:
+
+```bash
+agentbox init \
+  --profile-name prod \
+  --base-url https://agentbox-go-preview-or-prod.example.com \
+  --admin-key "$AGENTBOX_ADMIN_KEY" \
+  --local-key-name local \
+  --chatgpt-key-name chatgpt
+```
+
+Use `agentbox keys create|list|revoke` for later DB-backed key management.
 
 Vercel currently caps function request and response payloads at 4.5 MB. On Vercel, direct multipart uploads through `/api/threads/:threadId/messages` must stay below that cap until a direct-to-R2 upload flow exists. Non-Vercel/self-hosted deployments can keep the current default `AGENTBOX_MAX_FILE_SIZE_BYTES` of 25 MiB.
 

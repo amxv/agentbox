@@ -15,9 +15,7 @@ const (
 type Config struct {
 	DatabaseURL         string
 	DBPoolSize          int32
-	APIKeys             string
 	AllowedOrigins      []string
-	AdminKeys           string
 	AdminKey            string
 	R2AccountID         string
 	R2AccessKeyID       string
@@ -36,9 +34,7 @@ func LoadFromEnv() Config {
 	return Config{
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		DBPoolSize:          int32FromEnv("AGENTBOX_DB_POOL_SIZE", DefaultDBPoolSize),
-		APIKeys:             os.Getenv("AGENTBOX_API_KEYS"),
 		AllowedOrigins:      commaList(os.Getenv("AGENTBOX_ALLOWED_ORIGINS")),
-		AdminKeys:           os.Getenv("AGENTBOX_ADMIN_KEYS"),
 		AdminKey:            os.Getenv("AGENTBOX_ADMIN_KEY"),
 		R2AccountID:         os.Getenv("R2_ACCOUNT_ID"),
 		R2AccessKeyID:       os.Getenv("R2_ACCESS_KEY_ID"),

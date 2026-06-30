@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -44,6 +43,10 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"profiles", "--help"}, []string{"Usage: agentbox profiles [options] [command]", "add <name>"}},
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
+		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
+		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "admin API"}},
+		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "DB-backed"}},
+		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "admin API"}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
@@ -327,26 +330,29 @@ func TestCLIDoctorChecksSignedDownloadURL(t *testing.T) {
 
 func TestCLIInitSavesProfile(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
 	runner := &Runner{
-		Stdout: &out,
-		Stderr: &stderr,
-		Stdin:  bytes.NewReader(nil),
+		Stdout:     &out,
+		Stderr:     &stderr,
+		Stdin:      bytes.NewReader(nil),
+		HTTPClient: server.Client(),
 	}
 
-	if code := runner.Run([]string{"init", "--profile-name", "prod", "--base-url", "https://agentbox.example.com", "--api-key", "local-secret", "--skip-doctor"}); code != 0 {
+	if code := runner.Run([]string{"init", "--profile-name", "prod", "--base-url", server.URL, "--admin-key", "adm", "--local-key-name", "workstation", "--chatgpt-key-name", "chatgpt", "--skip-doctor"}); code != 0 {
 		t.Fatalf("init failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), `Saved profile "prod"`) {
+	if !strings.Contains(out.String(), `Saved profile "prod"`) || !strings.Contains(out.String(), `Created ChatGPT API key "chatgpt"`) {
 		t.Fatalf("init output = %s", out.String())
 	}
 	resolved, err := profiles.Resolve("prod")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.BaseURL != "https://agentbox.example.com" || resolved.APIKey != "local-secret" {
+	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.APIKey == "adm" {
 		t.Fatalf("resolved profile = %#v", resolved)
 	}
 }
@@ -377,23 +383,12 @@ func TestCLIConnectChatGPTPrintsMCPInstructions(t *testing.T) {
 	}
 }
 
-func TestCLIDeployVercelRunsExpectedCommands(t *testing.T) {
+func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 
-	type invocation struct {
-		name  string
-		args  []string
-		stdin string
-	}
-	var calls []invocation
+	called := false
 	fake := func(name string, args []string, stdin string, _ map[string]string) (string, string, error) {
-		calls = append(calls, invocation{name: name, args: slices.Clone(args), stdin: stdin})
-		if len(args) >= 4 && args[0] == "--prod" && args[3] == "deploy/vercel/backend/vercel.json" {
-			return "https://agentbox-go-test.vercel.app\n", "", nil
-		}
-		if len(args) >= 4 && args[0] == "--prod" && args[3] == "deploy/vercel/dashboard/vercel.json" {
-			return "https://agentbox-test.vercel.app\n", "", nil
-		}
+		called = true
 		return "", "", nil
 	}
 
@@ -406,44 +401,52 @@ func TestCLIDeployVercelRunsExpectedCommands(t *testing.T) {
 		RunExternal: fake,
 	}
 
-	args := []string{
-		"deploy", "vercel",
-		"--database-url", "postgres://db",
-		"--r2-account-id", "acc",
-		"--r2-access-key-id", "keyid",
-		"--r2-secret-access-key", "secret",
-		"--r2-bucket", "bucket",
-		"--admin-key", "adminkey",
-		"--chatgpt-key", "chat-key",
-		"--local-key", "local-key",
-		"--profile-name", "prod",
-	}
+	args := []string{"deploy", "vercel"}
 	if code := runner.Run(args); code != 0 {
 		t.Fatalf("deploy vercel failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, "Backend deployed: https://agentbox-go-test.vercel.app") {
+	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "agentbox init --base-url") {
 		t.Fatalf("deploy output = %s", output)
 	}
-	if !strings.Contains(output, `Saved local CLI profile "prod"`) {
-		t.Fatalf("deploy output missing profile save: %s", output)
+	if called {
+		t.Fatal("deploy vercel should not run external commands")
 	}
-	recorded := make([]string, 0, len(calls))
-	for _, call := range calls {
-		recorded = append(recorded, call.name+" "+strings.Join(call.args, " "))
+}
+
+func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+
+	if code := runner.Run([]string{"keys", "create", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
+		t.Fatalf("keys create failed: code=%d stderr=%s", code, stderr.String())
 	}
-	joined := strings.Join(recorded, "\n")
-	for _, want := range []string{
-		"vercel link --yes --project agentbox-go",
-		"vercel env add DATABASE_URL production",
-		"vercel --prod --yes -A deploy/vercel/backend/vercel.json",
-		"vercel link --yes --project agentbox",
-		"vercel env add AGENTBOX_BACKEND_URL production",
-		"vercel --prod --yes -A deploy/vercel/dashboard/vercel.json",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("recorded commands missing %q:\n%s", want, joined)
-		}
+	created := out.String()
+	if !strings.Contains(created, `Created API key "builder"`) || !strings.Contains(created, "Secret: ") {
+		t.Fatalf("create output = %s", created)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"keys", "list", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
+		t.Fatalf("keys list failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "builder") {
+		t.Fatalf("list output = %s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"keys", "revoke", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
+		t.Fatalf("keys revoke failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), `Revoked API key "builder"`) {
+		t.Fatalf("revoke output = %s", out.String())
 	}
 }
 
@@ -463,6 +466,9 @@ func TestShouldReadStdinForPipe(t *testing.T) {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := &db.MemoryRepository{}
+	if _, err := repo.CreateAPIKey(t.Context(), "dev", "dev-key"); err != nil {
+		t.Fatal(err)
+	}
 	fake := &assets.FakeStore{PublicBaseURL: "https://assets.example.com"}
 	svc := service.New(repo, fake)
 	thread, err := svc.CreateThread(t.Context(), types.Actor{Name: "seed", KeyName: "seed"}, "Seed")
@@ -478,5 +484,5 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return httptest.NewServer(httpapi.NewServer(config.Config{}, svc))
+	return httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "adm"}, svc))
 }

@@ -36,11 +36,14 @@ func TestHealth(t *testing.T) {
 
 func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	repo := &db.MemoryRepository{}
+	if _, err := repo.CreateAPIKey(t.Context(), "local", "dev-key"); err != nil {
+		t.Fatal(err)
+	}
 	svc := service.New(repo, &assets.FakeStore{})
 	server := NewServer(config.Config{}, svc)
 
 	create := httptest.NewRecorder()
-	server.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/threads", strings.NewReader(`{"title":"Go API"}`)))
+	server.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/threads?key=dev-key", strings.NewReader(`{"title":"Go API"}`)))
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
 	}
@@ -53,14 +56,14 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Thread.ID == "" || created.Thread.CreatedBy != "local-dev" {
+	if created.Thread.ID == "" || created.Thread.CreatedBy != "local" {
 		t.Fatalf("created = %#v", created)
 	}
 
 	jsonPost := httptest.NewRecorder()
 	server.ServeHTTP(jsonPost, httptest.NewRequest(
 		http.MethodPost,
-		"/api/threads/"+created.Thread.ID+"/messages",
+		"/api/threads/"+created.Thread.ID+"/messages?key=dev-key",
 		strings.NewReader(`{"body":"| A | B |\n| --- | --- |\n| 1 | 2 |"}`),
 	))
 	if jsonPost.Code != http.StatusCreated {
@@ -95,7 +98,7 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 
 	post := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/messages", &body)
+	req := httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/messages?key=dev-key", &body)
 	req.Header.Set("content-type", writer.FormDataContentType())
 	server.ServeHTTP(post, req)
 	if post.Code != http.StatusCreated {
@@ -126,7 +129,7 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 
 	download := httptest.NewRecorder()
-	server.ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/api/assets/"+posted.Message.Assets[0].ID+"/download-url?expires_in=9999", nil))
+	server.ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/api/assets/"+posted.Message.Assets[0].ID+"/download-url?key=dev-key&expires_in=9999", nil))
 	if download.Code != http.StatusOK {
 		t.Fatalf("download status = %d body=%s", download.Code, download.Body.String())
 	}
@@ -190,6 +193,78 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	asset := payload.Thread.Messages[0].Assets[0]
 	if asset.DownloadURL == "" || asset.PreviewURL == nil || *asset.PreviewURL != asset.DownloadURL {
 		t.Fatalf("viewer asset = %#v", asset)
+	}
+}
+
+func TestAdminKeyRoutesCreateListRevokeAndAuthenticate(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	server := NewServer(config.Config{AdminKey: "adm"}, svc)
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/admin/keys", strings.NewReader(`{"name":"chatgpt"}`))
+	createReq.Header.Set("x-agentbox-admin-key", "adm")
+	create := httptest.NewRecorder()
+	server.ServeHTTP(create, createReq)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Key struct {
+			Name      string `json:"name"`
+			Secret    string `json:"key"`
+			KeyMasked string `json:"key_masked"`
+		} `json:"key"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Key.Name != "chatgpt" || created.Key.Secret == "" || created.Key.KeyMasked == "" {
+		t.Fatalf("created = %#v", created)
+	}
+
+	apiCreate := httptest.NewRecorder()
+	server.ServeHTTP(apiCreate, httptest.NewRequest(http.MethodPost, "/api/threads?key="+created.Key.Secret, strings.NewReader(`{"title":"DB key"}`)))
+	if apiCreate.Code != http.StatusCreated {
+		t.Fatalf("authenticated create status = %d body=%s", apiCreate.Code, apiCreate.Body.String())
+	}
+	var threadPayload struct {
+		Thread struct {
+			CreatedBy string `json:"created_by"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(apiCreate.Body.Bytes(), &threadPayload); err != nil {
+		t.Fatal(err)
+	}
+	if threadPayload.Thread.CreatedBy != "chatgpt" {
+		t.Fatalf("thread payload = %#v", threadPayload)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil)
+	listReq.Header.Set("x-agentbox-admin-key", "adm")
+	list := httptest.NewRecorder()
+	server.ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"name":"chatgpt"`) || strings.Contains(list.Body.String(), created.Key.Secret) {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+
+	revokeReq := httptest.NewRequest(http.MethodDelete, "/api/admin/keys/chatgpt", nil)
+	revokeReq.Header.Set("x-agentbox-admin-key", "adm")
+	revoke := httptest.NewRecorder()
+	server.ServeHTTP(revoke, revokeReq)
+	if revoke.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d body=%s", revoke.Code, revoke.Body.String())
+	}
+
+	afterRevoke := httptest.NewRecorder()
+	server.ServeHTTP(afterRevoke, httptest.NewRequest(http.MethodGet, "/api/threads?key="+created.Key.Secret, nil))
+	if afterRevoke.Code != http.StatusUnauthorized {
+		t.Fatalf("after revoke status = %d body=%s", afterRevoke.Code, afterRevoke.Body.String())
 	}
 }
 

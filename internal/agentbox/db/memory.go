@@ -14,6 +14,7 @@ type MemoryRepository struct {
 	Threads  []types.Thread
 	Messages []types.Message
 	Assets   []types.Asset
+	APIKeys  []types.APIKey
 }
 
 func (m *MemoryRepository) EnsureSchema(context.Context) error {
@@ -123,4 +124,55 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 	m.Assets = append(m.Assets, createdAsset)
 	message.Assets = []types.Asset{createdAsset}
 	return message, nil
+}
+
+func (m *MemoryRepository) CreateAPIKey(_ context.Context, name string, key string) (types.APIKey, error) {
+	now := isoMillis(time.Now())
+	created := types.APIKey{
+		Name:      name,
+		Key:       key,
+		KeyMasked: maskSecret(key),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	for i := range m.APIKeys {
+		if m.APIKeys[i].Name == name {
+			created.CreatedAt = m.APIKeys[i].CreatedAt
+			m.APIKeys[i] = created
+			return created, nil
+		}
+	}
+	m.APIKeys = append(m.APIKeys, created)
+	sort.Slice(m.APIKeys, func(i, j int) bool {
+		return m.APIKeys[i].Name < m.APIKeys[j].Name
+	})
+	return created, nil
+}
+
+func (m *MemoryRepository) ListAPIKeys(context.Context) ([]types.APIKey, error) {
+	keys := append([]types.APIKey(nil), m.APIKeys...)
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i].Name < keys[j].Name
+	})
+	return keys, nil
+}
+
+func (m *MemoryRepository) RevokeAPIKey(_ context.Context, name string) (bool, error) {
+	for i, key := range m.APIKeys {
+		if key.Name == name {
+			m.APIKeys = append(m.APIKeys[:i], m.APIKeys[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MemoryRepository) FindAPIKeyBySecret(_ context.Context, secret string) (*types.APIKey, error) {
+	for _, key := range m.APIKeys {
+		if key.Key == secret {
+			found := key
+			return &found, nil
+		}
+	}
+	return nil, nil
 }

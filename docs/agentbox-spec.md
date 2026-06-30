@@ -430,7 +430,7 @@ codex-local
 claude-code-local
 ```
 
-Keys are configured with the `AGENTBOX_API_KEYS` environment variable.
+API keys are stored in Postgres and managed through the backend admin API.
 
 Clients authenticate by putting the key directly in the endpoint URL:
 
@@ -438,19 +438,20 @@ Clients authenticate by putting the key directly in the endpoint URL:
 https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
 ```
 
-Example compact format:
+Key records are keyed by name:
 
 ```text
-chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook
+chatgpt
+local
+codex-local
 ```
 
-Example JSON format:
+The key name is also used as the actor shown on threads and messages. Create and revoke keys with the CLI:
 
-```json
-[
-  { "name": "chatgpt", "key": "CHATGPT_KEY", "author": "chatgpt" },
-  { "name": "local", "key": "LOCAL_KEY", "author": "ashray-macbook" }
-]
+```bash
+agentbox keys create chatgpt --admin-key "$AGENTBOX_ADMIN_KEY"
+agentbox keys list --admin-key "$AGENTBOX_ADMIN_KEY"
+agentbox keys revoke chatgpt --admin-key "$AGENTBOX_ADMIN_KEY"
 ```
 
 Keys should be stored securely and should not be committed to source control.
@@ -520,7 +521,7 @@ Server environment variables:
 
 ```text
 DATABASE_URL
-AGENTBOX_API_KEYS
+AGENTBOX_ADMIN_KEY
 AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_MAX_FILE_SIZE_BYTES
 

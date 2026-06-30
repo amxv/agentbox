@@ -72,6 +72,13 @@ create table if not exists assets (
   created_by text not null
 );
 
+create table if not exists api_keys (
+  name text primary key,
+  key_value text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists threads_updated_at_idx on threads(updated_at desc);
 create index if not exists messages_thread_created_idx on messages(thread_id, created_at asc);
 create index if not exists assets_message_id_idx on assets(message_id);
@@ -256,6 +263,73 @@ returning id, message_id, storage_key, file_name, mime_type, size_bytes, public_
 	return message, nil
 }
 
+func (r *Repository) CreateAPIKey(ctx context.Context, name string, key string) (types.APIKey, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.APIKey{}, err
+	}
+	row := r.pool.QueryRow(ctx, `
+insert into api_keys (name, key_value)
+values ($1, $2)
+on conflict (name) do update set key_value = excluded.key_value, updated_at = now()
+returning name, key_value, created_at, updated_at
+`, name, key)
+	return scanAPIKey(row)
+}
+
+func (r *Repository) ListAPIKeys(ctx context.Context) ([]types.APIKey, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `
+select name, key_value, created_at, updated_at
+from api_keys
+order by name asc
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	keys := []types.APIKey{}
+	for rows.Next() {
+		key, err := scanAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func (r *Repository) RevokeAPIKey(ctx context.Context, name string) (bool, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return false, err
+	}
+	tag, err := r.pool.Exec(ctx, `delete from api_keys where name = $1`, name)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, err
+	}
+	found, err := scanAPIKey(r.pool.QueryRow(ctx, `
+select name, key_value, created_at, updated_at
+from api_keys
+where key_value = $1
+`, key))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &found, nil
+}
+
 type threadScanner interface {
 	Scan(dest ...any) error
 }
@@ -305,6 +379,24 @@ func scanAsset(row threadScanner) (types.Asset, error) {
 	asset.PublicURL = publicURL
 	asset.CreatedAt = isoMillis(createdAt)
 	return asset, err
+}
+
+func scanAPIKey(row threadScanner) (types.APIKey, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	key := types.APIKey{}
+	err := row.Scan(&key.Name, &key.Key, &createdAt, &updatedAt)
+	key.KeyMasked = maskSecret(key.Key)
+	key.CreatedAt = isoMillis(createdAt)
+	key.UpdatedAt = isoMillis(updatedAt)
+	return key, err
+}
+
+func maskSecret(value string) string {
+	if len(value) <= 8 {
+		return "****"
+	}
+	return value[:4] + "..." + value[len(value)-4:]
 }
 
 func StorageKey(threadID string, messageHint string, fileName string) string {

@@ -129,7 +129,6 @@ Required on the deployed server:
 
 ```text
 DATABASE_URL
-AGENTBOX_API_KEYS
 AGENTBOX_ADMIN_KEY
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
@@ -145,22 +144,18 @@ AGENTBOX_MAX_FILE_SIZE_BYTES
 R2_PUBLIC_BASE_URL
 ```
 
-`AGENTBOX_API_KEYS` supports either compact or JSON format.
+API keys are stored in Postgres and managed through the Go backend admin API. After the backend is deployed and migrated, run:
 
-Compact:
-
-```text
-chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook
+```bash
+agentbox init \
+  --profile-name prod \
+  --base-url https://your-agentbox-go.vercel.app \
+  --admin-key "$AGENTBOX_ADMIN_KEY" \
+  --local-key-name local \
+  --chatgpt-key-name chatgpt
 ```
 
-JSON:
-
-```json
-[
-  { "name": "chatgpt", "key": "CHATGPT_KEY", "author": "chatgpt" },
-  { "name": "local", "key": "LOCAL_KEY", "author": "ashray-macbook" }
-]
-```
+The init flow creates a local CLI key and a ChatGPT key in Postgres, saves the local profile, and prints the ChatGPT MCP setup URL. Later key management uses `agentbox keys create|list|revoke` with `--admin-key` or `AGENTBOX_ADMIN_KEY`.
 
 ## Docs
 

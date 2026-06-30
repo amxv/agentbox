@@ -54,3 +54,11 @@ type NewAsset struct {
 	SizeBytes  int64
 	PublicURL  *string
 }
+
+type APIKey struct {
+	Name      string `json:"name"`
+	Key       string `json:"-"`
+	KeyMasked string `json:"key_masked"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}

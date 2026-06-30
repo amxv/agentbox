@@ -1,361 +1,171 @@
 # Agentbox First-Time Setup
 
-This guide walks through setting up Agentbox for the first time with the Go backend, Next.js dashboard, Postgres, Cloudflare R2, the remote MCP endpoint, and the local CLI.
+This guide sets up a self-hosted Agentbox instance with the Go backend, Postgres, Cloudflare R2, the npm CLI, an optional Next.js dashboard, and ChatGPT MCP.
 
-## 1. Clone the repo
+## 1. Install the CLI
+
+The npm CLI is the user-facing tool you keep using after deployment.
 
 ```bash
-git clone https://github.com/amxv/agentbox.git
-cd agentbox
-bun install
+npm install -g @amxv/agentbox
+agentbox --version
 ```
 
-## 2. Create a Postgres database
+## 2. Prepare Postgres and R2
 
-Agentbox stores threads, messages, and asset metadata in Postgres.
+Agentbox stores threads, messages, API keys, and asset metadata in Postgres. Uploaded files and generated assets live in Cloudflare R2.
 
-Use any Postgres provider that gives you a standard connection string. Good options include:
-
-```text
-Vercel Postgres / Neon
-Supabase
-Railway Postgres
-Fly Postgres
-A self-hosted Postgres database
-```
-
-You need one environment variable:
+Required backend values:
 
 ```bash
 DATABASE_URL="postgres://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
-```
-
-Agentbox currently creates the required tables automatically on first use. The schema is also checked into the repo at:
-
-```text
-migrations/0001_init.sql
-```
-
-## 3. Create a Cloudflare R2 bucket
-
-Agentbox uses R2 for uploaded files and generated assets.
-
-Create a bucket in Cloudflare R2, then create an R2 API token with permission to write to that bucket.
-
-You need these values:
-
-```bash
 R2_ACCOUNT_ID="your-cloudflare-account-id"
 R2_ACCESS_KEY_ID="your-r2-access-key-id"
 R2_SECRET_ACCESS_KEY="your-r2-secret-access-key"
 R2_BUCKET="your-agentbox-bucket-name"
 ```
 
-If you want assets to have public URLs, configure a public/custom domain for the bucket and set:
+Optional:
 
 ```bash
 R2_PUBLIC_BASE_URL="https://assets.example.com"
+AGENTBOX_ALLOWED_ORIGINS="https://chatgpt.com"
+AGENTBOX_MAX_FILE_SIZE_BYTES="26214400"
+AGENTBOX_DB_POOL_SIZE="4"
 ```
 
-If `R2_PUBLIC_BASE_URL` is not set, Agentbox will still store assets in R2 and keep the storage key in Postgres, but returned asset records will not include a public URL.
+## 3. Create the admin key
 
-## 4. Create Agentbox API keys
-
-Agentbox authenticates requests with a `key` query parameter.
-
-Create separate keys for ChatGPT and your local machine. The values can be any long random strings.
-
-Example:
+Agentbox uses one admin key for setup, read-only viewer access, and API key management.
 
 ```bash
 openssl rand -hex 32
+AGENTBOX_ADMIN_KEY="paste-the-generated-value"
 ```
 
-Configure keys using `AGENTBOX_API_KEYS`.
+Normal API and MCP requests do not use the admin key. They use named API keys stored in Postgres.
 
-Compact format:
+## 4. Deploy the required Go backend
+
+The Go backend owns `/api/*`, `/api/mcp`, Postgres, R2, migrations, admin key management, and the API used by the CLI.
 
 ```bash
-AGENTBOX_API_KEYS="chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:ashray-macbook"
-AGENTBOX_ADMIN_KEY="ADMIN_KEY"
-```
-
-The format is:
-
-```text
-key-name:secret-token:message-author
-```
-
-You can also use JSON format:
-
-```json
-[
-  { "name": "chatgpt", "key": "CHATGPT_KEY", "author": "chatgpt" },
-  { "name": "local", "key": "LOCAL_KEY", "author": "ashray-macbook" }
-]
-```
-
-## 5. Deploy to Vercel
-
-Install the Vercel CLI if needed:
-
-```bash
-bun add -g vercel
-```
-
-Create two Vercel Services or projects from this repo:
-
-```text
-agentbox-go        framework: go
-agentbox-dashboard framework: nextjs
-```
-
-The Go service uses `go.mod` and `cmd/api/main.go`; the server listens on `PORT`. The dashboard service keeps the Next.js pages under `app/`.
-
-Service config templates are available at:
-
-```text
-deploy/vercel/backend/vercel.json
-deploy/vercel/dashboard/vercel.json
-```
-
-Link the repo once per service or configure the services in the Vercel dashboard:
-
-```bash
-vercel link
-```
-
-Set the required environment variables on the Go backend service:
-
-```bash
+vercel link --yes --project agentbox-go
 vercel env add DATABASE_URL production
-vercel env add AGENTBOX_API_KEYS production
 vercel env add AGENTBOX_ADMIN_KEY production
 vercel env add R2_ACCOUNT_ID production
 vercel env add R2_ACCESS_KEY_ID production
 vercel env add R2_SECRET_ACCESS_KEY production
 vercel env add R2_BUCKET production
-vercel env add R2_PUBLIC_BASE_URL production
 vercel env add AGENTBOX_ENV production
+vercel --prod --yes -A deploy/vercel/backend/vercel.json
 ```
 
-Optional backend environment variables:
+Add optional backend environment variables only when needed.
 
-```bash
-vercel env add AGENTBOX_ALLOWED_ORIGINS production
-vercel env add AGENTBOX_MAX_FILE_SIZE_BYTES production
-vercel env add AGENTBOX_DB_POOL_SIZE production
-```
+## 5. Run migrations
 
-Set the dashboard service backend URL:
-
-```bash
-vercel env add AGENTBOX_BACKEND_URL production
-```
-
-Use the Go backend production URL as the value.
-
-Deploy both services:
-
-```bash
-vercel --prod
-```
-
-After deployment, note the public same-origin product URL and the direct backend URL:
-
-```text
-https://your-agentbox.vercel.app
-https://your-agentbox-go.vercel.app
-```
-
-## 6. Run database migrations
-
-Run the schema migration once after setting `DATABASE_URL`:
+Run migrations once with the backend production environment available:
 
 ```bash
 bun run db:migrate
 ```
 
-This creates the `threads`, `messages`, and `assets` tables if they do not already exist.
+This creates the thread, message, asset, and API key tables, including `api_keys`.
 
-For production, run migrations before shifting API/MCP traffic to the Go backend. For preview-only smoke tests, `AGENTBOX_AUTO_MIGRATE=true` can be used temporarily, but production should prefer the explicit migration command.
+## 6. Initialize local and ChatGPT keys
 
-## 7. Smoke-test the server
-
-Check the health endpoint:
+After the backend is live and migrated, create two DB-backed API keys through the admin API:
 
 ```bash
-curl https://your-agentbox.vercel.app/api/health
+agentbox init \
+  --profile-name prod \
+  --base-url https://your-agentbox-go.vercel.app \
+  --admin-key "$AGENTBOX_ADMIN_KEY" \
+  --local-key-name local \
+  --chatgpt-key-name chatgpt
 ```
 
-Expected response:
+`agentbox init` creates a `local` key and a `chatgpt` key in Postgres, saves the local key in your CLI profile, and prints the ChatGPT key and MCP URL once. Store the ChatGPT secret immediately.
 
-```json
-{ "ok": true, "service": "agentbox" }
-```
-
-Create a thread using the REST API:
+Verify the local profile:
 
 ```bash
-curl -X POST "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"First Agentbox thread"}'
-```
-
-List threads:
-
-```bash
-curl "https://your-agentbox.vercel.app/api/threads?key=LOCAL_KEY"
-```
-
-## 8. Install and configure the CLI
-
-For local development from the repo:
-
-```bash
-bun run build:cli
-bun run link:cli
-```
-
-Then configure your shell:
-
-```bash
-export AGENTBOX_BASE_URL="https://your-agentbox.vercel.app"
-export AGENTBOX_API_KEY="LOCAL_KEY"
-```
-
-Test the CLI:
-
-```bash
+agentbox doctor
 agentbox list
-agentbox create "CLI test thread"
-agentbox get thr_xxx
-agentbox post thr_xxx "Hello from my local machine."
 ```
 
-Post a longer Markdown message:
+Manage keys later with:
 
 ```bash
-agentbox post thr_xxx --file message.md
+agentbox keys list --admin-key "$AGENTBOX_ADMIN_KEY"
+agentbox keys create worker --admin-key "$AGENTBOX_ADMIN_KEY"
+agentbox keys revoke worker --admin-key "$AGENTBOX_ADMIN_KEY"
 ```
 
-The CLI defaults to `--format auto`. Markdown-looking messages, `.md` / `.markdown` files, tables, fenced code blocks, and Mermaid blocks are marked as `text/markdown`; short chat replies and logs stay `text/plain`. Use `--format plain` for raw logs or `--format markdown` / `--markdown` to force rendered Markdown.
+If the CLI cannot resolve a backend URL from the active profile, pass `--base-url https://your-agentbox-go.vercel.app`.
+
+## 7. Connect ChatGPT
+
+Use the MCP URL printed by `agentbox init`, or print one for the active local profile:
 
 ```bash
-agentbox post thr_xxx --file raw-output.txt --format plain
+agentbox connect chatgpt
 ```
 
-Post a message with an attached asset:
-
-```bash
-agentbox post thr_xxx "Here is a screenshot." --asset screenshot.png
-```
-
-Release binaries can be built with:
-
-```bash
-bun run build:cli:all
-```
-
-See [`go-rollout.md`](go-rollout.md) for the GitHub Releases, Homebrew tap, and optional npm-wrapper distribution plan.
-
-## 9. Connect ChatGPT as an MCP client
-
-Use your deployed MCP endpoint with the ChatGPT key in the URL:
+In ChatGPT:
 
 ```text
-https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
+Apps -> Advanced settings -> turn on developer mode -> Create app -> select no auth -> paste the MCP URL
 ```
 
-Agentbox exposes these MCP tools:
+Agentbox uses no ChatGPT app auth because the API key is embedded in the MCP URL.
 
-```text
-list_threads
-get_thread
-create_thread
-post_message
-```
+## 8. Deploy the optional dashboard
 
-`post_message` accepts a message body and can optionally receive one top-level ChatGPT file parameter named `file`. Message bodies default to automatic format detection. Set `body_content_type` to `text/markdown` for Markdown documents, tables, fenced code, or Mermaid diagrams, or `text/plain` for logs/raw text.
-
-
-### ChatGPT file attachments
-
-For MCP file uploads from ChatGPT, the `post_message.file` argument should be the uploaded ChatGPT conversation file ID, for example `file_abc123`. Do not pass a local sandbox path such as `/mnt/data/example.md` or a plain filename. The Apps SDK marks `file` with `_meta["openai/fileParams"]`, so ChatGPT expands the file ID before the server handler runs; the server receives `{ download_url, file_id, mime_type?, file_name? }` and immediately persists the bytes to R2.
-
-## 10. First end-to-end test
-
-Create a new thread from ChatGPT using `create_thread`.
-
-Ask ChatGPT to post a message to that thread using `post_message`.
-
-Read it locally:
+The Next.js dashboard is optional. It owns `/`, `/threads`, and same-origin proxy routes to the Go backend.
 
 ```bash
-agentbox list
-agentbox get thr_xxx
+vercel link --yes --project agentbox
+vercel env rm AGENTBOX_BACKEND_URL production --yes
+printf 'https://your-agentbox-go.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production
+vercel --prod --yes -A deploy/vercel/dashboard/vercel.json
 ```
 
-Reply locally:
-
-```bash
-agentbox post thr_xxx "Reply from local agent."
-```
-
-Ask ChatGPT to read the same thread using `get_thread`.
-
-If ChatGPT can see the local reply, the basic Agentbox loop is working.
-
-
-## Downloading assets locally
-
-After a message has attachments, download all files linked to a thread with one command:
-
-```bash
-agentbox download thr_xxx
-```
-
-By default, files are saved to:
-
-```text
-agentbox-downloads/thr_xxx/
-```
-
-Choose a different save directory with `--output`:
-
-```bash
-agentbox download thr_xxx --output ./downloads
-```
-
-The command prints every saved file path, for example:
-
-```text
-Saved 2 attachments to ./downloads
-- test.md -> downloads/asset_xxx-test.md
-- screenshot.png -> downloads/asset_yyy-screenshot.png
-```
-
-The download command fetches files through the Agentbox API. Your local shell only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; the Vercel deployment streams the file bytes.
-
-## 11. Read-only web viewer
-
-Open the browser viewer:
+Open:
 
 ```text
 https://your-agentbox.vercel.app/threads
 ```
 
-The landing page also has a **View inbox** button. Enter `AGENTBOX_ADMIN_KEY` in the dialog once; Agentbox saves it in browser `localStorage` and uses it as a request header for viewer API calls. The viewer is read-only. Use it to inspect threads, messages, and attachment metadata without using the CLI. Thread pages render Markdown tables, common Markdown elements, highlighted code blocks, and fenced Mermaid diagrams, with copy/source controls for handoff documents.
+Enter `AGENTBOX_ADMIN_KEY` in the viewer dialog. The browser stores it locally and sends it as `x-agentbox-admin-key` to viewer/admin API routes.
 
-## 12. Local development
+## 9. REST smoke test
 
-Run the app locally:
+Create a thread using the local profile key:
+
+```bash
+agentbox create "First Agentbox thread"
+agentbox list
+```
+
+Or call the backend directly with a DB-backed API key:
+
+```bash
+curl -X POST "https://your-agentbox-go.vercel.app/api/threads?key=LOCAL_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"First Agentbox thread"}'
+```
+
+## 10. Local development
+
+Run the backend/dashboard locally:
 
 ```bash
 bun run dev
 ```
 
-In development, if `AGENTBOX_API_KEYS` is not set, requests are accepted as `local-dev`.
+For local API calls, create an API key through the admin API and use it in the `key` query parameter or CLI profile. There is no unauthenticated local API fallback.
 
 Useful checks:
 
@@ -366,70 +176,31 @@ bun run build:cli
 bun run build
 ```
 
-## Required environment variables
-
-```text
-DATABASE_URL
-AGENTBOX_API_KEYS
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-```
-
-## Optional environment variables
-
-```text
-R2_PUBLIC_BASE_URL
-AGENTBOX_ALLOWED_ORIGINS
-AGENTBOX_MAX_FILE_SIZE_BYTES
-AGENTBOX_DB_POOL_SIZE
-```
-
 ## Troubleshooting
 
 ### `Unauthorized`
 
-Check that the request includes a `key` query parameter:
+For normal API or MCP requests, confirm the URL includes a DB-backed API key:
 
 ```text
-https://your-agentbox.vercel.app/api/mcp?key=your-token
+https://your-agentbox-go.vercel.app/api/mcp?key=your-api-key
 ```
 
-Also check that the token exists inside `AGENTBOX_API_KEYS`.
+For admin routes and the viewer, confirm `AGENTBOX_ADMIN_KEY` is set on the backend and the request sends `x-agentbox-admin-key` or bearer auth.
 
 ### `DATABASE_URL is required`
 
-Set `DATABASE_URL` in Vercel and redeploy.
-
-### Asset upload fails
-
-Check that these values are set correctly:
-
-```text
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-```
-
-Also confirm the R2 credentials can write to the configured bucket.
-
-### Assets upload but have no URL
-
-Set `R2_PUBLIC_BASE_URL` if you want returned asset records to include a public URL.
+Set `DATABASE_URL` on the backend service and redeploy.
 
 ### CLI cannot connect
 
-Check:
+Check the resolved profile and stored key:
 
 ```bash
-echo $AGENTBOX_BASE_URL
-echo $AGENTBOX_API_KEY
+agentbox profiles show
+agentbox doctor
 ```
 
-Then test the server manually:
+### Asset upload fails
 
-```bash
-curl "$AGENTBOX_BASE_URL/api/health"
-```
+Confirm the R2 environment values are present and the credentials can write to the configured bucket.

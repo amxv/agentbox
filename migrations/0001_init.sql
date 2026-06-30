@@ -27,6 +27,13 @@ create table if not exists assets (
   created_by text not null
 );
 
+create table if not exists api_keys (
+  name text primary key,
+  key_value text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists threads_updated_at_idx on threads(updated_at desc);
 create index if not exists messages_thread_created_idx on messages(thread_id, created_at asc);
 create index if not exists assets_message_id_idx on assets(message_id);

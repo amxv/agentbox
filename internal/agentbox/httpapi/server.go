@@ -40,6 +40,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.health)
+	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
+	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
 	s.mux.HandleFunc("/api/threads", s.threads)
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
@@ -89,6 +91,70 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": thread})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		keys, err := s.service.ListAPIKeys(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
+	case http.MethodPost:
+		var input struct {
+			Name string `json:"name"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		key, err := s.service.CreateAPIKey(r.Context(), input.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"key": map[string]any{
+				"name":       key.Name,
+				"key":        key.Key,
+				"key_masked": key.KeyMasked,
+				"created_at": key.CreatedAt,
+				"updated_at": key.UpdatedAt,
+			},
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) adminKey(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/keys/"), "/")
+	if name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		if err := s.service.RevokeAPIKey(r.Context(), name); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, service.ErrAPIKeyNotFound) {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": name})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -284,12 +350,7 @@ func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	if err := auth.RequireAdminRequest(r, s.cfg); err != nil {
-		status := http.StatusInternalServerError
-		if err.Error() == "Unauthorized" {
-			status = http.StatusUnauthorized
-		}
-		writeError(w, status, err.Error())
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	limit := numberQuery(r, "limit", 100)
@@ -311,12 +372,7 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	if err := auth.RequireAdminRequest(r, s.cfg); err != nil {
-		status := http.StatusInternalServerError
-		if err.Error() == "Unauthorized" {
-			status = http.StatusUnauthorized
-		}
-		writeError(w, status, err.Error())
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	threadID := strings.TrimPrefix(r.URL.Path, "/api/viewer/threads/")
@@ -351,7 +407,7 @@ func (s *Server) mcpHandler() http.Handler {
 			writeError(w, http.StatusForbidden, "Forbidden origin")
 			return
 		}
-		actor, err := auth.AuthenticateRequest(r, s.cfg)
+		actor, err := s.service.AuthenticateAPIKey(r.Context(), r.URL.Query().Get("key"))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -365,7 +421,7 @@ func (s *Server) mcpHandler() http.Handler {
 }
 
 func (s *Server) requireActor(w http.ResponseWriter, r *http.Request) (*types.Actor, bool) {
-	actor, err := auth.AuthenticateRequest(r, s.cfg)
+	actor, err := s.service.AuthenticateAPIKey(r.Context(), r.URL.Query().Get("key"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
@@ -375,6 +431,18 @@ func (s *Server) requireActor(w http.ResponseWriter, r *http.Request) (*types.Ac
 		return nil, false
 	}
 	return actor, true
+}
+
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if err := auth.RequireAdminRequest(r, s.cfg); err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "Unauthorized" {
+			status = http.StatusUnauthorized
+		}
+		writeError(w, status, err.Error())
+		return false
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

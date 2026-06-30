@@ -3,19 +3,16 @@ package cli
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 
-	"agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/profiles"
 )
 
@@ -44,7 +41,9 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 	fs := newFlagSet("init")
 	profileName := fs.String("profile-name", defaultString(globalProfileName, "local"), "stored profile name")
 	baseURL := fs.String("base-url", "", "Agentbox base URL")
-	apiKey := fs.String("api-key", "", "Agentbox API key")
+	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	localKeyName := fs.String("local-key-name", "local", "API key name for this CLI")
+	chatgptKeyName := fs.String("chatgpt-key-name", "chatgpt", "API key name for ChatGPT")
 	skipDoctor := fs.Bool("skip-doctor", false, "skip the doctor verification step")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
@@ -59,12 +58,17 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 		}
 		*baseURL = value
 	}
-	if strings.TrimSpace(*apiKey) == "" {
-		value, err := promptRequired(reader, r.Stdout, "Agentbox API key")
+	if strings.TrimSpace(*adminKey) == "" {
+		if value := strings.TrimSpace(os.Getenv("AGENTBOX_ADMIN_KEY")); value != "" {
+			*adminKey = value
+		}
+	}
+	if strings.TrimSpace(*adminKey) == "" {
+		value, err := promptRequired(reader, r.Stdout, "Agentbox admin API key")
 		if err != nil {
 			return err
 		}
-		*apiKey = value
+		*adminKey = value
 	}
 	if strings.TrimSpace(*profileName) == "" {
 		value, err := promptWithDefault(reader, r.Stdout, "Profile name", "local")
@@ -73,11 +77,34 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 		}
 		*profileName = value
 	}
+	if strings.TrimSpace(*localKeyName) == "" {
+		value, err := promptWithDefault(reader, r.Stdout, "Local API key name", "local")
+		if err != nil {
+			return err
+		}
+		*localKeyName = value
+	}
+	if strings.TrimSpace(*chatgptKeyName) == "" {
+		value, err := promptWithDefault(reader, r.Stdout, "ChatGPT API key name", "chatgpt")
+		if err != nil {
+			return err
+		}
+		*chatgptKeyName = value
+	}
+
+	localKey, err := r.createRemoteAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(*localKeyName))
+	if err != nil {
+		return err
+	}
+	chatgptKey, err := r.createRemoteAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(*chatgptKeyName))
+	if err != nil {
+		return err
+	}
 
 	store, err := profiles.SaveProfile(profiles.Profile{
 		Name:    strings.TrimSpace(*profileName),
 		BaseURL: strings.TrimSpace(*baseURL),
-		APIKey:  strings.TrimSpace(*apiKey),
+		APIKey:  localKey.Secret,
 	}, true)
 	if err != nil {
 		return err
@@ -89,8 +116,12 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 		"config_path":     profiles.DefaultConfigPath(),
 		"active_profile":  nullString(store.ActiveProfileName),
 		"doctor_skipped":  *skipDoctor,
-		"api_key_masked":  profiles.MaskSecret(strings.TrimSpace(*apiKey)),
+		"api_key_name":    localKey.Name,
+		"api_key_masked":  localKey.KeyMasked,
+		"chatgpt_key":     chatgptKey.Secret,
+		"chatgpt_name":    chatgptKey.Name,
 		"resolved_source": "config",
+		"mcp_url":         strings.TrimRight(strings.TrimSpace(*baseURL), "/") + "/api/mcp?key=" + url.QueryEscape(chatgptKey.Secret),
 	}
 	if *jsonOut {
 		if !*skipDoctor {
@@ -100,6 +131,10 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 	}
 
 	fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", *profileName, profiles.DefaultConfigPath())
+	fmt.Fprintf(r.Stdout, "Created local API key %q and saved it to the profile.\n", localKey.Name)
+	fmt.Fprintf(r.Stdout, "Created ChatGPT API key %q. Store this secret now: %s\n", chatgptKey.Name, chatgptKey.Secret)
+	fmt.Fprintf(r.Stdout, "ChatGPT MCP URL: %s\n\n", result["mcp_url"])
+	printChatGPTSteps(r.Stdout)
 	if !*skipDoctor {
 		if err := r.runDoctor(nil, strings.TrimSpace(*profileName)); err != nil {
 			return err
@@ -143,382 +178,308 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	}
 	fmt.Fprintf(r.Stdout, "Profile: %s (%s)\n", cfg.ProfileName, cfg.Source)
 	fmt.Fprintf(r.Stdout, "MCP URL: %s\n\n", endpoint.String())
-	fmt.Fprintln(r.Stdout, "ChatGPT setup:")
-	for i, step := range steps {
-		fmt.Fprintf(r.Stdout, "%d. %s\n", i+1, step)
-	}
+	printNumberedSteps(r.Stdout, "ChatGPT setup:", steps)
 	return nil
 }
 
 func (r *Runner) runDeploy(args []string, globalProfileName string) error {
 	if len(args) == 0 || args[0] != "vercel" {
-		return errors.New(`Usage: agentbox deploy vercel [options]`)
+		return errors.New(`Usage: agentbox deploy vercel`)
+	}
+	if len(args) > 1 && isHelpArg(args[1]) {
+		r.printCommandHelp("deploy")
+		return nil
 	}
 	return r.runDeployVercel(args[1:], globalProfileName)
 }
 
 func (r *Runner) runDeployVercel(args []string, globalProfileName string) error {
+	_ = globalProfileName
 	fs := newFlagSet("deploy vercel")
-	backendProject := fs.String("backend-project", "agentbox-go", "Vercel backend project name")
-	dashboardProject := fs.String("dashboard-project", "agentbox", "Vercel dashboard project name")
-	databaseURL := fs.String("database-url", "", "Postgres connection string")
-	r2AccountID := fs.String("r2-account-id", "", "Cloudflare R2 account ID")
-	r2AccessKeyID := fs.String("r2-access-key-id", "", "Cloudflare R2 access key ID")
-	r2SecretAccessKey := fs.String("r2-secret-access-key", "", "Cloudflare R2 secret access key")
-	r2Bucket := fs.String("r2-bucket", "", "Cloudflare R2 bucket")
-	r2PublicBaseURL := fs.String("r2-public-base-url", "", "optional public base URL for assets")
-	allowedOrigins := fs.String("allowed-origins", "", "optional comma-separated allowed origins")
-	autoMigrate := fs.String("auto-migrate", "", "optional AGENTBOX_AUTO_MIGRATE value")
-	dbPoolSize := fs.String("db-pool-size", "", "optional AGENTBOX_DB_POOL_SIZE value")
-	maxFileSizeBytes := fs.String("max-file-size-bytes", "", "optional AGENTBOX_MAX_FILE_SIZE_BYTES value")
-	adminKey := fs.String("admin-key", "", "viewer/admin key")
-	chatgptLabel := fs.String("chatgpt-label", "chatgpt", "label for the ChatGPT key")
-	chatgptAuthor := fs.String("chatgpt-author", "", "author name for the ChatGPT key")
-	chatgptKey := fs.String("chatgpt-key", "", "ChatGPT API key value")
-	localLabel := fs.String("local-label", defaultString(globalProfileName, "local"), "label for the local key")
-	localAuthor := fs.String("local-author", "", "author name for the local key")
-	localKey := fs.String("local-key", "", "local API key value")
-	profileName := fs.String("profile-name", defaultString(globalProfileName, "prod"), "local CLI profile name to save after deploy")
-	skipProfile := fs.Bool("skip-profile", false, "skip saving a local CLI profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-
-	reader := bufio.NewReader(r.Stdin)
-	requiredValues := []struct {
-		label string
-		value *string
-	}{
-		{"DATABASE_URL", databaseURL},
-		{"R2_ACCOUNT_ID", r2AccountID},
-		{"R2_ACCESS_KEY_ID", r2AccessKeyID},
-		{"R2_SECRET_ACCESS_KEY", r2SecretAccessKey},
-		{"R2_BUCKET", r2Bucket},
-		{"AGENTBOX_ADMIN_KEY", adminKey},
+	if fs.NArg() != 0 {
+		return errors.New("Usage: agentbox deploy vercel")
 	}
-	for _, item := range requiredValues {
-		if strings.TrimSpace(*item.value) == "" {
-			value, err := promptRequired(reader, r.Stdout, item.label)
-			if err != nil {
-				return err
-			}
-			*item.value = value
-		}
-	}
-	if strings.TrimSpace(*chatgptKey) == "" {
-		*chatgptKey = mustGenerateSecret()
-	}
-	if strings.TrimSpace(*localKey) == "" {
-		*localKey = mustGenerateSecret()
-	}
-	if strings.TrimSpace(*chatgptAuthor) == "" {
-		*chatgptAuthor = strings.TrimSpace(*chatgptLabel)
-	}
-	if strings.TrimSpace(*localAuthor) == "" {
-		*localAuthor = strings.TrimSpace(*localLabel)
-	}
-
-	apiKeys := serializeAPIKeys([]auth.KeyConfig{
-		{Name: strings.TrimSpace(*chatgptLabel), Key: strings.TrimSpace(*chatgptKey), Author: strings.TrimSpace(*chatgptAuthor)},
-		{Name: strings.TrimSpace(*localLabel), Key: strings.TrimSpace(*localKey), Author: strings.TrimSpace(*localAuthor)},
-	})
-
-	backendEnv := map[string]string{
-		"DATABASE_URL":         strings.TrimSpace(*databaseURL),
-		"AGENTBOX_API_KEYS":    apiKeys,
-		"AGENTBOX_ADMIN_KEY":   strings.TrimSpace(*adminKey),
-		"R2_ACCOUNT_ID":        strings.TrimSpace(*r2AccountID),
-		"R2_ACCESS_KEY_ID":     strings.TrimSpace(*r2AccessKeyID),
-		"R2_SECRET_ACCESS_KEY": strings.TrimSpace(*r2SecretAccessKey),
-		"R2_BUCKET":            strings.TrimSpace(*r2Bucket),
-		"AGENTBOX_ENV":         "production",
-	}
-	if strings.TrimSpace(*r2PublicBaseURL) != "" {
-		backendEnv["R2_PUBLIC_BASE_URL"] = strings.TrimSpace(*r2PublicBaseURL)
-	}
-	if strings.TrimSpace(*allowedOrigins) != "" {
-		backendEnv["AGENTBOX_ALLOWED_ORIGINS"] = strings.TrimSpace(*allowedOrigins)
-	}
-	if strings.TrimSpace(*autoMigrate) != "" {
-		backendEnv["AGENTBOX_AUTO_MIGRATE"] = strings.TrimSpace(*autoMigrate)
-	}
-	if strings.TrimSpace(*dbPoolSize) != "" {
-		backendEnv["AGENTBOX_DB_POOL_SIZE"] = strings.TrimSpace(*dbPoolSize)
-	}
-	if strings.TrimSpace(*maxFileSizeBytes) != "" {
-		backendEnv["AGENTBOX_MAX_FILE_SIZE_BYTES"] = strings.TrimSpace(*maxFileSizeBytes)
-	}
-
-	if _, _, err := r.RunExternal("vercel", []string{"link", "--yes", "--project", strings.TrimSpace(*backendProject)}, "", nil); err != nil {
-		return fmt.Errorf("vercel backend link failed: %w", err)
-	}
-	if err := r.replaceVercelEnv(strings.TrimSpace(*backendProject), "production", backendEnv); err != nil {
-		return err
-	}
-	backendStdout, backendStderr, err := r.RunExternal("vercel", []string{"--prod", "--yes", "-A", "deploy/vercel/backend/vercel.json"}, "", nil)
-	if err != nil {
-		return formatCommandError("backend deploy", err, backendStderr)
-	}
-	backendURL := firstVercelURL(backendStdout)
-	if backendURL == "" {
-		value, promptErr := promptRequired(reader, r.Stdout, "Backend deployment URL")
-		if promptErr != nil {
-			return promptErr
-		}
-		backendURL = value
-	}
-
-	if _, _, err := r.RunExternal("vercel", []string{"link", "--yes", "--project", strings.TrimSpace(*dashboardProject)}, "", nil); err != nil {
-		return fmt.Errorf("vercel dashboard link failed: %w", err)
-	}
-	if err := r.replaceVercelEnv(strings.TrimSpace(*dashboardProject), "production", map[string]string{
-		"AGENTBOX_BACKEND_URL": strings.TrimRight(strings.TrimSpace(backendURL), "/"),
-	}); err != nil {
-		return err
-	}
-	dashboardStdout, dashboardStderr, err := r.RunExternal("vercel", []string{"--prod", "--yes", "-A", "deploy/vercel/dashboard/vercel.json"}, "", nil)
-	if err != nil {
-		return formatCommandError("dashboard deploy", err, dashboardStderr)
-	}
-	dashboardURL := firstVercelURL(dashboardStdout)
-
-	if !*skipProfile {
-		if _, err := profiles.SaveProfile(profiles.Profile{
-			Name:    strings.TrimSpace(*profileName),
-			BaseURL: strings.TrimRight(strings.TrimSpace(defaultString(dashboardURL, backendURL)), "/"),
-			APIKey:  strings.TrimSpace(*localKey),
-		}, true); err != nil {
-			return err
-		}
-	}
-
-	result := map[string]any{
-		"backend_project":  strings.TrimSpace(*backendProject),
-		"backend_url":      strings.TrimRight(strings.TrimSpace(backendURL), "/"),
-		"dashboard_project": strings.TrimSpace(*dashboardProject),
-		"dashboard_url":    strings.TrimRight(strings.TrimSpace(dashboardURL), "/"),
-		"api_keys": []map[string]string{
-			{"label": strings.TrimSpace(*chatgptLabel), "author": strings.TrimSpace(*chatgptAuthor), "key_masked": profiles.MaskSecret(strings.TrimSpace(*chatgptKey))},
-			{"label": strings.TrimSpace(*localLabel), "author": strings.TrimSpace(*localAuthor), "key_masked": profiles.MaskSecret(strings.TrimSpace(*localKey))},
-		},
-		"profile_name": defaultString(strings.TrimSpace(*profileName), ""),
-		"config_path":  profiles.DefaultConfigPath(),
-		"migration_command": "bun run db:migrate",
+	commands := []string{
+		"vercel link --yes --project agentbox-go",
+		"vercel env add DATABASE_URL production",
+		"vercel env add AGENTBOX_ADMIN_KEY production",
+		"vercel env add R2_ACCOUNT_ID production",
+		"vercel env add R2_ACCESS_KEY_ID production",
+		"vercel env add R2_SECRET_ACCESS_KEY production",
+		"vercel env add R2_BUCKET production",
+		"vercel env add AGENTBOX_ENV production",
+		"vercel --prod --yes -A deploy/vercel/backend/vercel.json",
+		"bun run db:migrate",
+		"agentbox init --base-url https://YOUR-BACKEND.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\"",
+		"vercel link --yes --project agentbox",
+		"printf 'https://YOUR-BACKEND.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production",
+		"vercel --prod --yes -A deploy/vercel/dashboard/vercel.json",
 	}
 	if *jsonOut {
-		return printJSON(r.Stdout, result)
+		return printJSON(r.Stdout, map[string]any{"commands": commands})
 	}
-	fmt.Fprintf(r.Stdout, "Backend deployed: %s\n", strings.TrimRight(strings.TrimSpace(backendURL), "/"))
-	if strings.TrimSpace(dashboardURL) != "" {
-		fmt.Fprintf(r.Stdout, "Dashboard deployed: %s\n", strings.TrimRight(strings.TrimSpace(dashboardURL), "/"))
+	fmt.Fprintln(r.Stdout, "Vercel deployment guide:")
+	for _, command := range commands {
+		fmt.Fprintf(r.Stdout, "  %s\n", command)
 	}
-	fmt.Fprintf(r.Stdout, "Saved local label %q and ChatGPT label %q in AGENTBOX_API_KEYS.\n", strings.TrimSpace(*localLabel), strings.TrimSpace(*chatgptLabel))
-	if !*skipProfile {
-		fmt.Fprintf(r.Stdout, "Saved local CLI profile %q in %s.\n", strings.TrimSpace(*profileName), profiles.DefaultConfigPath())
-	}
-	fmt.Fprintln(r.Stdout, "Next steps:")
-	fmt.Fprintln(r.Stdout, "1. Run bun run db:migrate with the backend production env loaded.")
-	fmt.Fprintf(r.Stdout, "2. Run agentbox --profile %s doctor\n", strings.TrimSpace(*profileName))
-	fmt.Fprintf(r.Stdout, "3. Run agentbox --profile %s connect chatgpt\n", strings.TrimSpace(*profileName))
+	fmt.Fprintln(r.Stdout, "\nThe Go backend is required. The Next.js dashboard is optional and deploys separately.")
 	return nil
 }
 
-func (r *Runner) runKeys(args []string) error {
+type remoteAPIKey struct {
+	Name      string `json:"name"`
+	Secret    string `json:"key"`
+	KeyMasked string `json:"key_masked"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (r *Runner) runKeys(args []string, profileName string) error {
 	if len(args) == 0 {
 		return errors.New(`Usage: agentbox keys [create|list|revoke]`)
 	}
+	if isHelpArg(args[0]) {
+		r.printCommandHelp("keys")
+		return nil
+	}
+	if len(args) > 1 && isHelpArg(args[1]) {
+		r.printKeysSubcommandHelp(args[0])
+		return nil
+	}
 	switch args[0] {
 	case "create":
-		return r.runKeysCreate(args[1:])
+		return r.runKeysCreate(args[1:], profileName)
 	case "list":
-		return r.runKeysList(args[1:])
+		return r.runKeysList(args[1:], profileName)
 	case "revoke":
-		return r.runKeysRevoke(args[1:])
+		return r.runKeysRevoke(args[1:], profileName)
 	default:
 		return fmt.Errorf("Unknown keys command %q.", args[0])
 	}
 }
 
-func (r *Runner) runKeysCreate(args []string) error {
+func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	fs := newFlagSet("keys create")
-	author := fs.String("author", "", "message author for this key")
-	project := fs.String("project", "", "optional Vercel project to update")
-	environment := fs.String("environment", "production", "Vercel environment name")
+	baseURL := fs.String("base-url", "", "Agentbox backend URL")
+	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys create <label> [--author <author>] [--project <name>] [--environment production] [--json]")
+		return errors.New("Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]")
 	}
-	label := strings.TrimSpace(fs.Arg(0))
-	if label == "" {
-		return errors.New("Key label is required.")
-	}
-	entry := auth.KeyConfig{Name: label, Key: mustGenerateSecret(), Author: defaultString(strings.TrimSpace(*author), label)}
-	keys, err := r.loadVercelAPIKeys(strings.TrimSpace(*project), strings.TrimSpace(*environment))
+	key, err := r.createRemoteAPIKeyForProfile(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(fs.Arg(0)))
 	if err != nil {
 		return err
 	}
-	keys = appendOrReplaceKey(keys, entry)
-	if strings.TrimSpace(*project) != "" {
-		if err := r.replaceVercelEnv(strings.TrimSpace(*project), strings.TrimSpace(*environment), map[string]string{
-			"AGENTBOX_API_KEYS": serializeAPIKeys(keys),
-		}); err != nil {
-			return err
-		}
-	}
 	result := map[string]any{
-		"label":           entry.Name,
-		"author":          entry.Author,
-		"key":             entry.Key,
-		"key_masked":      profiles.MaskSecret(entry.Key),
-		"env_value":       serializeAPIKeys(keys),
-		"vercel_project":  nullString(strings.TrimSpace(*project)),
-		"environment":     strings.TrimSpace(*environment),
+		"name":       key.Name,
+		"key":        key.Secret,
+		"key_masked": key.KeyMasked,
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, result)
 	}
-	fmt.Fprintf(r.Stdout, "Created labeled key %q for author %q.\n", entry.Name, entry.Author)
-	if strings.TrimSpace(*project) != "" {
-		fmt.Fprintf(r.Stdout, "Updated AGENTBOX_API_KEYS on Vercel project %q.\n", strings.TrimSpace(*project))
-	}
-	fmt.Fprintf(r.Stdout, "Secret: %s\n", entry.Key)
+	fmt.Fprintf(r.Stdout, "Created API key %q.\n", key.Name)
+	fmt.Fprintf(r.Stdout, "Secret: %s\n", key.Secret)
+	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
 	return nil
 }
 
-func (r *Runner) runKeysList(args []string) error {
+func (r *Runner) runKeysList(args []string, profileName string) error {
 	fs := newFlagSet("keys list")
-	project := fs.String("project", "", "optional Vercel project to read")
-	environment := fs.String("environment", "production", "Vercel environment name")
+	baseURL := fs.String("base-url", "", "Agentbox backend URL")
+	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	keys, err := r.loadVercelAPIKeys(strings.TrimSpace(*project), strings.TrimSpace(*environment))
+	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
 	if err != nil {
 		return err
 	}
-	type listedKey struct {
-		Label     string `json:"label"`
-		Author    string `json:"author"`
-		KeyMasked string `json:"key_masked"`
+	var data struct {
+		Keys []remoteAPIKey `json:"keys"`
 	}
-	result := make([]listedKey, 0, len(keys))
-	for _, key := range keys {
-		result = append(result, listedKey{Label: key.Name, Author: key.Author, KeyMasked: profiles.MaskSecret(key.Key)})
+	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys", http.MethodGet, nil, &data); err != nil {
+		return err
 	}
 	if *jsonOut {
-		return printJSON(r.Stdout, map[string]any{"keys": result})
+		return printJSON(r.Stdout, data)
 	}
-	if len(result) == 0 {
+	if len(data.Keys) == 0 {
 		fmt.Fprintln(r.Stdout, "No Agentbox API keys found.")
 		return nil
 	}
-	for _, key := range result {
-		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\n", key.Label, key.Author, key.KeyMasked)
+	for _, key := range data.Keys {
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\n", key.Name, key.KeyMasked, key.UpdatedAt)
 	}
 	return nil
 }
 
-func (r *Runner) runKeysRevoke(args []string) error {
+func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 	fs := newFlagSet("keys revoke")
-	project := fs.String("project", "", "Vercel project to update")
-	environment := fs.String("environment", "production", "Vercel environment name")
+	baseURL := fs.String("base-url", "", "Agentbox backend URL")
+	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys revoke <label> --project <name> [--environment production] [--json]")
+		return errors.New("Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]")
 	}
-	projectName := strings.TrimSpace(*project)
-	if projectName == "" {
-		return errors.New("keys revoke requires --project so AGENTBOX_API_KEYS can be updated.")
-	}
-	label := strings.TrimSpace(fs.Arg(0))
-	keys, err := r.loadVercelAPIKeys(projectName, strings.TrimSpace(*environment))
+	name := strings.TrimSpace(fs.Arg(0))
+	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
 	if err != nil {
 		return err
 	}
-	filtered := make([]auth.KeyConfig, 0, len(keys))
-	removed := false
-	for _, key := range keys {
-		if key.Name == label {
-			removed = true
-			continue
-		}
-		filtered = append(filtered, key)
+	var data struct {
+		Revoked string `json:"revoked"`
 	}
-	if !removed {
-		return fmt.Errorf("Unknown Agentbox key %q.", label)
-	}
-	if err := r.replaceVercelEnv(projectName, strings.TrimSpace(*environment), map[string]string{
-		"AGENTBOX_API_KEYS": serializeAPIKeys(filtered),
-	}); err != nil {
+	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys/"+url.PathEscape(name), http.MethodDelete, nil, &data); err != nil {
 		return err
 	}
 	if *jsonOut {
-		return printJSON(r.Stdout, map[string]any{
-			"revoked_label": label,
-			"remaining":     len(filtered),
-			"env_value":     serializeAPIKeys(filtered),
-		})
+		return printJSON(r.Stdout, data)
 	}
-	fmt.Fprintf(r.Stdout, "Revoked labeled key %q on Vercel project %q.\n", label, projectName)
+	fmt.Fprintf(r.Stdout, "Revoked API key %q.\n", data.Revoked)
 	return nil
 }
 
-func (r *Runner) loadVercelAPIKeys(project string, environment string) ([]auth.KeyConfig, error) {
-	if project == "" {
-		return nil, nil
-	}
-	if _, _, err := r.RunExternal("vercel", []string{"link", "--yes", "--project", project}, "", nil); err != nil {
-		return nil, fmt.Errorf("vercel link failed: %w", err)
-	}
-	tempDir, err := os.MkdirTemp("", "agentbox-vercel-env-*")
+func (r *Runner) createRemoteAPIKeyForProfile(profileName string, explicitBaseURL string, explicitAdminKey string, name string) (remoteAPIKey, error) {
+	baseURL, adminKey, err := r.adminConnection(profileName, explicitBaseURL, explicitAdminKey)
 	if err != nil {
-		return nil, err
+		return remoteAPIKey{}, err
 	}
-	defer os.RemoveAll(tempDir)
-	envPath := filepath.Join(tempDir, ".env")
-	_, stderr, err := r.RunExternal("vercel", []string{"env", "pull", envPath, "--environment", environment}, "", nil)
-	if err != nil {
-		return nil, formatCommandError("vercel env pull", err, stderr)
-	}
-	values, err := readDotEnvFile(envPath)
-	if err != nil {
-		return nil, err
-	}
-	return auth.ParseAPIKeys(values["AGENTBOX_API_KEYS"])
+	return r.createRemoteAPIKey(baseURL, adminKey, name)
 }
 
-func (r *Runner) replaceVercelEnv(project string, environment string, values map[string]string) error {
-	if project == "" {
-		return errors.New("Vercel project is required.")
+func (r *Runner) createRemoteAPIKey(baseURL string, adminKey string, name string) (remoteAPIKey, error) {
+	if strings.TrimSpace(name) == "" {
+		return remoteAPIKey{}, errors.New("API key name is required.")
 	}
-	if environment == "" {
-		environment = "production"
+	payload, _ := json.Marshal(map[string]string{"name": strings.TrimSpace(name)})
+	var data struct {
+		Key remoteAPIKey `json:"key"`
 	}
-	if _, _, err := r.RunExternal("vercel", []string{"link", "--yes", "--project", project}, "", nil); err != nil {
-		return fmt.Errorf("vercel link failed: %w", err)
+	if err := r.adminRequest(baseURL, adminKey, "/api/admin/keys", http.MethodPost, bytes.NewReader(payload), &data); err != nil {
+		return remoteAPIKey{}, err
 	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		value := values[key]
-		_, _, _ = r.RunExternal("vercel", []string{"env", "rm", key, environment, "--yes"}, "", nil)
-		_, stderr, err := r.RunExternal("vercel", []string{"env", "add", key, environment}, value+"\n", nil)
-		if err != nil {
-			return formatCommandError("vercel env add "+key, err, stderr)
+	return data.Key, nil
+}
+
+func (r *Runner) adminConnection(profileName string, explicitBaseURL string, explicitAdminKey string) (string, string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(explicitBaseURL), "/")
+	if baseURL == "" {
+		if value := strings.TrimSpace(os.Getenv("AGENTBOX_BASE_URL")); value != "" {
+			baseURL = strings.TrimRight(value, "/")
+		} else if value := strings.TrimSpace(os.Getenv("AGENTBOX_URL")); value != "" {
+			baseURL = strings.TrimRight(value, "/")
 		}
 	}
+	if baseURL == "" {
+		resolved, err := profiles.Resolve(profileName)
+		if err != nil {
+			return "", "", err
+		}
+		if resolved != nil {
+			baseURL = strings.TrimRight(resolved.BaseURL, "/")
+		}
+	}
+	if baseURL == "" {
+		return "", "", fmt.Errorf("Set --base-url, AGENTBOX_BASE_URL, or configure a profile in %s.", profiles.DefaultConfigPath())
+	}
+	adminKey := strings.TrimSpace(explicitAdminKey)
+	if adminKey == "" {
+		adminKey = strings.TrimSpace(os.Getenv("AGENTBOX_ADMIN_KEY"))
+	}
+	if adminKey == "" {
+		return "", "", errors.New("Set --admin-key or AGENTBOX_ADMIN_KEY to use the admin API.")
+	}
+	return baseURL, adminKey, nil
+}
+
+func (r *Runner) adminRequest(baseURL string, adminKey string, path string, method string, body io.Reader, target any) error {
+	endpoint, err := url.JoinPath(strings.TrimRight(baseURL, "/"), path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(method, endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("x-agentbox-admin-key", adminKey)
+	if body != nil {
+		req.Header.Set("content-type", "application/json")
+	}
+	res, err := r.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	bytes, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	if len(bytes) > 0 && target != nil {
+		if err := json.Unmarshal(bytes, target); err != nil {
+			return err
+		}
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		var payload struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(bytes, &payload)
+		if payload.Error != "" {
+			return errors.New(payload.Error)
+		}
+		return fmt.Errorf("Request failed with HTTP %d", res.StatusCode)
+	}
 	return nil
+}
+
+func (r *Runner) printKeysSubcommandHelp(command string) {
+	usage := map[string]string{
+		"create": `Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]
+
+Create or replace a named DB-backed API key through the backend admin API. The secret is printed once.`,
+		"list": `Usage: agentbox keys list [--base-url <url>] [--admin-key <key>] [--json]
+
+List DB-backed API key names and masked key values through the backend admin API.`,
+		"revoke": `Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]
+
+Revoke a DB-backed API key by name through the backend admin API.`,
+	}
+	if text, ok := usage[command]; ok {
+		fmt.Fprintln(r.Stdout, text)
+		return
+	}
+	r.printCommandHelp("keys")
+}
+
+func printChatGPTSteps(output io.Writer) {
+	steps := []string{
+		"Open ChatGPT.",
+		"Go to Apps -> Advanced settings.",
+		"Turn on developer mode.",
+		"Choose Create app.",
+		"Select no auth.",
+		"Paste the MCP URL.",
+	}
+	printNumberedSteps(output, "ChatGPT setup:", steps)
+}
+
+func printNumberedSteps(output io.Writer, title string, steps []string) {
+	fmt.Fprintln(output, title)
+	for i, step := range steps {
+		fmt.Fprintf(output, "%d. %s\n", i+1, step)
+	}
 }
 
 func promptRequired(reader *bufio.Reader, output io.Writer, label string) (string, error) {
@@ -551,84 +512,4 @@ func promptWithDefault(reader *bufio.Reader, output io.Writer, label string, fal
 		return fallback, nil
 	}
 	return value, nil
-}
-
-func mustGenerateSecret() string {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(bytes)
-}
-
-func appendOrReplaceKey(keys []auth.KeyConfig, entry auth.KeyConfig) []auth.KeyConfig {
-	next := make([]auth.KeyConfig, 0, len(keys)+1)
-	replaced := false
-	for _, key := range keys {
-		if key.Name == entry.Name {
-			next = append(next, entry)
-			replaced = true
-			continue
-		}
-		next = append(next, key)
-	}
-	if !replaced {
-		next = append(next, entry)
-	}
-	sort.Slice(next, func(i int, j int) bool {
-		return next[i].Name < next[j].Name
-	})
-	return next
-}
-
-func serializeAPIKeys(keys []auth.KeyConfig) string {
-	if len(keys) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		if strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Key) == "" || strings.TrimSpace(key.Author) == "" {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s:%s:%s", strings.TrimSpace(key.Name), strings.TrimSpace(key.Key), strings.TrimSpace(key.Author)))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ",")
-}
-
-var vercelURLPattern = regexp.MustCompile(`https://[a-zA-Z0-9.-]+\.vercel\.app`)
-
-func firstVercelURL(output string) string {
-	match := vercelURLPattern.FindString(output)
-	return strings.TrimRight(match, "/")
-}
-
-func readDotEnvFile(path string) (map[string]string, error) {
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	values := map[string]string{}
-	for _, line := range strings.Split(string(bytes), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, found := strings.Cut(line, "=")
-		if !found {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		value = strings.Trim(value, `"`)
-		values[strings.TrimSpace(key)] = value
-	}
-	return values, nil
-}
-
-func formatCommandError(action string, err error, stderr string) error {
-	stderr = strings.TrimSpace(stderr)
-	if stderr == "" {
-		return fmt.Errorf("%s failed: %w", action, err)
-	}
-	return fmt.Errorf("%s failed: %s", action, stderr)
 }

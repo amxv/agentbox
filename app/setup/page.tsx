@@ -4,16 +4,15 @@ import Link from "next/link";
 const repoUrl = "https://github.com/amxv/agentbox";
 
 const requirements = [
-  "A Vercel account with permission to create two projects or services.",
+  "A Vercel account with permission to create a backend project and, optionally, a dashboard project.",
   "A Postgres database connection string for DATABASE_URL.",
   "A Cloudflare R2 bucket plus R2 credentials.",
-  "The npm CLI install for agentbox on the local machine you will use for smoke tests and MCP setup."
+  "The npm CLI install for agentbox on the local machine you will use for setup, smoke tests, and MCP URL generation."
 ];
 
 const backendEnv = [
   "DATABASE_URL",
-  "AGENTBOX_API_KEYS",
-  "AGENTBOX_ADMIN_KEY or AGENTBOX_ADMIN_KEYS",
+  "AGENTBOX_ADMIN_KEY",
   "R2_ACCOUNT_ID",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
@@ -41,9 +40,9 @@ const steps = [
     code: "DATABASE_URL=postgres://USER:PASSWORD@HOST:PORT/DB?sslmode=require\nR2_ACCOUNT_ID=<your-r2-account-id>\nR2_ACCESS_KEY_ID=<your-r2-access-key-id>\nR2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>\nR2_BUCKET=<your-r2-bucket>"
   },
   {
-    label: "3. Mint labeled API keys",
-    body: "Agentbox currently uses env-configured API keys. Make one labeled key for ChatGPT and one for the local machine. The compact format is name:key:author.",
-    code: "openssl rand -hex 32   # run once for chatgpt\nopenssl rand -hex 32   # run once for local\n\nAGENTBOX_API_KEYS=\"chatgpt:CHATGPT_KEY:chatgpt,local:LOCAL_KEY:local\"\nAGENTBOX_ADMIN_KEY=\"ADMIN_KEY\""
+    label: "3. Create the admin key",
+    body: "The backend starts with one admin credential. It is used only for setup and key management, not for normal Agentbox API or MCP traffic.",
+    code: "openssl rand -hex 32\n\nAGENTBOX_ADMIN_KEY=\"ADMIN_KEY_FROM_OPENSSL\""
   },
   {
     label: "4. Deploy the Go backend",
@@ -53,7 +52,7 @@ const steps = [
   {
     label: "5. Configure backend environment variables",
     body: "Set the required production environment on the backend project. Optional values can be added only if you need them.",
-    code: "vercel env add DATABASE_URL production\nvercel env add AGENTBOX_API_KEYS production\nvercel env add AGENTBOX_ADMIN_KEY production\nvercel env add R2_ACCOUNT_ID production\nvercel env add R2_ACCESS_KEY_ID production\nvercel env add R2_SECRET_ACCESS_KEY production\nvercel env add R2_BUCKET production\nvercel env add AGENTBOX_ENV production"
+    code: "vercel env add DATABASE_URL production\nvercel env add AGENTBOX_ADMIN_KEY production\nvercel env add R2_ACCOUNT_ID production\nvercel env add R2_ACCESS_KEY_ID production\nvercel env add R2_SECRET_ACCESS_KEY production\nvercel env add R2_BUCKET production\nvercel env add AGENTBOX_ENV production"
   },
   {
     label: "6. Run the migration once",
@@ -61,23 +60,23 @@ const steps = [
     code: "bun run db:migrate"
   },
   {
-    label: "7. Deploy the web dashboard",
-    body: "The dashboard project owns /, /threads, and same-origin proxy routes under app/api/*. Point it at the Go backend URL before deploying.",
+    label: "7. Initialize API keys",
+    body: "Use the admin key once to create a local CLI key and a ChatGPT key in Postgres. The local key is saved to your profile; the ChatGPT key is printed with the MCP URL.",
+    code: "agentbox init \\\n  --profile-name prod \\\n  --base-url https://your-agentbox-go.vercel.app \\\n  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\n  --local-key-name local \\\n  --chatgpt-key-name chatgpt\n\nagentbox doctor\nagentbox list"
+  },
+  {
+    label: "8. Deploy the optional web dashboard",
+    body: "The dashboard owns /, /threads, and same-origin proxy routes under app/api/*. It is optional; the Go backend is the required service.",
     code: "vercel link --yes --project agentbox\nvercel env rm AGENTBOX_BACKEND_URL production --yes\nprintf 'https://your-agentbox-go.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production\nvercel --prod --yes -A deploy/vercel/dashboard/vercel.json"
   },
   {
-    label: "8. Save a local CLI profile",
-    body: "Use the public same-origin dashboard URL as the CLI base URL so local commands and the MCP URL use the final product surface.",
-    code: "agentbox profiles add prod \\\n  --base-url https://your-agentbox.vercel.app \\\n  --api-key LOCAL_KEY \\\n  --activate\nagentbox doctor\nagentbox list"
-  },
-  {
-    label: "9. Get the MCP URL from the CLI",
-    body: "Once the local profile is configured with the ChatGPT-capable deployment URL, use the real CLI command to print the MCP URL.",
-    code: "agentbox mcp-url"
+    label: "9. Manage keys later",
+    body: "Key management goes through the backend admin API and Postgres. The CLI does not rewrite Vercel environment variables.",
+    code: "agentbox keys list --admin-key \"$AGENTBOX_ADMIN_KEY\"\nagentbox keys create worker --admin-key \"$AGENTBOX_ADMIN_KEY\"\nagentbox keys revoke worker --admin-key \"$AGENTBOX_ADMIN_KEY\""
   },
   {
     label: "10. Save it in ChatGPT",
-    body: "Use the generated MCP URL in ChatGPT exactly through the developer-mode app flow. Agentbox currently expects no auth in the ChatGPT app config because the key is already embedded in the URL.",
+    body: "Use the ChatGPT MCP URL printed by agentbox init or agentbox connect chatgpt. Agentbox expects no auth in the ChatGPT app config because the key is already embedded in the URL.",
     code: "Apps -> Advanced settings -> turn on developer mode -> Create app -> select no auth -> paste the MCP URL"
   }
 ];
@@ -110,10 +109,10 @@ export default function SetupPage() {
           <p className="section-label">Deploy your own instance</p>
           <h1>Run Agentbox on your own Vercel account without guessing the order.</h1>
           <p className="hero__lede">
-            This guide covers the real split-service deployment flow in this repo: npm CLI install, Go backend deploy, dashboard deploy, env setup, labeled keys, local profile configuration, and the final ChatGPT MCP connection.
+            This guide covers the split-service deployment flow in this repo: npm CLI install, Go backend deploy, Postgres migrations, DB-backed API keys, optional dashboard deploy, and the final ChatGPT MCP connection.
           </p>
           <p className="hero__annotation">
-            Agentbox currently uses env-configured labeled API keys. There is no self-serve key UI in the dashboard yet, so this setup keeps the current operational model explicit.
+            The Go backend is the core Agentbox service. The Next.js dashboard is optional and deploys separately when you want a browser inbox.
           </p>
           <div className="hero__actions">
             <a className="button button--solid" href="#steps">Start setup</a>

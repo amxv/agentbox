@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"strings"
 
 	"agentbox/internal/agentbox/assets"
 	"agentbox/internal/agentbox/messageformat"
@@ -11,6 +14,7 @@ import (
 )
 
 var ErrThreadNotFound = errors.New("Thread not found.")
+var ErrAPIKeyNotFound = errors.New("API key not found.")
 
 type Repository interface {
 	EnsureSchema(ctx context.Context) error
@@ -19,6 +23,10 @@ type Repository interface {
 	GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error)
 	GetAsset(ctx context.Context, assetID string) (*types.Asset, error)
 	PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error)
+	CreateAPIKey(ctx context.Context, name string, key string) (types.APIKey, error)
+	ListAPIKeys(ctx context.Context) ([]types.APIKey, error)
+	RevokeAPIKey(ctx context.Context, name string) (bool, error)
+	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error)
 }
 
 type Service struct {
@@ -109,6 +117,60 @@ func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset,
 		MimeType:         asset.MimeType,
 		ExpiresInSeconds: validate.ClampSignedURLExpiry(expiresInSeconds),
 	})
+}
+
+func (s *Service) CreateAPIKey(ctx context.Context, name string) (types.APIKey, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return types.APIKey{}, errors.New("API key name is required.")
+	}
+	secret, err := generateSecret()
+	if err != nil {
+		return types.APIKey{}, err
+	}
+	return s.repo.CreateAPIKey(ctx, name, secret)
+}
+
+func (s *Service) ListAPIKeys(ctx context.Context) ([]types.APIKey, error) {
+	return s.repo.ListAPIKeys(ctx)
+}
+
+func (s *Service) RevokeAPIKey(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("API key name is required.")
+	}
+	removed, err := s.repo.RevokeAPIKey(ctx, name)
+	if err != nil {
+		return err
+	}
+	if !removed {
+		return ErrAPIKeyNotFound
+	}
+	return nil
+}
+
+func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types.Actor, error) {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return nil, nil
+	}
+	key, err := s.repo.FindAPIKeyBySecret(ctx, secret)
+	if err != nil {
+		return nil, err
+	}
+	if key == nil {
+		return nil, nil
+	}
+	return &types.Actor{Name: key.Name, KeyName: key.Name}, nil
+}
+
+func generateSecret() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 type PostMessageParams struct {

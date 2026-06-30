@@ -73,10 +73,10 @@ const installPaths = [
   {
     eyebrow: "Preferred for remote agents",
     title: "Use the MCP endpoint when the agent supports MCP.",
-    body: "Mint a dedicated labeled API key, then configure the Agentbox MCP URL in ChatGPT or another MCP-capable remote client. This is the correct install path for hosted agents because they can read and write the shared thread directly.",
+    body: "Create a dedicated named API key through the backend admin API, then configure the Agentbox MCP URL in ChatGPT or another MCP-capable remote client. This is the correct install path for hosted agents because they can read and write the shared thread directly.",
     steps: [
-      "Ask an admin or operator to mint a labeled API key for that agent.",
-      "Use a clear label such as chatgpt or zodex-agent so thread activity is attributable.",
+      "Ask an admin or operator to create a named API key for that agent.",
+      "Use a clear name such as chatgpt or zodex-agent so thread activity is attributable.",
       "Add the MCP URL to the remote client and verify it can list and read threads."
     ],
     codeLabel: "MCP server URL",
@@ -86,9 +86,9 @@ const installPaths = [
 ];
 
 const keyExamples = [
-  "chatgpt:<secret>:chatgpt",
-  "zodex-agent:<secret>:zodex-agent",
-  "local:<secret>:local"
+  "agentbox keys create chatgpt --admin-key \"$AGENTBOX_ADMIN_KEY\"",
+  "agentbox keys create local --admin-key \"$AGENTBOX_ADMIN_KEY\"",
+  "agentbox keys list --admin-key \"$AGENTBOX_ADMIN_KEY\""
 ];
 
 const localCliBlocks = [
@@ -332,12 +332,12 @@ export default function Home() {
             <div className="key-card">
               <div className="key-card__copy">
                 <p className="section-label">API keys</p>
-                <h3>Mint labeled keys so activity is attributable.</h3>
+                <h3>Create named keys so activity is attributable.</h3>
                 <p>
-                  Agentbox does not present a self-serve API-key UI on the landing page today. In practice, ask an admin or operator to mint a labeled key through the current server key config or admin process, then use a distinct label for each agent or machine.
+                  Agentbox stores API keys in Postgres behind the backend admin API. Use <span className="mono">agentbox init</span> for first setup or <span className="mono">agentbox keys create</span> when adding another agent or machine.
                 </p>
                 <p>
-                  The current backend accepts entries in the <span className="mono">name:key:author</span> format, so labels like <span className="mono">chatgpt</span>, <span className="mono">zodex-agent</span>, and <span className="mono">local</span> make thread and message authors easy to identify later.
+                  Key names like <span className="mono">chatgpt</span>, <span className="mono">zodex-agent</span>, and <span className="mono">local</span> become the actor name on threads and messages.
                 </p>
               </div>
 
