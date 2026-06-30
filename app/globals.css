@@ -311,6 +311,27 @@ pre,
   text-overflow: ellipsis;
 }
 
+.terminal-card--multiline {
+  gap: 0.75rem;
+}
+
+.terminal-card--multiline span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.terminal-card--multiline pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+  color: var(--bg);
+  opacity: 0.92;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
 .section-heading {
   max-width: 48rem;
   margin-bottom: 4rem;
@@ -333,11 +354,66 @@ pre,
   gap: 2rem;
 }
 
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2rem;
+}
+
 .card {
   padding: 2rem;
   border: 1px solid var(--line);
   background: var(--surface);
   border-radius: 4px;
+}
+
+.install-card,
+.key-card {
+  display: grid;
+  gap: 1.5rem;
+  padding: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.install-card__copy,
+.key-card__copy {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.install-card h3,
+.key-card h3 {
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.install-card p,
+.key-card p,
+.install-steps {
+  color: var(--muted);
+}
+
+.install-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.install-steps li::marker {
+  color: var(--ink);
+}
+
+.install-note {
+  font-size: 0.875rem;
+}
+
+.key-card {
+  grid-template-columns: minmax(0, 1.5fr) minmax(18rem, 1fr);
+  gap: 2rem;
+  margin-top: 2rem;
 }
 
 .card h3 {
@@ -935,7 +1011,9 @@ pre,
   .split-section,
   .capability-grid,
   .proof-grid,
-  .docs-grid {
+  .docs-grid,
+  .install-grid,
+  .key-card {
     grid-template-columns: 1fr;
   }
 
