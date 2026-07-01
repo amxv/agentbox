@@ -660,13 +660,13 @@ pre,
 }
 
 .dashboard-main {
-  padding: 5rem 0;
+  padding: 4rem 0;
 }
 
 .dashboard-header {
   display: grid;
-  gap: 2rem;
-  padding-bottom: 4rem;
+  gap: 1.5rem;
+  padding-bottom: 2.5rem;
 }
 
 .dashboard-header__row {
@@ -750,7 +750,7 @@ pre,
 .thread-card:hover,
 .message-card:hover {
   border-color: var(--ink);
-  background: var(--soft);
+  background: var(--surface);
 }
 
 .thread-title,
@@ -1766,7 +1766,11 @@ pre,
   }
 }
 
-.dashboard-stack,
+.dashboard-stack {
+  display: grid;
+  gap: 1.5rem;
+}
+
 .composer-shell,
 .composer-card {
   display: grid;
@@ -1776,6 +1780,7 @@ pre,
 .composer-toggle-row {
   display: flex;
   justify-content: flex-start;
+  margin-bottom: 0.75rem;
 }
 
 .composer-shell,
@@ -1825,10 +1830,10 @@ pre,
   display: grid;
   gap: 0.35rem;
   place-items: center;
-  min-height: 5.25rem;
+  min-height: 4.75rem;
   border: 1px dashed var(--line-strong);
   border-radius: 4px;
-  background: var(--soft);
+  background: transparent;
   color: var(--ink);
   cursor: pointer;
   padding: 1rem;
@@ -1839,7 +1844,7 @@ pre,
 .dropzone:focus-visible,
 .dropzone:hover {
   border-color: var(--ink);
-  background: var(--surface);
+  background: transparent;
 }
 
 .dropzone__hint {
