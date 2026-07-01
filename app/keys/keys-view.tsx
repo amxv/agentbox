@@ -262,7 +262,26 @@ export function KeysView() {
                 </div>
               )}
 
-              {loading && <p className="empty-state">Loading keys…</p>}
+              {loading && (
+                <div className="skeleton-list" aria-label="Loading keys" aria-busy="true">
+                  <div className="skeleton-key-table" aria-hidden="true">
+                    <div className="skeleton-key-row skeleton-key-row--head">
+                      <span className="skeleton-line skeleton-line--short" />
+                      <span className="skeleton-line skeleton-line--medium" />
+                      <span className="skeleton-line skeleton-line--medium" />
+                      <span className="skeleton-line skeleton-line--tiny" />
+                    </div>
+                    {Array.from({ length: 3 }).map((_, index) => (
+                      <div className="skeleton-key-row" key={index}>
+                        <span className="skeleton-line skeleton-line--medium" />
+                        <span className="skeleton-line skeleton-line--long" />
+                        <span className="skeleton-line skeleton-line--medium" />
+                        <span className="skeleton-pill" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {!loading && keys.length === 0 && <p className="empty-state">No API keys found.</p>}
               {!loading && keys.length > 0 && (
                 <div className="key-table" role="table" aria-label="Active API keys">

@@ -133,7 +133,20 @@ export function InboxView() {
           </form>
         ) : (
           <section className="thread-list" aria-label="Agentbox threads">
-            {loading && <p className="empty-state">Loading threads…</p>}
+            {loading && (
+              <div className="skeleton-list" aria-label="Loading threads" aria-busy="true">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div className="skeleton-thread-card" aria-hidden="true" key={index}>
+                    <div className="skeleton-card-meta">
+                      <span className="skeleton-line skeleton-line--medium" />
+                      <span className="skeleton-line skeleton-line--short" />
+                    </div>
+                    <span className="skeleton-line skeleton-line--long" />
+                    <span className="skeleton-line skeleton-line--short" />
+                  </div>
+                ))}
+              </div>
+            )}
             {error && (
               <div className="error-card">
                 <strong>Could not load inbox.</strong>

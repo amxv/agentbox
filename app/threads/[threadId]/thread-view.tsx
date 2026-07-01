@@ -153,7 +153,26 @@ export function ThreadView({ threadId }: { threadId: string }) {
         </section>
 
         <section className="message-list" aria-label="Thread messages">
-          {loading && <p className="empty-state">Loading thread…</p>}
+          {loading && (
+            <div className="skeleton-list" aria-label="Loading thread" aria-busy="true">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <div className="skeleton-message-card" aria-hidden="true" key={index}>
+                  <div className="skeleton-message-main">
+                    <span className="skeleton-pill skeleton-pill--small" />
+                    <div className="skeleton-stack">
+                      <span className="skeleton-line skeleton-line--medium" />
+                      <span className="skeleton-line skeleton-line--long" />
+                    </div>
+                  </div>
+                  <div className="skeleton-meta-row">
+                    <span className="skeleton-pill" />
+                    <span className="skeleton-pill" />
+                    <span className="skeleton-circle" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {error && (
             <div className="error-card">
               <strong>Could not load thread.</strong>
