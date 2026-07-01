@@ -463,6 +463,19 @@ pre,
   border-radius: 4px;
 }
 
+.card--compact {
+  padding: 1rem 1.25rem;
+}
+
+.card--compact .card-title {
+  margin-bottom: 0.35rem;
+  font-size: clamp(1.25rem, 2.4vw, 1.5rem);
+}
+
+.card--compact .copy {
+  font-size: 0.86rem;
+}
+
 .install-card,
 .key-card {
   display: grid;
@@ -665,9 +678,9 @@ pre,
 
 .dashboard-title {
   max-width: 48rem;
-  margin-bottom: 1rem;
-  font-size: clamp(2.5rem, 6vw, 4.75rem);
-  line-height: 0.98;
+  margin-bottom: 0.75rem;
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1.05;
 }
 
 .dashboard-copy {
@@ -1758,6 +1771,11 @@ pre,
 .composer-card {
   display: grid;
   gap: 1rem;
+}
+
+.composer-toggle-row {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .composer-shell,

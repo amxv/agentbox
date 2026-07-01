@@ -102,7 +102,6 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
           }}
         />
         <span>Drop files here or click to attach</span>
-        <span className="dropzone__hint">Files upload directly to R2 before the message is posted.</span>
       </div>
       {files.length > 0 && (
         <div className="file-chip-list" aria-label="Selected files">

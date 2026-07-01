@@ -69,6 +69,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showReplyComposer, setShowReplyComposer] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
 
   const loadThread = useCallback(async function loadThread(adminKey: string) {
@@ -106,6 +107,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
     const actorKey = await ensureDashboardActorKey(key);
     await postDashboardMessage(actorKey, threadId, body, files);
     await loadThread(key);
+    setShowReplyComposer(false);
   }
   const assetCount = useMemo(() => {
     return thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0;
@@ -154,7 +156,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
               </div>
             </div>
             {thread && (
-              <div className="card">
+              <div className="card card--compact">
                 <p className="stat-label">Contents</p>
                 <h2 className="card-title">{thread.messages.length} messages</h2>
                 <p className="copy">{assetCount} attachments in this thread.</p>
@@ -163,12 +165,20 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </div>
         </section>
 
-        <MessageComposer
-          label="Reply"
-          placeholder="Post a message. Markdown is detected automatically."
-          submitLabel="Post message"
-          onSubmit={postReply}
-        />
+        <div className="composer-toggle-row">
+          <button className="button button--solid" type="button" onClick={() => setShowReplyComposer((value) => !value)}>
+            {showReplyComposer ? "Close" : "+ Reply"}
+          </button>
+        </div>
+
+        {showReplyComposer && (
+          <MessageComposer
+            label="Reply"
+            placeholder="Post a message. Markdown is detected automatically."
+            submitLabel="Post message"
+            onSubmit={postReply}
+          />
+        )}
 
         <section className="message-list" aria-label="Thread messages">
           {loading && (

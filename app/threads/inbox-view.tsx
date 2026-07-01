@@ -35,6 +35,7 @@ export function InboxView() {
   });
   const [threads, setThreads] = useState<Thread[]>([]);
   const [newThreadTitle, setNewThreadTitle] = useState("");
+  const [showCreateComposer, setShowCreateComposer] = useState(false);
   const [creatingEmpty, setCreatingEmpty] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +88,7 @@ export function InboxView() {
     setThreads([]);
     setError(null);
     setCreateError(null);
+    setShowCreateComposer(false);
   }
 
   async function createThreadOnly() {
@@ -98,6 +100,7 @@ export function InboxView() {
       const actorKey = await ensureDashboardActorKey(key);
       const thread = await createDashboardThread(actorKey, title);
       setNewThreadTitle("");
+      setShowCreateComposer(false);
       router.push(`/threads/${thread.id}`);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err));
@@ -113,6 +116,7 @@ export function InboxView() {
     const thread = await createDashboardThread(actorKey, title);
     await postDashboardMessage(actorKey, thread.id, body, files);
     setNewThreadTitle("");
+    setShowCreateComposer(false);
     router.push(`/threads/${thread.id}`);
   }
 
@@ -142,7 +146,7 @@ export function InboxView() {
               <p className="dashboard-copy">Inspect task threads, create new threads, and post replies as the built-in user actor.</p>
             </div>
             {key && (
-              <div className="card">
+              <div className="card card--compact">
                 <p className="stat-label">Threads</p>
                 <h2 className="card-title">{threads.length}</h2>
                 <p className="copy">{latestUpdatedAt ? `Last updated ${formatDate(new Date(latestUpdatedAt).toISOString())}` : "No activity yet."}</p>
@@ -169,33 +173,41 @@ export function InboxView() {
           </form>
         ) : (
           <div className="dashboard-stack">
-            <section className="composer-shell" aria-label="Create thread">
-              <div className="composer-title-row">
-                <input
-                  className="form-input"
-                  value={newThreadTitle}
-                  onChange={(event) => setNewThreadTitle(event.target.value)}
-                  placeholder="New thread title"
-                  type="text"
-                />
-                <button className="button button--ghost" disabled={creatingEmpty || !newThreadTitle.trim()} type="button" onClick={() => void createThreadOnly()}>
-                  {creatingEmpty ? "Creating…" : "Create empty"}
-                </button>
-              </div>
-              <MessageComposer
-                canSubmit={Boolean(newThreadTitle.trim())}
-                label="New thread"
-                placeholder="Add the first message. Markdown is detected automatically."
-                submitLabel="Create and post"
-                onSubmit={createThreadWithMessage}
-              />
-              {createError && (
-                <div className="error-card">
-                  <strong>Could not create thread.</strong>
-                  <span>{createError}</span>
+            <div className="composer-toggle-row">
+              <button className="button button--solid" type="button" onClick={() => setShowCreateComposer((value) => !value)}>
+                {showCreateComposer ? "Close" : "+ Create Thread"}
+              </button>
+            </div>
+
+            {showCreateComposer && (
+              <section className="composer-shell" aria-label="Create thread">
+                <div className="composer-title-row">
+                  <input
+                    className="form-input"
+                    value={newThreadTitle}
+                    onChange={(event) => setNewThreadTitle(event.target.value)}
+                    placeholder="New thread title"
+                    type="text"
+                  />
+                  <button className="button button--ghost" disabled={creatingEmpty || !newThreadTitle.trim()} type="button" onClick={() => void createThreadOnly()}>
+                    {creatingEmpty ? "Creating…" : "Create empty"}
+                  </button>
                 </div>
-              )}
-            </section>
+                <MessageComposer
+                  canSubmit={Boolean(newThreadTitle.trim())}
+                  label="New thread"
+                  placeholder="Add the first message. Markdown is detected automatically."
+                  submitLabel="Create and post"
+                  onSubmit={createThreadWithMessage}
+                />
+                {createError && (
+                  <div className="error-card">
+                    <strong>Could not create thread.</strong>
+                    <span>{createError}</span>
+                  </div>
+                )}
+              </section>
+            )}
 
             <section className="thread-list" aria-label="Agentbox threads">
               {loading && (
