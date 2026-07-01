@@ -17,6 +17,8 @@
   --modal-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.12);
   --code-bg: #fbfbfc;
   --code-ink: #1f2328;
+  --terminal-bg: #111111;
+  --terminal-ink: #ffffff;
   --hljs-comment: #6e7781;
   --hljs-keyword: #8250df;
   --hljs-name: #cf222e;
@@ -51,6 +53,8 @@
   --modal-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.5);
   --code-bg: #0f1117;
   --code-ink: #e6edf3;
+  --terminal-bg: #d9d9d9;
+  --terminal-ink: #171717;
   --hljs-comment: #8b949e;
   --hljs-keyword: #ff7b72;
   --hljs-name: #ffa657;
@@ -84,6 +88,8 @@
     --modal-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.5);
     --code-bg: #0f1117;
     --code-ink: #e6edf3;
+    --terminal-bg: #d9d9d9;
+    --terminal-ink: #171717;
     --hljs-comment: #8b949e;
     --hljs-keyword: #ff7b72;
     --hljs-name: #ffa657;
@@ -386,16 +392,16 @@ pre,
   gap: 0.5rem;
   margin-top: 1.5rem;
   padding: 1.5rem;
-  background: var(--ink);
+  background: var(--terminal-bg);
   border-radius: 4px;
-  color: var(--bg);
+  color: var(--terminal-ink);
   font-family: var(--font-mono);
   font-size: 0.85rem;
 }
 
 .terminal-card span,
 .terminal-card code {
-  color: var(--bg);
+  color: var(--terminal-ink);
   opacity: 0.92;
   white-space: nowrap;
   overflow: hidden;
@@ -416,7 +422,7 @@ pre,
   white-space: pre-wrap;
   word-break: break-word;
   overflow: visible;
-  color: var(--bg);
+  color: var(--terminal-ink);
   opacity: 0.92;
   font-family: var(--font-mono);
   font-size: 0.85rem;

@@ -134,8 +134,6 @@ export default function Home() {
             <span className="brand__title">Shared inbox for AI work</span>
           </a>
           <nav className="site-nav" aria-label="Primary navigation">
-            <a className="site-nav__link" href="#workflow">Workflow</a>
-            <a className="site-nav__link" href="#get-started">Get started</a>
             <Link className="site-nav__link" href="/setup">Self-host setup</Link>
             <InboxButton className="site-nav__link" label="View inbox" />
             <a className="site-nav__link" href={repoUrl}>GitHub</a>

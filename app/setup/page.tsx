@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { InboxButton } from "../components/inbox-button";
 import { ThemeSwitcher } from "../components/theme-switcher";
 
 const repoUrl = "https://github.com/amxv/agentbox";
@@ -104,10 +105,9 @@ export default function SetupPage() {
             <span className="brand__eyebrow">Agentbox</span>
             <span className="brand__title">Self-hosted setup</span>
           </Link>
-          <nav className="site-nav" aria-label="Setup navigation">
-            <Link className="site-nav__link" href="/">Home</Link>
-            <a className="site-nav__link" href="#steps">Steps</a>
-            <a className="site-nav__link" href="#env">Env</a>
+          <nav className="site-nav" aria-label="Primary navigation">
+            <Link className="site-nav__link" href="/setup">Self-host setup</Link>
+            <InboxButton className="site-nav__link" label="View inbox" />
             <a className="site-nav__link" href={repoUrl}>GitHub</a>
             <ThemeSwitcher />
           </nav>
