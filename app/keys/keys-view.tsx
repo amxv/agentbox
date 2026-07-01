@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { CopyButton } from "../components/copy-button";
+import { ThemeSwitcher } from "../components/theme-switcher";
 
 const STORAGE_KEY = "agentbox_admin_key";
 
@@ -165,6 +166,7 @@ export function KeysView() {
             <Link className="site-nav__link" href="/threads">Inbox</Link>
             <Link className="site-nav__link" href="/">Home</Link>
             {key && <button className="site-nav__link" type="button" onClick={signOut}>Forget key</button>}
+            <ThemeSwitcher />
           </nav>
         </div>
       </header>

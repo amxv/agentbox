@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ThemeSwitcher } from "../components/theme-switcher";
 
 const STORAGE_KEY = "agentbox_admin_key";
 
@@ -91,6 +92,7 @@ export function InboxView() {
             <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
             {key && <button className="site-nav__link" type="button" onClick={signOut}>Forget key</button>}
+            <ThemeSwitcher />
           </nav>
         </div>
       </header>

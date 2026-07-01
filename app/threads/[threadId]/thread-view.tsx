@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { CopyButton } from "../../components/copy-button";
 import { MessageContent } from "./message-content";
+import { ThemeSwitcher } from "../../components/theme-switcher";
 
 const STORAGE_KEY = "agentbox_admin_key";
 
@@ -123,6 +124,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
             <Link className="site-nav__link" href="/threads">Inbox</Link>
             <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
+            <ThemeSwitcher />
           </nav>
         </div>
       </header>

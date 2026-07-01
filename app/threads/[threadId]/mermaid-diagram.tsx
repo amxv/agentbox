@@ -3,6 +3,40 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { CopyButton } from "./copy-button";
 
+function getResolvedTheme() {
+  if (typeof window === "undefined") return "light";
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === "light" || explicit === "dark") return explicit;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function mermaidThemeConfig(theme: string) {
+  if (theme !== "dark") return { theme: "neutral" as const };
+  return {
+    theme: "base" as const,
+    themeVariables: {
+      background: "#141414",
+      mainBkg: "#1d1d1d",
+      secondBkg: "#262626",
+      primaryColor: "#1d1d1d",
+      primaryTextColor: "#f2f2f2",
+      primaryBorderColor: "#666666",
+      secondaryColor: "#262626",
+      secondaryTextColor: "#f2f2f2",
+      secondaryBorderColor: "#666666",
+      tertiaryColor: "#141414",
+      tertiaryTextColor: "#f2f2f2",
+      tertiaryBorderColor: "#666666",
+      lineColor: "#d4d4d4",
+      textColor: "#f2f2f2",
+      nodeTextColor: "#f2f2f2",
+      edgeLabelBackground: "#141414",
+      clusterBkg: "#181818",
+      clusterBorder: "#525252"
+    }
+  };
+}
+
 type MermaidState =
   | { status: "loading" }
   | { status: "ready"; svg: string }
@@ -14,6 +48,18 @@ export function MermaidDiagram({ chart }: { chart: string }) {
   const dialogTitleId = useMemo(() => `${renderId}-dialog-title`, [renderId]);
   const [state, setState] = useState<MermaidState>({ status: "loading" });
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme());
+
+  useEffect(() => {
+    const updateTheme = () => setResolvedTheme(getResolvedTheme());
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    window.addEventListener("agentbox-theme-change", updateTheme);
+    media.addEventListener("change", updateTheme);
+    return () => {
+      window.removeEventListener("agentbox-theme-change", updateTheme);
+      media.removeEventListener("change", updateTheme);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -21,7 +67,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     async function renderDiagram() {
       try {
         const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "neutral" });
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", ...mermaidThemeConfig(resolvedTheme) });
         const { svg } = await mermaid.render(renderId, chart);
         if (!cancelled) setState({ status: "ready", svg });
       } catch (err) {
@@ -33,7 +79,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     return () => {
       cancelled = true;
     };
-  }, [chart, renderId]);
+  }, [chart, renderId, resolvedTheme]);
 
   useEffect(() => {
     if (!fullscreenOpen) return;

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { InboxButton } from "./components/inbox-button";
+import { ThemeSwitcher } from "./components/theme-switcher";
 
 export const metadata: Metadata = {
   title: "Agentbox — Shared inbox for remote and local agents",
@@ -138,6 +139,7 @@ export default function Home() {
             <Link className="site-nav__link" href="/setup">Self-host setup</Link>
             <InboxButton className="site-nav__link" label="View inbox" />
             <a className="site-nav__link" href={repoUrl}>GitHub</a>
+            <ThemeSwitcher />
           </nav>
         </div>
       </header>

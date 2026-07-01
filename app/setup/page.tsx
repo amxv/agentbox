@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ThemeSwitcher } from "../components/theme-switcher";
 
 const repoUrl = "https://github.com/amxv/agentbox";
 
@@ -108,6 +109,7 @@ export default function SetupPage() {
             <a className="site-nav__link" href="#steps">Steps</a>
             <a className="site-nav__link" href="#env">Env</a>
             <a className="site-nav__link" href={repoUrl}>GitHub</a>
+            <ThemeSwitcher />
           </nav>
         </div>
       </header>
