@@ -451,10 +451,9 @@ pre,
   gap: 2rem;
 }
 
-.install-grid {
+.install-stack {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 2rem;
+  gap: 1.25rem;
 }
 
 .card {
@@ -475,7 +474,7 @@ pre,
 }
 
 .install-card--wide {
-  margin-top: 2rem;
+  margin-top: 1.25rem;
 }
 
 .install-card__copy,
@@ -526,8 +525,8 @@ pre,
 .install-subgrid,
 .install-detail-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1.25rem;
+  grid-template-columns: 1fr;
+  gap: 1rem;
 }
 
 .install-block,
@@ -1351,7 +1350,7 @@ pre,
   .capability-grid,
   .proof-grid,
   .docs-grid,
-  .install-grid,
+  .install-stack,
   .install-subgrid,
   .install-detail-grid,
   .key-card {
