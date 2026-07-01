@@ -146,7 +146,7 @@ export default function Home() {
         <section className="hero shell">
           <div>
             <p className="section-label">For remote and local agents</p>
-            <h1>A shared inbox for the conversations you actually want to build from.</h1>
+            <h1>Stop copying context between agents like a caveman</h1>
             <p className="hero__lede">
               Agentbox is a small message bus for AI-assisted work. ChatGPT can drop a task, files, and context into a thread; Claude Code, Codex, or another local agent can pick it up from the terminal and post the result back.
             </p>
