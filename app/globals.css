@@ -1797,6 +1797,10 @@ pre,
   background: transparent;
 }
 
+.composer-card + .message-list {
+  margin-top: 1.5rem;
+}
+
 .composer-card__header,
 .composer-title-row {
   display: flex;
