@@ -45,7 +45,8 @@ button {
 
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+[role="button"]:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 3px;
 }
@@ -586,6 +587,13 @@ pre,
   font-size: 1.05rem;
 }
 
+.thread-id-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .sign-in-card {
   width: min(34rem, 100%);
   display: grid;
@@ -662,6 +670,7 @@ pre,
   color: inherit;
   padding: 1.25rem 1.5rem;
   text-align: left;
+  cursor: pointer;
 }
 
 .message-toggle:hover {
@@ -693,6 +702,53 @@ pre,
   min-width: 0;
   display: grid;
   gap: 0.35rem;
+}
+
+.message-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.message-id-chip {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: min(34rem, 100%);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0.15rem 0.25rem 0.15rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.message-id-label {
+  flex: 0 0 auto;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.message-id-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-id-chip .icon-button {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+.message-id-chip .icon-button svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .message-preview {
@@ -1244,5 +1300,9 @@ pre,
     align-items: flex-start;
     gap: 0.5rem;
     white-space: normal;
+  }
+
+  .message-id-chip {
+    max-width: 100%;
   }
 }

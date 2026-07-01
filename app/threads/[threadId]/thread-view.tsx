@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { CopyButton } from "./copy-button";
 import { MessageContent } from "./message-content";
 
 const STORAGE_KEY = "agentbox_admin_key";
@@ -131,9 +132,12 @@ export function ThreadView({ threadId }: { threadId: string }) {
             <div>
               <p className="section-label">Read-only thread</p>
               <h1 className="dashboard-title">{thread?.title ?? "Thread"}</h1>
-              <p className="dashboard-copy mono">
-                {thread?.id ?? threadId}{thread ? ` · Updated ${formatDate(thread.updated_at)}` : ""}
-              </p>
+              <div className="thread-id-row">
+                <p className="dashboard-copy mono">
+                  {thread?.id ?? threadId}{thread ? ` · Updated ${formatDate(thread.updated_at)}` : ""}
+                </p>
+                <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" />
+              </div>
             </div>
             {thread && (
               <div className="card">
@@ -159,17 +163,33 @@ export function ThreadView({ threadId }: { threadId: string }) {
             const panelId = `message-panel-${message.id}`;
             return (
               <article key={message.id} className={isExpanded ? "message-card message-card--expanded" : "message-card"}>
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="message-toggle"
                   aria-expanded={isExpanded}
                   aria-controls={panelId}
                   onClick={() => toggleMessage(message.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      toggleMessage(message.id);
+                    }
+                  }}
                 >
                   <span className="message-toggle__main">
                     <span className="message-index">#{index + 1}</span>
                     <span className="message-heading">
-                      <strong className="message-author">{message.author}</strong>
+                      <span className="message-title-row">
+                        <strong className="message-author">{message.author}</strong>
+                        {message.id && (
+                          <span className="message-id-chip" onClick={(event) => event.stopPropagation()}>
+                            <span className="message-id-label">Message ID</span>
+                            <span className="message-id-value mono">{message.id}</span>
+                            <CopyButton value={message.id} label="Copy message ID" />
+                          </span>
+                        )}
+                      </span>
                       <span className="message-preview">{getMessagePreview(message.body)}</span>
                     </span>
                   </span>
@@ -179,7 +199,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                     <span>{formatDate(message.created_at)}</span>
                     <span className="message-chevron" aria-hidden="true" />
                   </span>
-                </button>
+                </div>
                 {isExpanded && (
                   <div id={panelId} className="message-panel">
                     <MessageContent body={message.body} contentType={message.body_content_type} />
