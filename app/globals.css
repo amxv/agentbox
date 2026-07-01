@@ -1794,6 +1794,7 @@ pre,
 .composer-card {
   padding: 0;
   border: 0;
+  background: transparent;
 }
 
 .composer-card__header,
