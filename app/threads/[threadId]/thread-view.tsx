@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CopyButton } from "../../components/copy-button";
 import { MessageContent } from "./message-content";
+import { MessageComposer } from "../../components/message-composer";
+import { ensureDashboardActorKey, postDashboardMessage } from "../../components/agentbox-write";
 import { ThemeSwitcher } from "../../components/theme-switcher";
 
 const STORAGE_KEY = "agentbox_admin_key";
@@ -69,33 +71,42 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
 
+  const loadThread = useCallback(async function loadThread(adminKey: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/viewer/threads/${encodeURIComponent(threadId)}`, {
+        headers: { "x-agentbox-admin-key": adminKey }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setThread(data.thread);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [threadId]);
+
   useEffect(() => {
     const key = window.localStorage.getItem(STORAGE_KEY);
     if (!key) {
       router.replace("/threads");
       return;
     }
+    const timeout = window.setTimeout(() => {
+      void loadThread(key);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [loadThread, router]);
 
-    async function loadThread(adminKey: string) {
-      setLoading(true);
-      setError(null);
-      try {
-        const response = await fetch(`/api/viewer/threads/${encodeURIComponent(threadId)}`, {
-          headers: { "x-agentbox-admin-key": adminKey }
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-        setThread(data.thread);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    void loadThread(key);
-  }, [router, threadId]);
-
+  async function postReply(body: string, files: File[]) {
+    const key = window.localStorage.getItem(STORAGE_KEY);
+    if (!key) throw new Error("Admin key is required.");
+    const actorKey = await ensureDashboardActorKey(key);
+    await postDashboardMessage(actorKey, threadId, body, files);
+    await loadThread(key);
+  }
   const assetCount = useMemo(() => {
     return thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0;
   }, [thread]);
@@ -133,7 +144,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Read-only thread</p>
+              <p className="section-label">Shared thread</p>
               <h1 className="dashboard-title">{thread?.title ?? "Thread"}</h1>
               <div className="thread-id-row">
                 <p className="dashboard-copy mono">
@@ -151,6 +162,13 @@ export function ThreadView({ threadId }: { threadId: string }) {
             )}
           </div>
         </section>
+
+        <MessageComposer
+          label="Reply"
+          placeholder="Post a message. Markdown is detected automatically."
+          submitLabel="Post message"
+          onSubmit={postReply}
+        />
 
         <section className="message-list" aria-label="Thread messages">
           {loading && (

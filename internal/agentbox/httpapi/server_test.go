@@ -216,12 +216,12 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.PostMessage(t.Context(), thread.ID, "author", "body", nil, &types.NewAsset{
+	if _, err := repo.PostMessage(t.Context(), thread.ID, "author", "body", nil, []types.NewAsset{{
 		StorageKey: "agentbox/thread/message/image.png",
 		FileName:   "image.png",
 		MimeType:   &imageType,
 		SizeBytes:  10,
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	server := NewServer(config.Config{AdminKey: "adm", Environment: "production"}, svc)
@@ -345,4 +345,69 @@ func TestMCPOriginValidation(t *testing.T) {
 
 func actor() types.Actor {
 	return types.Actor{Name: "tester", KeyName: "test"}
+}
+
+func TestDirectUploadIntentAndFinalize(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	if _, err := repo.CreateAPIKey(t.Context(), "user", "user-key"); err != nil {
+		t.Fatal(err)
+	}
+	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	server := NewServer(config.Config{}, svc)
+
+	create := httptest.NewRecorder()
+	server.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/threads?key=user-key", strings.NewReader(`{"title":"Uploads"}`)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	intent := httptest.NewRecorder()
+	server.ServeHTTP(intent, httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/uploads?key=user-key", strings.NewReader(`{"files":[{"file_name":"note.md","mime_type":"text/markdown","size_bytes":12}]}`)))
+	if intent.Code != http.StatusCreated {
+		t.Fatalf("intent status = %d body=%s", intent.Code, intent.Body.String())
+	}
+	var intentPayload struct {
+		Uploads []struct {
+			UploadID        string            `json:"upload_id"`
+			UploadURL       string            `json:"upload_url"`
+			StorageKey      string            `json:"storage_key"`
+			RequiredHeaders map[string]string `json:"required_headers"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(intent.Body.Bytes(), &intentPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(intentPayload.Uploads) != 1 || intentPayload.Uploads[0].UploadID == "" || intentPayload.Uploads[0].UploadURL == "" || intentPayload.Uploads[0].StorageKey == "" || intentPayload.Uploads[0].RequiredHeaders["content-type"] != "text/markdown" {
+		t.Fatalf("intent payload = %#v", intentPayload)
+	}
+
+	postBody := `{"body":"attached","uploaded_assets":[{"upload_id":"` + intentPayload.Uploads[0].UploadID + `"}]}`
+	post := httptest.NewRecorder()
+	server.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/messages?key=user-key", strings.NewReader(postBody)))
+	if post.Code != http.StatusCreated {
+		t.Fatalf("post status = %d body=%s", post.Code, post.Body.String())
+	}
+	var posted struct {
+		Message struct {
+			Author string `json:"author"`
+			Assets []struct {
+				FileName  string  `json:"file_name"`
+				PublicURL *string `json:"public_url"`
+			} `json:"assets"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(post.Body.Bytes(), &posted); err != nil {
+		t.Fatal(err)
+	}
+	if posted.Message.Author != "user" || len(posted.Message.Assets) != 1 || posted.Message.Assets[0].FileName != "note.md" || posted.Message.Assets[0].PublicURL == nil {
+		t.Fatalf("posted = %#v", posted)
+	}
 }

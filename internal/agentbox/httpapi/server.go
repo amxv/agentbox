@@ -202,6 +202,10 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.postMessage(w, r, threadID)
 		return
 	}
+	if tail == "uploads" {
+		s.createUploadIntents(w, r, threadID)
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -224,6 +228,29 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request, threadID stri
 	writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
 }
 
+func (s *Server) createUploadIntents(w http.ResponseWriter, r *http.Request, threadID string) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	actor, ok := s.requireActor(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Files []types.UploadIntentFile `json:"files"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	uploads, err := s.service.CreatePresignedUploads(r.Context(), *actor, threadID, input.Files)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"uploads": uploads})
+}
+
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID string) {
 	if !method(w, r, http.MethodPost) {
 		return
@@ -239,9 +266,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	}
 
 	var input struct {
-		Body            *string                     `json:"body"`
-		BodyContentType *string                     `json:"body_content_type"`
-		File            *types.ChatGPTFileReference `json:"file"`
+		Body            *string                        `json:"body"`
+		BodyContentType *string                        `json:"body_content_type"`
+		File            *types.ChatGPTFileReference    `json:"file"`
+		UploadedAssets  []types.UploadedAssetReference `json:"uploaded_assets"`
 	}
 	if err := parseJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -269,6 +297,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 		Body:            body,
 		BodyContentType: input.BodyContentType,
 		File:            file,
+		UploadedAssets:  input.UploadedAssets,
 	})
 	if err != nil {
 		writeServiceError(w, err)

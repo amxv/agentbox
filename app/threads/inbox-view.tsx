@@ -2,7 +2,10 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { MessageComposer } from "../components/message-composer";
 import { ThemeSwitcher } from "../components/theme-switcher";
+import { createDashboardThread, ensureDashboardActorKey, postDashboardMessage } from "../components/agentbox-write";
 
 const STORAGE_KEY = "agentbox_admin_key";
 
@@ -21,6 +24,7 @@ function formatDate(value: string) {
 }
 
 export function InboxView() {
+  const router = useRouter();
   const [key, setKey] = useState(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(STORAGE_KEY) ?? "";
@@ -30,8 +34,11 @@ export function InboxView() {
     return window.localStorage.getItem(STORAGE_KEY) ?? "";
   });
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [newThreadTitle, setNewThreadTitle] = useState("");
+  const [creatingEmpty, setCreatingEmpty] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!key) return;
@@ -74,10 +81,39 @@ export function InboxView() {
 
   function signOut() {
     window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem("agentbox_actor_key");
     setKey("");
     setDraftKey("");
     setThreads([]);
     setError(null);
+    setCreateError(null);
+  }
+
+  async function createThreadOnly() {
+    const title = newThreadTitle.trim();
+    if (!key || !title || creatingEmpty) return;
+    setCreatingEmpty(true);
+    setCreateError(null);
+    try {
+      const actorKey = await ensureDashboardActorKey(key);
+      const thread = await createDashboardThread(actorKey, title);
+      setNewThreadTitle("");
+      router.push(`/threads/${thread.id}`);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingEmpty(false);
+    }
+  }
+
+  async function createThreadWithMessage(body: string, files: File[]) {
+    const title = newThreadTitle.trim();
+    if (!key || !title) throw new Error("Thread title is required.");
+    const actorKey = await ensureDashboardActorKey(key);
+    const thread = await createDashboardThread(actorKey, title);
+    await postDashboardMessage(actorKey, thread.id, body, files);
+    setNewThreadTitle("");
+    router.push(`/threads/${thread.id}`);
   }
 
   return (
@@ -101,9 +137,9 @@ export function InboxView() {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Read-only viewer</p>
+              <p className="section-label">Shared viewer</p>
               <h1 className="dashboard-title">Inbox</h1>
-              <p className="dashboard-copy">Inspect task threads, messages, and attachments without putting your admin key in the URL.</p>
+              <p className="dashboard-copy">Inspect task threads, create new threads, and post replies as the built-in user actor.</p>
             </div>
             {key && (
               <div className="card">
@@ -120,7 +156,7 @@ export function InboxView() {
             <div>
               <p className="section-label">Sign in</p>
               <h2 className="card-title">Enter your admin key</h2>
-              <p className="copy">The key is saved in this browser and sent as a request header to the viewer API.</p>
+              <p className="copy">The dashboard automatically creates a hidden actor key named user for posting.</p>
             </div>
             <input
               className="form-input"
@@ -132,39 +168,69 @@ export function InboxView() {
             <button className="button button--solid" type="submit">View inbox</button>
           </form>
         ) : (
-          <section className="thread-list" aria-label="Agentbox threads">
-            {loading && (
-              <div className="skeleton-list" aria-label="Loading threads" aria-busy="true">
-                {Array.from({ length: 4 }).map((_, index) => (
-                  <div className="skeleton-thread-card" aria-hidden="true" key={index}>
-                    <div className="skeleton-card-meta">
-                      <span className="skeleton-line skeleton-line--medium" />
+          <div className="dashboard-stack">
+            <section className="composer-shell" aria-label="Create thread">
+              <div className="composer-title-row">
+                <input
+                  className="form-input"
+                  value={newThreadTitle}
+                  onChange={(event) => setNewThreadTitle(event.target.value)}
+                  placeholder="New thread title"
+                  type="text"
+                />
+                <button className="button button--ghost" disabled={creatingEmpty || !newThreadTitle.trim()} type="button" onClick={() => void createThreadOnly()}>
+                  {creatingEmpty ? "Creating…" : "Create empty"}
+                </button>
+              </div>
+              <MessageComposer
+                canSubmit={Boolean(newThreadTitle.trim())}
+                label="New thread"
+                placeholder="Add the first message. Markdown is detected automatically."
+                submitLabel="Create and post"
+                onSubmit={createThreadWithMessage}
+              />
+              {createError && (
+                <div className="error-card">
+                  <strong>Could not create thread.</strong>
+                  <span>{createError}</span>
+                </div>
+              )}
+            </section>
+
+            <section className="thread-list" aria-label="Agentbox threads">
+              {loading && (
+                <div className="skeleton-list" aria-label="Loading threads" aria-busy="true">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div className="skeleton-thread-card" aria-hidden="true" key={index}>
+                      <div className="skeleton-card-meta">
+                        <span className="skeleton-line skeleton-line--medium" />
+                        <span className="skeleton-line skeleton-line--short" />
+                      </div>
+                      <span className="skeleton-line skeleton-line--long" />
                       <span className="skeleton-line skeleton-line--short" />
                     </div>
-                    <span className="skeleton-line skeleton-line--long" />
-                    <span className="skeleton-line skeleton-line--short" />
-                  </div>
-                ))}
-              </div>
-            )}
-            {error && (
-              <div className="error-card">
-                <strong>Could not load inbox.</strong>
-                <span>{error}</span>
-              </div>
-            )}
-            {!loading && !error && threads.length === 0 && <p className="empty-state">No threads yet.</p>}
-            {!loading && !error && threads.map((thread) => (
-              <Link key={thread.id} href={`/threads/${thread.id}`} className="thread-card">
-                <div className="thread-meta-row">
-                  <span className="thread-meta mono">{thread.id}</span>
-                  <span className="thread-meta">Updated {formatDate(thread.updated_at)}</span>
+                  ))}
                 </div>
-                <span className="thread-title">{thread.title}</span>
-                <span className="thread-meta">Created by {thread.created_by}</span>
-              </Link>
-            ))}
-          </section>
+              )}
+              {error && (
+                <div className="error-card">
+                  <strong>Could not load inbox.</strong>
+                  <span>{error}</span>
+                </div>
+              )}
+              {!loading && !error && threads.length === 0 && <p className="empty-state">No threads yet.</p>}
+              {!loading && !error && threads.map((thread) => (
+                <Link key={thread.id} href={`/threads/${thread.id}`} className="thread-card">
+                  <div className="thread-meta-row">
+                    <span className="thread-meta mono">{thread.id}</span>
+                    <span className="thread-meta">Updated {formatDate(thread.updated_at)}</span>
+                  </div>
+                  <span className="thread-title">{thread.title}</span>
+                  <span className="thread-meta">Created by {thread.created_by}</span>
+                </Link>
+              ))}
+            </section>
+          </div>
         )}
       </main>
     </div>

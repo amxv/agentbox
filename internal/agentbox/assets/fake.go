@@ -35,6 +35,36 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 	return asset, nil
 }
 
+func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params PresignedUploadParams) (types.PresignedUpload, error) {
+limit := f.MaxFileSizeBytes
+if limit == 0 {
+limit = 25 * 1024 * 1024
+}
+if params.SizeBytes > limit {
+return types.PresignedUpload{}, errTooLarge(limit)
+}
+fileName := SanitizeFilename(params.FileName)
+storageKey := MakeStorageKey(params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+mimeType := InferMimeType(fileName, params.MimeType)
+contentType := "application/octet-stream"
+if mimeType != nil {
+contentType = *mimeType
+}
+return types.PresignedUpload{
+UploadID:   params.UploadID,
+StorageKey: storageKey,
+FileName:   fileName,
+MimeType:   mimeType,
+SizeBytes:  params.SizeBytes,
+PublicURL:  PublicURLForKey(f.PublicBaseURL, storageKey),
+UploadURL:  "https://r2-upload.test/" + storageKey,
+ExpiresIn:  900,
+RequiredHeaders: map[string]string{
+"content-type": contentType,
+},
+}, nil
+}
+
 func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params SignedURLParams) (string, error) {
 	u := url.URL{Scheme: "https", Host: "r2.test", Path: "/" + params.StorageKey}
 	q := u.Query()

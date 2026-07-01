@@ -15,6 +15,7 @@ type MemoryRepository struct {
 	Threads  []types.Thread
 	Messages []types.Message
 	Assets   []types.Asset
+	Pending  []types.PendingUpload
 	APIKeys  []types.APIKey
 }
 
@@ -157,7 +158,45 @@ func (m *MemoryRepository) GetAsset(_ context.Context, assetID string) (*types.A
 	return nil, nil
 }
 
-func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error) {
+func (m *MemoryRepository) CreatePendingUpload(_ context.Context, upload types.PendingUpload) (types.PendingUpload, error) {
+	now := isoMillis(time.Now())
+	upload.CreatedAt = now
+	if upload.ExpiresAt == "" {
+		upload.ExpiresAt = isoMillis(time.Now().Add(15 * time.Minute))
+	}
+	m.Pending = append(m.Pending, upload)
+	return upload, nil
+}
+
+func (m *MemoryRepository) GetPendingUploads(_ context.Context, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error) {
+	wanted := map[string]bool{}
+	for _, id := range uploadIDs {
+		wanted[id] = true
+	}
+	uploads := []types.PendingUpload{}
+	for _, upload := range m.Pending {
+		if upload.ThreadID == threadID && upload.CreatedBy == author && wanted[upload.ID] {
+			uploads = append(uploads, upload)
+		}
+	}
+	return uploads, nil
+}
+
+func (m *MemoryRepository) MarkPendingUploadsConsumed(_ context.Context, uploadIDs []string) error {
+	wanted := map[string]bool{}
+	for _, id := range uploadIDs {
+		wanted[id] = true
+	}
+	now := isoMillis(time.Now())
+	for i := range m.Pending {
+		if wanted[m.Pending[i].ID] {
+			m.Pending[i].ConsumedAt = &now
+		}
+	}
+	return nil
+}
+
+func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, author string, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
 	var threadIndex = -1
 	for i, thread := range m.Threads {
 		if thread.ID == threadID {
@@ -182,25 +221,23 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 	m.Messages = append(m.Messages, message)
 	m.Threads[threadIndex].UpdatedAt = isoMillis(time.Now())
 
-	if asset == nil {
-		return message, nil
+	for _, asset := range newAssets {
+		createdAsset := types.Asset{
+			ID:          "asset_" + uuid.NewString(),
+			MessageID:   message.ID,
+			StorageKey:  asset.StorageKey,
+			FileName:    asset.FileName,
+			Filename:    asset.FileName,
+			MimeType:    asset.MimeType,
+			SizeBytes:   asset.SizeBytes,
+			PublicURL:   asset.PublicURL,
+			DownloadURL: asset.PublicURL,
+			CreatedAt:   now,
+			CreatedBy:   author,
+		}
+		m.Assets = append(m.Assets, createdAsset)
+		message.Assets = append(message.Assets, createdAsset)
 	}
-
-	createdAsset := types.Asset{
-		ID:          "asset_" + uuid.NewString(),
-		MessageID:   message.ID,
-		StorageKey:  asset.StorageKey,
-		FileName:    asset.FileName,
-		Filename:    asset.FileName,
-		MimeType:    asset.MimeType,
-		SizeBytes:   asset.SizeBytes,
-		PublicURL:   asset.PublicURL,
-		DownloadURL: asset.PublicURL,
-		CreatedAt:   now,
-		CreatedBy:   author,
-	}
-	m.Assets = append(m.Assets, createdAsset)
-	message.Assets = []types.Asset{createdAsset}
 	return message, nil
 }
 

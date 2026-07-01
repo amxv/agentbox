@@ -80,9 +80,24 @@ create table if not exists api_keys (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists pending_uploads (
+  id text primary key,
+  thread_id text not null references threads(id) on delete cascade,
+  storage_key text not null unique,
+  file_name text not null,
+  mime_type text,
+  size_bytes integer not null,
+  public_url text,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  created_by text not null,
+  consumed_at timestamptz
+);
+
 create index if not exists threads_updated_at_idx on threads(updated_at desc);
 create index if not exists messages_thread_created_idx on messages(thread_id, created_at asc);
 create index if not exists assets_message_id_idx on assets(message_id);
+create index if not exists pending_uploads_thread_idx on pending_uploads(thread_id, created_at desc);
 `)
 	return err
 }
@@ -321,7 +336,56 @@ where id = $1
 	return &asset, nil
 }
 
-func (r *Repository) PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error) {
+func (r *Repository) CreatePendingUpload(ctx context.Context, upload types.PendingUpload) (types.PendingUpload, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.PendingUpload{}, err
+	}
+	return scanPendingUpload(r.pool.QueryRow(ctx, `
+insert into pending_uploads (id, thread_id, storage_key, file_name, mime_type, size_bytes, public_url, expires_at, created_by)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+returning id, thread_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, expires_at, created_by, consumed_at
+`, upload.ID, upload.ThreadID, upload.StorageKey, upload.FileName, upload.MimeType, upload.SizeBytes, upload.PublicURL, upload.ExpiresAt, upload.CreatedBy))
+}
+
+func (r *Repository) GetPendingUploads(ctx context.Context, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, err
+	}
+	if len(uploadIDs) == 0 {
+		return []types.PendingUpload{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+select id, thread_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, expires_at, created_by, consumed_at
+from pending_uploads
+where thread_id = $1 and created_by = $2 and id = any($3)
+`, threadID, author, uploadIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	uploads := []types.PendingUpload{}
+	for rows.Next() {
+		upload, err := scanPendingUpload(rows)
+		if err != nil {
+			return nil, err
+		}
+		uploads = append(uploads, upload)
+	}
+	return uploads, rows.Err()
+}
+
+func (r *Repository) MarkPendingUploadsConsumed(ctx context.Context, uploadIDs []string) error {
+	if len(uploadIDs) == 0 {
+		return nil
+	}
+	if err := r.EnsureSchema(ctx); err != nil {
+		return err
+	}
+	_, err := r.pool.Exec(ctx, `update pending_uploads set consumed_at = now() where id = any($1)`, uploadIDs)
+	return err
+}
+
+func (r *Repository) PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.Message{}, err
 	}
@@ -347,7 +411,8 @@ returning id, thread_id, author, body, body_content_type, created_at
 		return types.Message{}, err
 	}
 
-	if asset != nil {
+	message.Assets = []types.Asset{}
+	for _, asset := range newAssets {
 		assetID := "asset_" + uuid.NewString()
 		created, err := scanAsset(tx.QueryRow(ctx, `
 insert into assets (id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_by)
@@ -357,7 +422,7 @@ returning id, message_id, storage_key, file_name, mime_type, size_bytes, public_
 		if err != nil {
 			return types.Message{}, err
 		}
-		message.Assets = []types.Asset{created}
+		message.Assets = append(message.Assets, created)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -484,6 +549,37 @@ func scanAsset(row threadScanner) (types.Asset, error) {
 	asset.DownloadURL = publicURL
 	asset.CreatedAt = isoMillis(createdAt)
 	return asset, err
+}
+
+func scanPendingUpload(row threadScanner) (types.PendingUpload, error) {
+	var createdAt time.Time
+	var expiresAt time.Time
+	var consumedAt *time.Time
+	var mimeType *string
+	var publicURL *string
+	upload := types.PendingUpload{}
+	err := row.Scan(
+		&upload.ID,
+		&upload.ThreadID,
+		&upload.StorageKey,
+		&upload.FileName,
+		&mimeType,
+		&upload.SizeBytes,
+		&publicURL,
+		&createdAt,
+		&expiresAt,
+		&upload.CreatedBy,
+		&consumedAt,
+	)
+	upload.MimeType = mimeType
+	upload.PublicURL = publicURL
+	upload.CreatedAt = isoMillis(createdAt)
+	upload.ExpiresAt = isoMillis(expiresAt)
+	if consumedAt != nil {
+		value := isoMillis(*consumedAt)
+		upload.ConsumedAt = &value
+	}
+	return upload, err
 }
 
 func scanAPIKey(row threadScanner) (types.APIKey, error) {

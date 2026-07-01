@@ -57,6 +57,42 @@ type NewAsset struct {
 	PublicURL  *string
 }
 
+type PendingUpload struct {
+ID         string  `json:"id"`
+ThreadID   string  `json:"thread_id"`
+StorageKey string  `json:"storage_key"`
+FileName   string  `json:"file_name"`
+MimeType   *string `json:"mime_type"`
+SizeBytes  int64   `json:"size_bytes"`
+PublicURL  *string `json:"public_url"`
+CreatedAt  string  `json:"created_at"`
+ExpiresAt  string  `json:"expires_at"`
+CreatedBy  string  `json:"created_by"`
+ConsumedAt *string `json:"consumed_at,omitempty"`
+}
+
+type UploadIntentFile struct {
+FileName  string  `json:"file_name"`
+MimeType  *string `json:"mime_type"`
+SizeBytes int64   `json:"size_bytes"`
+}
+
+type PresignedUpload struct {
+UploadID        string            `json:"upload_id"`
+StorageKey      string            `json:"storage_key"`
+FileName        string            `json:"file_name"`
+MimeType        *string           `json:"mime_type"`
+SizeBytes       int64             `json:"size_bytes"`
+PublicURL       *string           `json:"public_url"`
+UploadURL       string            `json:"upload_url"`
+ExpiresIn       int               `json:"expires_in"`
+RequiredHeaders map[string]string `json:"required_headers"`
+}
+
+type UploadedAssetReference struct {
+UploadID string `json:"upload_id"`
+}
+
 type SearchThreadResult struct {
 	ID                 string   `json:"id"`
 	Title              string   `json:"title"`

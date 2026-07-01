@@ -536,12 +536,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	textType := "text/plain"
-	if _, err := repo.PostMessage(t.Context(), thread.ID, "seed", "seed asset", nil, &types.NewAsset{
+	if _, err := repo.PostMessage(t.Context(), thread.ID, "seed", "seed asset", nil, []types.NewAsset{{
 		StorageKey: "agentbox/seed/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,
 		SizeBytes:  int64(len("seed bytes")),
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	return httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "adm"}, svc))

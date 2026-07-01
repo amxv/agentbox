@@ -12,6 +12,7 @@ import (
 	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
+	"github.com/google/uuid"
 )
 
 var ErrThreadNotFound = errors.New("Thread not found.")
@@ -25,7 +26,10 @@ type Repository interface {
 	CreateThreadWithMessage(ctx context.Context, title string, author string, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error)
 	GetAsset(ctx context.Context, assetID string) (*types.Asset, error)
-	PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, asset *types.NewAsset) (types.Message, error)
+	CreatePendingUpload(ctx context.Context, upload types.PendingUpload) (types.PendingUpload, error)
+	GetPendingUploads(ctx context.Context, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error)
+	MarkPendingUploadsConsumed(ctx context.Context, uploadIDs []string) error
+	PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
 	CreateAPIKey(ctx context.Context, name string, key string) (types.APIKey, error)
 	ListAPIKeys(ctx context.Context) ([]types.APIKey, error)
 	RevokeAPIKey(ctx context.Context, name string) (bool, error)
@@ -126,15 +130,35 @@ func (s *Service) PostMessage(ctx context.Context, actor types.Actor, params Pos
 	if err != nil {
 		return types.Message{}, err
 	}
-	var newAsset *types.NewAsset
+	newAssets := []types.NewAsset{}
 	if params.File != nil {
 		asset, err := s.assets.UploadChatGPTFile(ctx, params.ThreadID, *params.File)
 		if err != nil {
 			return types.Message{}, err
 		}
-		newAsset = &asset
+		newAssets = append(newAssets, asset)
 	}
-	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAsset)
+	if len(params.UploadedAssets) > 0 {
+		assets, err := s.pendingUploadsToAssets(ctx, actor, params.ThreadID, params.UploadedAssets)
+		if err != nil {
+			return types.Message{}, err
+		}
+		newAssets = append(newAssets, assets...)
+	}
+	message, err := s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAssets)
+	if err != nil {
+		return types.Message{}, err
+	}
+	if len(params.UploadedAssets) > 0 {
+		ids := make([]string, 0, len(params.UploadedAssets))
+		for _, uploaded := range params.UploadedAssets {
+			ids = append(ids, strings.TrimSpace(uploaded.UploadID))
+		}
+		if err := s.repo.MarkPendingUploadsConsumed(ctx, ids); err != nil {
+			return types.Message{}, err
+		}
+	}
+	return message, nil
 }
 
 func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, params PostMessageWithAssetParams) (types.Message, error) {
@@ -152,7 +176,7 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, p
 	if err != nil {
 		return types.Message{}, err
 	}
-	var newAsset *types.NewAsset
+	newAssets := []types.NewAsset{}
 	if len(params.Bytes) > 0 || params.FileName != "" {
 		asset, err := s.assets.UploadAssetBytes(ctx, assets.UploadBytesParams{
 			ThreadID: params.ThreadID,
@@ -163,9 +187,114 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, p
 		if err != nil {
 			return types.Message{}, err
 		}
-		newAsset = &asset
+		newAssets = append(newAssets, asset)
 	}
-	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAsset)
+	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAssets)
+}
+
+func (s *Service) CreatePresignedUploads(ctx context.Context, actor types.Actor, threadID string, files []types.UploadIntentFile) ([]types.PresignedUpload, error) {
+	if err := validate.PostMessage(threadID); err != nil {
+		return nil, err
+	}
+	thread, err := s.repo.GetThread(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if thread == nil {
+		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	if len(files) == 0 {
+		return []types.PresignedUpload{}, nil
+	}
+	if len(files) > 10 {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "At most 10 files can be uploaded at once."}
+	}
+	uploads := make([]types.PresignedUpload, 0, len(files))
+	for _, file := range files {
+		file.FileName = strings.TrimSpace(file.FileName)
+		if file.FileName == "" {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "file_name is required."}
+		}
+		if file.SizeBytes < 0 {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "size_bytes must be >= 0."}
+		}
+		uploadID := "upl_" + uuid.NewString()
+		presigned, err := s.assets.CreatePresignedAssetUploadURL(ctx, assets.PresignedUploadParams{
+			ThreadID:         threadID,
+			UploadID:         uploadID,
+			FileName:         file.FileName,
+			MimeType:         file.MimeType,
+			SizeBytes:        file.SizeBytes,
+			ExpiresInSeconds: 900,
+		})
+		if err != nil {
+			return nil, err
+		}
+		expiresAt := time.Now().UTC().Add(time.Duration(presigned.ExpiresIn) * time.Second).Format("2006-01-02T15:04:05.000Z")
+		if _, err := s.repo.CreatePendingUpload(ctx, types.PendingUpload{
+			ID:         presigned.UploadID,
+			ThreadID:   threadID,
+			StorageKey: presigned.StorageKey,
+			FileName:   presigned.FileName,
+			MimeType:   presigned.MimeType,
+			SizeBytes:  presigned.SizeBytes,
+			PublicURL:  presigned.PublicURL,
+			ExpiresAt:  expiresAt,
+			CreatedBy:  actor.Name,
+		}); err != nil {
+			return nil, err
+		}
+		uploads = append(uploads, presigned)
+	}
+	return uploads, nil
+}
+
+func (s *Service) pendingUploadsToAssets(ctx context.Context, actor types.Actor, threadID string, refs []types.UploadedAssetReference) ([]types.NewAsset, error) {
+	ids := make([]string, 0, len(refs))
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		id := strings.TrimSpace(ref.UploadID)
+		if id == "" {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "upload_id is required."}
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return []types.NewAsset{}, nil
+	}
+	pending, err := s.repo.GetPendingUploads(ctx, threadID, ids, actor.Name)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]types.PendingUpload{}
+	for _, upload := range pending {
+		byID[upload.ID] = upload
+	}
+	now := time.Now().UTC()
+	assets := make([]types.NewAsset, 0, len(ids))
+	for _, id := range ids {
+		upload, ok := byID[id]
+		if !ok {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload was not found or is no longer available."}
+		}
+		if upload.ConsumedAt != nil {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload has already been used."}
+		}
+		if parsed, err := time.Parse(time.RFC3339, upload.ExpiresAt); err == nil && now.After(parsed) {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload has expired."}
+		}
+		assets = append(assets, types.NewAsset{
+			StorageKey: upload.StorageKey,
+			FileName:   upload.FileName,
+			MimeType:   upload.MimeType,
+			SizeBytes:  upload.SizeBytes,
+			PublicURL:  upload.PublicURL,
+		})
+	}
+	return assets, nil
 }
 
 func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset, expiresInSeconds int) (string, error) {
@@ -236,6 +365,7 @@ type PostMessageParams struct {
 	Body            string
 	BodyContentType *string
 	File            *assets.ChatGPTFileInput
+	UploadedAssets  []types.UploadedAssetReference
 }
 
 type PostMessageWithAssetParams struct {
