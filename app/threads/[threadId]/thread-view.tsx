@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { CopyButton } from "./copy-button";
+import { CopyButton } from "../../components/copy-button";
 import { MessageContent } from "./message-content";
 
 const STORAGE_KEY = "agentbox_admin_key";
@@ -121,6 +121,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </Link>
           <nav className="site-nav" aria-label="Thread navigation">
             <Link className="site-nav__link" href="/threads">Inbox</Link>
+            <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
           </nav>
         </div>

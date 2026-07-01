@@ -88,6 +88,7 @@ export function InboxView() {
             <span className="brand__title">Thread dashboard</span>
           </Link>
           <nav className="site-nav" aria-label="Inbox navigation">
+            <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
             {key && <button className="site-nav__link" type="button" onClick={signOut}>Forget key</button>}
           </nav>
