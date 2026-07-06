@@ -17,6 +17,8 @@ type MemoryRepository struct {
 	Assets   []types.Asset
 	Pending  []types.PendingUpload
 	APIKeys  []types.APIKey
+	Users    []types.User
+	Sessions []types.UserSession
 }
 
 func (m *MemoryRepository) EnsureSchema(context.Context) error {
@@ -336,6 +338,84 @@ func (m *MemoryRepository) MarkAPIKeyUsed(_ context.Context, keyID string) error
 	for i := range m.APIKeys {
 		if m.APIKeys[i].ID == keyID && m.APIKeys[i].RevokedAt == nil {
 			m.APIKeys[i].LastUsedAt = &now
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *MemoryRepository) FindUserByEmail(_ context.Context, tenantID string, email string) (*types.User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var found *types.User
+	for _, user := range m.Users {
+		if user.DisabledAt != nil || strings.ToLower(strings.TrimSpace(user.Email)) != email {
+			continue
+		}
+		if strings.TrimSpace(tenantID) != "" && tenantOf(user.TenantID) != tenantOf(tenantID) {
+			continue
+		}
+		if found != nil {
+			return nil, errors.New("Multiple users match that email. Specify a tenant.")
+		}
+		copy := user
+		found = &copy
+	}
+	return found, nil
+}
+
+func (m *MemoryRepository) CreateUserSession(_ context.Context, session types.UserSession) (types.UserSession, error) {
+	now := isoMillis(time.Now())
+	if session.ID == "" {
+		session.ID = "sess_" + uuid.NewString()
+	}
+	if session.TenantID == "" {
+		session.TenantID = types.DefaultTenantID
+	}
+	session.CreatedAt = now
+	if session.ExpiresAt == "" {
+		session.ExpiresAt = isoMillis(time.Now().Add(30 * 24 * time.Hour))
+	}
+	m.Sessions = append(m.Sessions, session)
+	return session, nil
+}
+
+func (m *MemoryRepository) FindUserSessionBySecretHash(_ context.Context, secretHash string) (*types.UserSession, *types.User, error) {
+	now := time.Now().UTC()
+	for _, session := range m.Sessions {
+		if session.SecretHash != secretHash || session.RevokedAt != nil {
+			continue
+		}
+		expiresAt, err := time.Parse(time.RFC3339, session.ExpiresAt)
+		if err == nil && now.After(expiresAt) {
+			continue
+		}
+		for _, user := range m.Users {
+			if tenantOf(user.TenantID) == tenantOf(session.TenantID) && user.ID == session.UserID && user.DisabledAt == nil {
+				sessionCopy := session
+				userCopy := user
+				return &sessionCopy, &userCopy, nil
+			}
+		}
+	}
+	return nil, nil, nil
+}
+
+func (m *MemoryRepository) MarkUserSessionUsed(_ context.Context, sessionID string) error {
+	now := isoMillis(time.Now())
+	for i := range m.Sessions {
+		if m.Sessions[i].ID == sessionID && m.Sessions[i].RevokedAt == nil {
+			m.Sessions[i].LastUsedAt = &now
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *MemoryRepository) RevokeUserSession(_ context.Context, sessionID string) error {
+	now := isoMillis(time.Now())
+	for i := range m.Sessions {
+		if m.Sessions[i].ID == sessionID && m.Sessions[i].RevokedAt == nil {
+			m.Sessions[i].RevokedAt = &now
 			return nil
 		}
 	}

@@ -1,12 +1,3 @@
-const ACTOR_KEY_STORAGE = "agentbox_actor_key";
-const ACTOR_NAME = "user";
-
-type CreatedAPIKey = {
-  key: {
-    key: string;
-  };
-};
-
 type UploadIntent = {
   upload_id: string;
   upload_url: string;
@@ -30,31 +21,8 @@ async function parseError(response: Response) {
   }
 }
 
-async function actorKeyWorks(actorKey: string) {
-  const response = await fetch(`/api/threads?key=${encodeURIComponent(actorKey)}&limit=1`);
-  return response.ok;
-}
-
-export async function ensureDashboardActorKey(adminKey: string) {
-  const existing = window.localStorage.getItem(ACTOR_KEY_STORAGE);
-  if (existing && await actorKeyWorks(existing)) return existing;
-
-  const response = await fetch("/api/admin/keys", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-agentbox-admin-key": adminKey
-    },
-    body: JSON.stringify({ name: ACTOR_NAME })
-  });
-  const data = await response.json() as CreatedAPIKey;
-  if (!response.ok || !data.key?.key) throw new Error((data as { error?: string }).error ?? `HTTP ${response.status}`);
-  window.localStorage.setItem(ACTOR_KEY_STORAGE, data.key.key);
-  return data.key.key;
-}
-
-export async function createDashboardThread(actorKey: string, title: string) {
-  const response = await fetch(`/api/threads?key=${encodeURIComponent(actorKey)}`, {
+export async function createDashboardThread(title: string) {
+  const response = await fetch("/api/threads", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title })
@@ -64,9 +32,9 @@ export async function createDashboardThread(actorKey: string, title: string) {
   return data.thread;
 }
 
-export async function uploadDashboardFiles(actorKey: string, threadId: string, files: File[]) {
+export async function uploadDashboardFiles(threadId: string, files: File[]) {
   if (files.length === 0) return [];
-  const intentResponse = await fetch(`/api/threads/${encodeURIComponent(threadId)}/uploads?key=${encodeURIComponent(actorKey)}`, {
+  const intentResponse = await fetch(`/api/threads/${encodeURIComponent(threadId)}/uploads`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -94,9 +62,9 @@ export async function uploadDashboardFiles(actorKey: string, threadId: string, f
   return uploads.map((upload) => ({ upload_id: upload.upload_id }));
 }
 
-export async function postDashboardMessage(actorKey: string, threadId: string, body: string, files: File[]) {
-  const uploadedAssets = await uploadDashboardFiles(actorKey, threadId, files);
-  const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/messages?key=${encodeURIComponent(actorKey)}`, {
+export async function postDashboardMessage(threadId: string, body: string, files: File[]) {
+  const uploadedAssets = await uploadDashboardFiles(threadId, files);
+  const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

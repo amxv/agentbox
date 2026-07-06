@@ -40,14 +40,72 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.health)
+	s.mux.HandleFunc("/api/auth/login", s.authLogin)
+	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
+	s.mux.HandleFunc("/api/auth/me", s.authMe)
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
 	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
+	s.mux.HandleFunc("/api/keys", s.keys)
+	s.mux.HandleFunc("/api/keys/", s.key)
 	s.mux.HandleFunc("/api/threads", s.threads)
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
 	s.mux.HandleFunc("/api/viewer/threads", s.viewerThreads)
 	s.mux.HandleFunc("/api/viewer/threads/", s.viewerThread)
 	s.mux.Handle("/api/mcp", s.mcpHandler())
+}
+
+func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		TenantID string `json:"tenant_id"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authContext, secret, err := s.service.Login(r.Context(), input.TenantID, input.Email, input.Password)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := err.Error()
+		if errors.Is(err, service.ErrInvalidLogin) || strings.Contains(err.Error(), "Multiple users") {
+			status = http.StatusUnauthorized
+			message = service.ErrInvalidLogin.Error()
+		}
+		writeError(w, status, message)
+		return
+	}
+	s.setSessionCookie(w, secret)
+	writeJSON(w, http.StatusOK, map[string]any{"auth": authContext})
+}
+
+func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	if secret := s.sessionSecretFromRequest(r); secret != "" {
+		if err := s.service.LogoutSession(r.Context(), secret); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.clearSessionCookie(w)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"auth": authContext})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +233,80 @@ func (s *Server) adminKey(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodDelete:
 		if err := s.service.RevokeAPIKey(r.Context(), adminAuthContext(), name); err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, service.ErrAPIKeyNotFound) {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": name})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !tenantAdmin(*authContext) {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role is required.")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		keys, err := s.service.ListAPIKeys(r.Context(), *authContext)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
+	case http.MethodPost:
+		var input struct {
+			Name string `json:"name"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		key, err := s.service.CreateAPIKey(r.Context(), *authContext, input.Name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"key": map[string]any{
+				"name":       key.Name,
+				"key":        key.Key,
+				"key_masked": key.KeyMasked,
+				"created_at": key.CreatedAt,
+				"updated_at": key.UpdatedAt,
+			},
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) key(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !tenantAdmin(*authContext) {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role is required.")
+		return
+	}
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
+	if name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		if err := s.service.RevokeAPIKey(r.Context(), *authContext, name); err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, service.ErrAPIKeyNotFound) {
 				status = http.StatusNotFound
@@ -409,7 +541,8 @@ func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	if !s.requireAdmin(w, r) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
 		return
 	}
 	limit := numberQuery(r, "limit", 100)
@@ -419,7 +552,7 @@ func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
 	if limit > 200 {
 		limit = 200
 	}
-	threads, err := s.service.ListThreads(r.Context(), adminAuthContext(), limit)
+	threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -431,7 +564,8 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	if !s.requireAdmin(w, r) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
 		return
 	}
 	threadID := strings.TrimPrefix(r.URL.Path, "/api/viewer/threads/")
@@ -439,7 +573,7 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	thread, err := s.service.GetThread(r.Context(), adminAuthContext(), threadID)
+	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, service.ErrThreadNotFound) {
@@ -480,7 +614,13 @@ func (s *Server) mcpHandler() http.Handler {
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (*types.AuthContext, bool) {
-	authContext, err := s.service.AuthenticateAPIKey(r.Context(), authSecretFromRequest(r))
+	var authContext *types.AuthContext
+	var err error
+	if secret := authSecretFromRequest(r); secret != "" {
+		authContext, err = s.service.AuthenticateAPIKey(r.Context(), secret)
+	} else {
+		authContext, err = s.service.AuthenticateSession(r.Context(), s.sessionSecretFromRequest(r))
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
@@ -490,6 +630,45 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (*types.Aut
 		return nil, false
 	}
 	return authContext, true
+}
+
+func (s *Server) sessionCookieName() string {
+	if strings.TrimSpace(s.cfg.SessionCookieName) != "" {
+		return strings.TrimSpace(s.cfg.SessionCookieName)
+	}
+	return config.DefaultSessionCookieName
+}
+
+func (s *Server) sessionSecretFromRequest(r *http.Request) string {
+	cookie, err := r.Cookie(s.sessionCookieName())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, secret string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.sessionCookieName(),
+		Value:    secret,
+		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		Secure:   s.cfg.SecureCookies,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.sessionCookieName(),
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   s.cfg.SecureCookies,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -522,6 +701,10 @@ func adminAuthContext() types.AuthContext {
 		ActorName:   "admin",
 		Role:        "admin",
 	}
+}
+
+func tenantAdmin(authContext types.AuthContext) bool {
+	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.Role == "admin"
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

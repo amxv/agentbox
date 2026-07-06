@@ -720,6 +720,120 @@ func (r *Repository) MarkAPIKeyUsed(ctx context.Context, keyID string) error {
 	return err
 }
 
+func (r *Repository) FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
+from users
+where disabled_at is null
+  and lower(email) = lower($1)
+  and ($2::text = '' or tenant_id = $2)
+order by created_at asc
+limit 2
+`, strings.TrimSpace(email), strings.TrimSpace(tenantID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []types.User{}
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(users) == 0 {
+		return nil, nil
+	}
+	if len(users) > 1 {
+		return nil, errors.New("Multiple users match that email. Specify a tenant.")
+	}
+	return &users[0], nil
+}
+
+func (r *Repository) CreateUserSession(ctx context.Context, session types.UserSession) (types.UserSession, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.UserSession{}, err
+	}
+	id := session.ID
+	if id == "" {
+		id = "sess_" + uuid.NewString()
+	}
+	return scanUserSession(r.pool.QueryRow(ctx, `
+insert into user_sessions (id, tenant_id, user_id, secret_hash, expires_at)
+values ($1, $2, $3, $4, $5)
+returning id, tenant_id, user_id, secret_hash, created_at, last_used_at, expires_at, revoked_at
+`, id, session.TenantID, session.UserID, session.SecretHash, session.ExpiresAt))
+}
+
+func (r *Repository) FindUserSessionBySecretHash(ctx context.Context, secretHash string) (*types.UserSession, *types.User, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, nil, err
+	}
+	row := r.pool.QueryRow(ctx, `
+select
+  s.id,
+  s.tenant_id,
+  s.user_id,
+  s.secret_hash,
+  s.created_at,
+  s.last_used_at,
+  s.expires_at,
+  s.revoked_at,
+  u.id,
+  u.tenant_id,
+  u.email,
+  u.display_name,
+  u.password_hash,
+  u.role,
+  u.created_at,
+  u.updated_at,
+  u.disabled_at
+from user_sessions s
+join users u on u.tenant_id = s.tenant_id and u.id = s.user_id
+where s.secret_hash = $1
+  and s.revoked_at is null
+  and s.expires_at > now()
+  and u.disabled_at is null
+`, secretHash)
+	session, user, err := scanUserSessionAndUser(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return &session, &user, nil
+}
+
+func (r *Repository) MarkUserSessionUsed(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	if err := r.EnsureSchema(ctx); err != nil {
+		return err
+	}
+	_, err := r.pool.Exec(ctx, `update user_sessions set last_used_at = now() where id = $1 and revoked_at is null`, sessionID)
+	return err
+}
+
+func (r *Repository) RevokeUserSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	if err := r.EnsureSchema(ctx); err != nil {
+		return err
+	}
+	_, err := r.pool.Exec(ctx, `update user_sessions set revoked_at = now() where id = $1 and revoked_at is null`, sessionID)
+	return err
+}
+
 type threadScanner interface {
 	Scan(dest ...any) error
 }
@@ -829,6 +943,89 @@ func scanAPIKey(row threadScanner) (types.APIKey, error) {
 		key.RevokedAt = &value
 	}
 	return key, err
+}
+
+func scanUser(row threadScanner) (types.User, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	var disabledAt *time.Time
+	user := types.User{}
+	err := row.Scan(&user.ID, &user.TenantID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.Role, &createdAt, &updatedAt, &disabledAt)
+	user.CreatedAt = isoMillis(createdAt)
+	user.UpdatedAt = isoMillis(updatedAt)
+	if disabledAt != nil {
+		value := isoMillis(*disabledAt)
+		user.DisabledAt = &value
+	}
+	return user, err
+}
+
+func scanUserSession(row threadScanner) (types.UserSession, error) {
+	var createdAt time.Time
+	var lastUsedAt *time.Time
+	var expiresAt time.Time
+	var revokedAt *time.Time
+	session := types.UserSession{}
+	err := row.Scan(&session.ID, &session.TenantID, &session.UserID, &session.SecretHash, &createdAt, &lastUsedAt, &expiresAt, &revokedAt)
+	session.CreatedAt = isoMillis(createdAt)
+	session.ExpiresAt = isoMillis(expiresAt)
+	if lastUsedAt != nil {
+		value := isoMillis(*lastUsedAt)
+		session.LastUsedAt = &value
+	}
+	if revokedAt != nil {
+		value := isoMillis(*revokedAt)
+		session.RevokedAt = &value
+	}
+	return session, err
+}
+
+func scanUserSessionAndUser(row threadScanner) (types.UserSession, types.User, error) {
+	var sessionCreatedAt time.Time
+	var sessionLastUsedAt *time.Time
+	var expiresAt time.Time
+	var revokedAt *time.Time
+	var userCreatedAt time.Time
+	var userUpdatedAt time.Time
+	var disabledAt *time.Time
+	session := types.UserSession{}
+	user := types.User{}
+	err := row.Scan(
+		&session.ID,
+		&session.TenantID,
+		&session.UserID,
+		&session.SecretHash,
+		&sessionCreatedAt,
+		&sessionLastUsedAt,
+		&expiresAt,
+		&revokedAt,
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.DisplayName,
+		&user.PasswordHash,
+		&user.Role,
+		&userCreatedAt,
+		&userUpdatedAt,
+		&disabledAt,
+	)
+	session.CreatedAt = isoMillis(sessionCreatedAt)
+	session.ExpiresAt = isoMillis(expiresAt)
+	if sessionLastUsedAt != nil {
+		value := isoMillis(*sessionLastUsedAt)
+		session.LastUsedAt = &value
+	}
+	if revokedAt != nil {
+		value := isoMillis(*revokedAt)
+		session.RevokedAt = &value
+	}
+	user.CreatedAt = isoMillis(userCreatedAt)
+	user.UpdatedAt = isoMillis(userUpdatedAt)
+	if disabledAt != nil {
+		value := isoMillis(*disabledAt)
+		user.DisabledAt = &value
+	}
+	return session, user, err
 }
 
 func hashSecret(value string) string {

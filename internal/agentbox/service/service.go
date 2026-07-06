@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"agentbox/internal/agentbox/assets"
+	"agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
@@ -19,6 +20,7 @@ import (
 
 var ErrThreadNotFound = errors.New("Thread not found.")
 var ErrAPIKeyNotFound = errors.New("API key not found.")
+var ErrInvalidLogin = errors.New("Invalid email or password.")
 
 type Repository interface {
 	EnsureSchema(ctx context.Context) error
@@ -37,6 +39,11 @@ type Repository interface {
 	RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error)
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
+	FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error)
+	CreateUserSession(ctx context.Context, session types.UserSession) (types.UserSession, error)
+	FindUserSessionBySecretHash(ctx context.Context, secretHash string) (*types.UserSession, *types.User, error)
+	MarkUserSessionUsed(ctx context.Context, sessionID string) error
+	RevokeUserSession(ctx context.Context, sessionID string) error
 }
 
 type Service struct {
@@ -415,12 +422,97 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 	}, nil
 }
 
+func (s *Service) Login(ctx context.Context, tenantID string, email string, password string) (types.AuthContext, string, error) {
+	email = strings.TrimSpace(email)
+	tenantID = strings.TrimSpace(tenantID)
+	if email == "" || password == "" {
+		return types.AuthContext{}, "", ErrInvalidLogin
+	}
+	user, err := s.repo.FindUserByEmail(ctx, tenantID, email)
+	if err != nil {
+		return types.AuthContext{}, "", err
+	}
+	if user == nil || user.PasswordHash == nil || !auth.VerifyPassword(password, *user.PasswordHash) {
+		return types.AuthContext{}, "", ErrInvalidLogin
+	}
+	secret, err := generateSessionSecret()
+	if err != nil {
+		return types.AuthContext{}, "", err
+	}
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+	session, err := s.repo.CreateUserSession(ctx, types.UserSession{
+		TenantID:   user.TenantID,
+		UserID:     user.ID,
+		SecretHash: hashSecret(secret),
+		ExpiresAt:  expiresAt,
+	})
+	if err != nil {
+		return types.AuthContext{}, "", err
+	}
+	return authContextForUserSession(session, *user), secret, nil
+}
+
+func (s *Service) AuthenticateSession(ctx context.Context, secret string) (*types.AuthContext, error) {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return nil, nil
+	}
+	session, user, err := s.repo.FindUserSessionBySecretHash(ctx, hashSecret(secret))
+	if err != nil {
+		return nil, err
+	}
+	if session == nil || user == nil {
+		return nil, nil
+	}
+	if session.ID != "" {
+		if err := s.repo.MarkUserSessionUsed(ctx, session.ID); err != nil {
+			return nil, err
+		}
+	}
+	authContext := authContextForUserSession(*session, *user)
+	return &authContext, nil
+}
+
+func (s *Service) LogoutSession(ctx context.Context, secret string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return nil
+	}
+	session, _, err := s.repo.FindUserSessionBySecretHash(ctx, hashSecret(secret))
+	if err != nil {
+		return err
+	}
+	if session == nil {
+		return nil
+	}
+	return s.repo.RevokeUserSession(ctx, session.ID)
+}
+
 func generateSecret() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
 	return "agb_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func generateSessionSecret() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return "ags_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func authContextForUserSession(session types.UserSession, user types.User) types.AuthContext {
+	return types.AuthContext{
+		TenantID:    user.TenantID,
+		UserID:      user.ID,
+		SubjectType: types.AuthSubjectUserSession,
+		ActorName:   user.DisplayName,
+		SessionID:   session.ID,
+		Role:        user.Role,
+	}
 }
 
 func hashSecret(value string) string {

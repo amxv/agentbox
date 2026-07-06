@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CopyButton } from "../components/copy-button";
+import { AuthContext, fetchSession, signOutSession } from "../components/session";
 import { ThemeSwitcher } from "../components/theme-switcher";
-
-const STORAGE_KEY = "agentbox_admin_key";
 
 type APIKey = {
   name: string;
@@ -31,30 +31,28 @@ function getMCPURL(secret: string) {
 }
 
 export function KeysView() {
-  const [key, setKey] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(STORAGE_KEY) ?? "";
-  });
-  const [draftKey, setDraftKey] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(STORAGE_KEY) ?? "";
-  });
+  const router = useRouter();
+  const [auth, setAuth] = useState<AuthContext | null>(null);
   const [keys, setKeys] = useState<APIKey[]>([]);
   const [newKeyName, setNewKeyName] = useState("");
   const [createdKey, setCreatedKey] = useState<CreatedAPIKey | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [deletingName, setDeletingName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loadKeys = useCallback(async function loadKeys(adminKey: string) {
+  const loadKeys = useCallback(async function loadKeys() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/admin/keys", {
-        headers: { "x-agentbox-admin-key": adminKey }
-      });
+      const session = await fetchSession();
+      if (!session) {
+        router.replace("/login?next=/keys");
+        return;
+      }
+      setAuth(session);
+      const response = await fetch("/api/keys", { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setKeys(data.keys ?? []);
@@ -63,15 +61,11 @@ export function KeysView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
-    if (!key) return;
-    const timeout = window.setTimeout(() => {
-      void loadKeys(key);
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [key, loadKeys]);
+    void loadKeys();
+  }, [loadKeys]);
 
   const latestUpdatedAt = useMemo(() => {
     if (keys.length === 0) return null;
@@ -81,48 +75,33 @@ export function KeysView() {
     }, 0);
   }, [keys]);
 
-  function saveKey(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = draftKey.trim();
-    if (!trimmed) return;
-    window.localStorage.setItem(STORAGE_KEY, trimmed);
-    setKey(trimmed);
-    setNotice(null);
-    setCreatedKey(null);
-  }
-
-  function signOut() {
-    window.localStorage.removeItem(STORAGE_KEY);
-    setKey("");
-    setDraftKey("");
-    setKeys([]);
-    setCreatedKey(null);
-    setError(null);
-    setNotice(null);
+  async function signOut() {
+    try {
+      await signOutSession();
+    } finally {
+      router.replace("/login");
+    }
   }
 
   async function createKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newKeyName.trim();
-    if (!name || !key) return;
+    if (!name) return;
     setCreating(true);
     setError(null);
     setNotice(null);
     try {
-      const response = await fetch("/api/admin/keys", {
+      const response = await fetch("/api/keys", {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-agentbox-admin-key": key
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ name })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setCreatedKey(data.key);
       setNewKeyName("");
-      setNotice(`Created API key “${data.key.name}”. Store the secret now; it will not appear in the key list.`);
-      await loadKeys(key);
+      setNotice(`Created API key "${data.key.name}". Store the secret now; it will not appear in the key list.`);
+      await loadKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -131,22 +110,18 @@ export function KeysView() {
   }
 
   async function deleteKey(name: string) {
-    if (!key) return;
-    const confirmed = window.confirm(`Delete API key “${name}”? Anything using this key will lose access immediately.`);
+    const confirmed = window.confirm(`Delete API key "${name}"? Anything using this key will lose access immediately.`);
     if (!confirmed) return;
     setDeletingName(name);
     setError(null);
     setNotice(null);
     try {
-      const response = await fetch(`/api/admin/keys/${encodeURIComponent(name)}`, {
-        method: "DELETE",
-        headers: { "x-agentbox-admin-key": key }
-      });
+      const response = await fetch(`/api/keys/${encodeURIComponent(name)}`, { method: "DELETE" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      setNotice(`Deleted API key “${data.revoked ?? name}”.`);
+      setNotice(`Deleted API key "${data.revoked ?? name}".`);
       if (createdKey?.name === name) setCreatedKey(null);
-      await loadKeys(key);
+      await loadKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -165,7 +140,8 @@ export function KeysView() {
           <nav className="site-nav" aria-label="Key management navigation">
             <Link className="site-nav__link" href="/threads">Inbox</Link>
             <Link className="site-nav__link" href="/">Home</Link>
-            {key && <button className="site-nav__link" type="button" onClick={signOut}>Forget key</button>}
+            {auth && <span className="session-chip">{auth.actor_name}</span>}
+            {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
             <ThemeSwitcher />
           </nav>
         </div>
@@ -175,11 +151,11 @@ export function KeysView() {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Admin tools</p>
+              <p className="section-label">Tenant admin tools</p>
               <h1 className="dashboard-title">API keys</h1>
-              <p className="dashboard-copy">Create lightweight agent credentials, review active keys, and revoke keys from the dashboard.</p>
+              <p className="dashboard-copy">Create tenant-scoped agent credentials, review active keys, and revoke access from your signed-in tenant.</p>
             </div>
-            {key && (
+            {auth && (
               <div className="card">
                 <p className="stat-label">Active keys</p>
                 <h2 className="card-title">{keys.length}</h2>
@@ -189,130 +165,112 @@ export function KeysView() {
           </div>
         </section>
 
-        {!key ? (
-          <form className="sign-in-card" onSubmit={saveKey}>
+        <div className="key-management-grid">
+          <section className="sign-in-card key-create-card" aria-labelledby="create-key-title">
             <div>
-              <p className="section-label">Sign in</p>
-              <h2 className="card-title">Enter your admin key</h2>
-              <p className="copy">The key is saved in this browser and sent as a request header to the admin API.</p>
+              <p className="section-label">Create</p>
+              <h2 id="create-key-title" className="card-title">New API key</h2>
+              <p className="copy">Use clear names like local, chatgpt, codex, claude, or worker-prod. Reusing a name rotates that key inside this tenant.</p>
             </div>
-            <input
-              className="form-input"
-              value={draftKey}
-              onChange={(event) => setDraftKey(event.target.value)}
-              placeholder="ADMIN_KEY"
-              type="password"
-            />
-            <button className="button button--solid" type="submit">Manage keys</button>
-          </form>
-        ) : (
-          <div className="key-management-grid">
-            <section className="sign-in-card key-create-card" aria-labelledby="create-key-title">
+            <form className="key-create-form" onSubmit={createKey}>
+              <input
+                className="form-input"
+                value={newKeyName}
+                onChange={(event) => setNewKeyName(event.target.value)}
+                placeholder="key-name"
+                type="text"
+              />
+              <button className="button button--solid" type="submit" disabled={creating || !newKeyName.trim()}>
+                {creating ? "Creating..." : "Create key"}
+              </button>
+            </form>
+          </section>
+
+          <section className="key-list-card" aria-labelledby="active-keys-title">
+            <div className="key-list-card__header">
               <div>
-                <p className="section-label">Create</p>
-                <h2 id="create-key-title" className="card-title">New API key</h2>
-                <p className="copy">Use clear names like local, chatgpt, codex, claude, or worker-prod. Reusing a name rotates that key.</p>
+                <p className="section-label">Current</p>
+                <h2 id="active-keys-title" className="card-title">Active keys</h2>
               </div>
-              <form className="key-create-form" onSubmit={createKey}>
-                <input
-                  className="form-input"
-                  value={newKeyName}
-                  onChange={(event) => setNewKeyName(event.target.value)}
-                  placeholder="key-name"
-                  type="text"
-                />
-                <button className="button button--solid" type="submit" disabled={creating || !newKeyName.trim()}>
-                  {creating ? "Creating…" : "Create key"}
-                </button>
-              </form>
-            </section>
+              <button className="button button--ghost" type="button" onClick={() => void loadKeys()} disabled={loading}>Refresh</button>
+            </div>
 
-            <section className="key-list-card" aria-labelledby="active-keys-title">
-              <div className="key-list-card__header">
+            {notice && <div className="notice-card">{notice}</div>}
+            {error && (
+              <div className="error-card">
+                <strong>Could not manage keys.</strong>
+                <span>{error}</span>
+              </div>
+            )}
+
+            {createdKey && (
+              <div className="secret-card">
                 <div>
-                  <p className="section-label">Current</p>
-                  <h2 id="active-keys-title" className="card-title">Active keys</h2>
+                  <p className="section-label">Secret shown once</p>
+                  <h3>{createdKey.name}</h3>
+                  <p className="copy">Copy this now. The key list only shows the masked value.</p>
                 </div>
-                <button className="button button--ghost" type="button" onClick={() => void loadKeys(key)} disabled={loading}>Refresh</button>
+                <div className="secret-row">
+                  <code>{createdKey.key}</code>
+                  <CopyButton value={createdKey.key} label="Copy API key" />
+                </div>
+                <div className="secret-row">
+                  <code>{getMCPURL(createdKey.key)}</code>
+                  <CopyButton value={getMCPURL(createdKey.key)} label="Copy MCP URL" />
+                </div>
               </div>
+            )}
 
-              {notice && <div className="notice-card">{notice}</div>}
-              {error && (
-                <div className="error-card">
-                  <strong>Could not manage keys.</strong>
-                  <span>{error}</span>
-                </div>
-              )}
-
-              {createdKey && (
-                <div className="secret-card">
-                  <div>
-                    <p className="section-label">Secret shown once</p>
-                    <h3>{createdKey.name}</h3>
-                    <p className="copy">Copy this now. The key list only shows the masked value.</p>
+            {loading && (
+              <div className="skeleton-list" aria-label="Loading keys" aria-busy="true">
+                <div className="skeleton-key-table" aria-hidden="true">
+                  <div className="skeleton-key-row skeleton-key-row--head">
+                    <span className="skeleton-line skeleton-line--short" />
+                    <span className="skeleton-line skeleton-line--medium" />
+                    <span className="skeleton-line skeleton-line--medium" />
+                    <span className="skeleton-line skeleton-line--tiny" />
                   </div>
-                  <div className="secret-row">
-                    <code>{createdKey.key}</code>
-                    <CopyButton value={createdKey.key} label="Copy API key" />
-                  </div>
-                  <div className="secret-row">
-                    <code>{getMCPURL(createdKey.key)}</code>
-                    <CopyButton value={getMCPURL(createdKey.key)} label="Copy MCP URL" />
-                  </div>
-                </div>
-              )}
-
-              {loading && (
-                <div className="skeleton-list" aria-label="Loading keys" aria-busy="true">
-                  <div className="skeleton-key-table" aria-hidden="true">
-                    <div className="skeleton-key-row skeleton-key-row--head">
-                      <span className="skeleton-line skeleton-line--short" />
+                  {Array.from({ length: 3 }).map((_, index) => (
+                    <div className="skeleton-key-row" key={index}>
                       <span className="skeleton-line skeleton-line--medium" />
+                      <span className="skeleton-line skeleton-line--long" />
                       <span className="skeleton-line skeleton-line--medium" />
-                      <span className="skeleton-line skeleton-line--tiny" />
-                    </div>
-                    {Array.from({ length: 3 }).map((_, index) => (
-                      <div className="skeleton-key-row" key={index}>
-                        <span className="skeleton-line skeleton-line--medium" />
-                        <span className="skeleton-line skeleton-line--long" />
-                        <span className="skeleton-line skeleton-line--medium" />
-                        <span className="skeleton-pill" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {!loading && keys.length === 0 && <p className="empty-state">No API keys found.</p>}
-              {!loading && keys.length > 0 && (
-                <div className="key-table" role="table" aria-label="Active API keys">
-                  <div className="key-table__row key-table__row--head" role="row">
-                    <span role="columnheader">Name</span>
-                    <span role="columnheader">Masked key</span>
-                    <span role="columnheader">Updated</span>
-                    <span role="columnheader">Actions</span>
-                  </div>
-                  {keys.map((item) => (
-                    <div className="key-table__row" role="row" key={item.name}>
-                      <span className="key-name" role="cell">{item.name}</span>
-                      <span className="mono key-masked" role="cell">{item.key_masked}</span>
-                      <span className="thread-meta" role="cell">{formatDate(item.updated_at)}</span>
-                      <span className="key-actions" role="cell">
-                        <button
-                          className="mini-button mini-button--danger"
-                          type="button"
-                          onClick={() => void deleteKey(item.name)}
-                          disabled={deletingName === item.name}
-                        >
-                          {deletingName === item.name ? "Deleting…" : "Delete"}
-                        </button>
-                      </span>
+                      <span className="skeleton-pill" />
                     </div>
                   ))}
                 </div>
-              )}
-            </section>
-          </div>
-        )}
+              </div>
+            )}
+            {!loading && keys.length === 0 && <p className="empty-state">No API keys found.</p>}
+            {!loading && keys.length > 0 && (
+              <div className="key-table" role="table" aria-label="Active API keys">
+                <div className="key-table__row key-table__row--head" role="row">
+                  <span role="columnheader">Name</span>
+                  <span role="columnheader">Masked key</span>
+                  <span role="columnheader">Updated</span>
+                  <span role="columnheader">Actions</span>
+                </div>
+                {keys.map((item) => (
+                  <div className="key-table__row" role="row" key={item.name}>
+                    <span className="key-name" role="cell">{item.name}</span>
+                    <span className="mono key-masked" role="cell">{item.key_masked}</span>
+                    <span className="thread-meta" role="cell">{formatDate(item.updated_at)}</span>
+                    <span className="key-actions" role="cell">
+                      <button
+                        className="mini-button mini-button--danger"
+                        type="button"
+                        onClick={() => void deleteKey(item.name)}
+                        disabled={deletingName === item.name}
+                      >
+                        {deletingName === item.name ? "Deleting..." : "Delete"}
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       </main>
     </div>
   );

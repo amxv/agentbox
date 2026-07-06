@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"agentbox/internal/agentbox/assets"
+	authpkg "agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/service"
@@ -218,6 +219,11 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	imageType := "image/png"
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
+	passwordHash, err := authpkg.HashPassword("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.Users = append(repo.Users, testUser(types.DefaultTenantID, "usr_viewer", "viewer@example.com", "Viewer Admin", "admin", passwordHash))
 	thread, err := svc.CreateThread(t.Context(), authContext(types.DefaultTenantID, "tester"), "Viewer")
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +236,7 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config.Config{AdminKey: "adm", Environment: "production"}, svc)
+	server := NewServer(config.Config{AdminKey: "adm", Environment: "production", SessionCookieName: config.DefaultSessionCookieName}, svc)
 
 	unauthorized := httptest.NewRecorder()
 	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/viewer/threads", nil))
@@ -238,8 +244,15 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 		t.Fatalf("unauthorized status = %d", unauthorized.Code)
 	}
 
+	login := httptest.NewRecorder()
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"viewer@example.com","password":"secret"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d body=%s", login.Code, login.Body.String())
+	}
+	sessionCookie := login.Result().Cookies()[0]
+
 	req := httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID, nil)
-	req.Header.Set("x-agentbox-admin-key", "adm")
+	req.AddCookie(sessionCookie)
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -261,6 +274,121 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	asset := payload.Thread.Messages[0].Assets[0]
 	if asset.DownloadURL == "" || asset.PreviewURL == nil || *asset.PreviewURL != asset.DownloadURL {
 		t.Fatalf("viewer asset = %#v", asset)
+	}
+}
+
+func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	passwordHash, err := authpkg.HashPassword("let-me-in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.Users = append(repo.Users,
+		testUser("ten_a", "usr_a", "a@example.com", "Alice Admin", "admin", passwordHash),
+		testUser("ten_b", "usr_b", "b@example.com", "Bob Admin", "admin", passwordHash),
+	)
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
+
+	badLogin := httptest.NewRecorder()
+	server.ServeHTTP(badLogin, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"a@example.com","password":"wrong"}`)))
+	if badLogin.Code != http.StatusUnauthorized {
+		t.Fatalf("badLogin status=%d body=%s", badLogin.Code, badLogin.Body.String())
+	}
+
+	login := httptest.NewRecorder()
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"a@example.com","password":"let-me-in"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != config.DefaultSessionCookieName || cookies[0].Value == "" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("cookies = %#v", cookies)
+	}
+	sessionCookie := cookies[0]
+
+	me := httptest.NewRecorder()
+	reqMe := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	reqMe.AddCookie(sessionCookie)
+	server.ServeHTTP(me, reqMe)
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"actor_name":"Alice Admin"`) || !strings.Contains(me.Body.String(), `"tenant_id":"ten_a"`) {
+		t.Fatalf("me status=%d body=%s", me.Code, me.Body.String())
+	}
+
+	create := httptest.NewRecorder()
+	reqCreate := httptest.NewRequest(http.MethodPost, "/api/threads", strings.NewReader(`{"title":"Session thread"}`))
+	reqCreate.AddCookie(sessionCookie)
+	server.ServeHTTP(create, reqCreate)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Thread struct {
+			ID        string `json:"id"`
+			CreatedBy string `json:"created_by"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Thread.CreatedBy != "Alice Admin" {
+		t.Fatalf("created = %#v", created)
+	}
+
+	post := httptest.NewRecorder()
+	reqPost := httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/messages", strings.NewReader(`{"body":"from session"}`))
+	reqPost.AddCookie(sessionCookie)
+	server.ServeHTTP(post, reqPost)
+	if post.Code != http.StatusCreated || !strings.Contains(post.Body.String(), `"author":"Alice Admin"`) {
+		t.Fatalf("post status=%d body=%s", post.Code, post.Body.String())
+	}
+
+	keyCreate := httptest.NewRecorder()
+	reqKeyCreate := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(`{"name":"raycast"}`))
+	reqKeyCreate.AddCookie(sessionCookie)
+	server.ServeHTTP(keyCreate, reqKeyCreate)
+	if keyCreate.Code != http.StatusCreated {
+		t.Fatalf("keyCreate status=%d body=%s", keyCreate.Code, keyCreate.Body.String())
+	}
+	if !strings.Contains(keyCreate.Body.String(), `"name":"raycast"`) || !strings.Contains(keyCreate.Body.String(), `"key":"`) {
+		t.Fatalf("keyCreate body=%s", keyCreate.Body.String())
+	}
+
+	keyList := httptest.NewRecorder()
+	reqKeyList := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	reqKeyList.AddCookie(sessionCookie)
+	server.ServeHTTP(keyList, reqKeyList)
+	if keyList.Code != http.StatusOK || !strings.Contains(keyList.Body.String(), `"name":"raycast"`) {
+		t.Fatalf("keyList status=%d body=%s", keyList.Code, keyList.Body.String())
+	}
+
+	loginB := httptest.NewRecorder()
+	server.ServeHTTP(loginB, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"b@example.com","password":"let-me-in"}`)))
+	if loginB.Code != http.StatusOK {
+		t.Fatalf("loginB status=%d body=%s", loginB.Code, loginB.Body.String())
+	}
+	cookieB := loginB.Result().Cookies()[0]
+	getAWithB := httptest.NewRecorder()
+	reqGetAWithB := httptest.NewRequest(http.MethodGet, "/api/threads/"+created.Thread.ID, nil)
+	reqGetAWithB.AddCookie(cookieB)
+	server.ServeHTTP(getAWithB, reqGetAWithB)
+	if getAWithB.Code != http.StatusNotFound {
+		t.Fatalf("getAWithB status=%d body=%s", getAWithB.Code, getAWithB.Body.String())
+	}
+
+	logout := httptest.NewRecorder()
+	reqLogout := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	reqLogout.AddCookie(sessionCookie)
+	server.ServeHTTP(logout, reqLogout)
+	if logout.Code != http.StatusOK || len(logout.Result().Cookies()) == 0 || logout.Result().Cookies()[0].MaxAge != -1 {
+		t.Fatalf("logout status=%d cookies=%#v body=%s", logout.Code, logout.Result().Cookies(), logout.Body.String())
+	}
+	afterLogout := httptest.NewRecorder()
+	reqAfterLogout := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	reqAfterLogout.AddCookie(sessionCookie)
+	server.ServeHTTP(afterLogout, reqAfterLogout)
+	if afterLogout.Code != http.StatusUnauthorized {
+		t.Fatalf("afterLogout status=%d body=%s", afterLogout.Code, afterLogout.Body.String())
 	}
 }
 
@@ -595,6 +723,20 @@ func authContext(tenantID string, actorName string) types.AuthContext {
 		TenantID:    tenantID,
 		SubjectType: types.AuthSubjectAPIKey,
 		ActorName:   actorName,
+	}
+}
+
+func testUser(tenantID string, userID string, email string, displayName string, role string, passwordHash string) types.User {
+	now := "2026-07-07T00:00:00.000Z"
+	return types.User{
+		ID:           userID,
+		TenantID:     tenantID,
+		Email:        email,
+		DisplayName:  displayName,
+		PasswordHash: &passwordHash,
+		Role:         role,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 }
 

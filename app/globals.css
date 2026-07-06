@@ -705,6 +705,22 @@ pre,
   background: var(--surface);
 }
 
+.login-main {
+  display: grid;
+  justify-items: center;
+}
+
+.login-card {
+  margin-top: 2rem;
+}
+
+.form-label {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 .form-input {
   width: 100%;
   min-height: 2.75rem;
@@ -718,6 +734,20 @@ pre,
 
 .form-input:focus {
   border-color: var(--ink);
+}
+
+.session-chip {
+  display: inline-flex;
+  max-width: 14rem;
+  min-height: 2rem;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-list,
