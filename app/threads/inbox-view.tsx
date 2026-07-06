@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MessageComposer } from "../components/message-composer";
 import { AuthContext, fetchSession, signOutSession } from "../components/session";
 import { ThemeSwitcher } from "../components/theme-switcher";
@@ -33,7 +33,7 @@ export function InboxView() {
   const [error, setError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  async function loadThreads() {
+  const loadThreads = useCallback(async function loadThreads() {
     setLoading(true);
     setError(null);
     try {
@@ -52,12 +52,14 @@ export function InboxView() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [router]);
 
   useEffect(() => {
-    void loadThreads();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const timeout = window.setTimeout(() => {
+      void loadThreads();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [loadThreads]);
 
   const latestUpdatedAt = useMemo(() => {
     if (threads.length === 0) return null;

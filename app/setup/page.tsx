@@ -62,9 +62,9 @@ const steps = [
     code: "bun run db:migrate"
   },
   {
-    label: "7. Initialize API keys",
-    body: "Use the admin key once to create a local CLI key and a ChatGPT key in Postgres. The local key is saved to your profile; the ChatGPT key is printed with the MCP URL.",
-    code: "agentbox init \\\n  --profile-name prod \\\n  --base-url https://youragentbox.vercel.app \\\n  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\n  --local-key-name local \\\n  --chatgpt-key-name chatgpt\n\nagentbox doctor\nagentbox list"
+    label: "7. Provision a tenant admin",
+    body: "Use the deployment admin key once to create a tenant, initial tenant admin user, and local tenant-scoped CLI key. The local key is saved to your profile and shown only once.",
+    code: "agentbox provision tenant \\\n  --base-url https://youragentbox.vercel.app \\\n  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\n  --tenant-slug default \\\n  --tenant-name Default \\\n  --user-email you@example.com \\\n  --user-name \"Your Name\" \\\n  --create-cli-key \\\n  --key-name local \\\n  --profile-name prod\n\nagentbox doctor\nagentbox list"
   },
   {
     label: "8. Deploy the optional web dashboard",
@@ -73,12 +73,12 @@ const steps = [
   },
   {
     label: "9. Manage keys later",
-    body: "Key management goes through the backend admin API and Postgres. The CLI does not rewrite Vercel environment variables.",
-    code: "agentbox keys list --admin-key \"$AGENTBOX_ADMIN_KEY\"\nagentbox keys create worker --admin-key \"$AGENTBOX_ADMIN_KEY\"\nagentbox keys revoke worker --admin-key \"$AGENTBOX_ADMIN_KEY\""
+    body: "Key management normally uses the tenant profile created by provisioning or browser login. The CLI does not rewrite Vercel environment variables.",
+    code: "agentbox login --base-url https://youragentbox.vercel.app --profile-name prod\nagentbox keys list\nagentbox keys create worker\nagentbox raycast-key"
   },
   {
     label: "10. Save it in ChatGPT",
-    body: "Use the ChatGPT MCP URL printed by agentbox init or agentbox connect chatgpt. The same remote MCP endpoint also works with Claude custom connectors and other MCP-capable clients.",
+    body: "Use the tenant-scoped ChatGPT MCP URL printed by agentbox connect chatgpt. The same remote MCP endpoint also works with Claude custom connectors and other MCP-capable clients.",
     code: "Apps -> Advanced settings -> turn on developer mode -> Create app -> select no auth -> paste the MCP URL"
   }
 ];
@@ -119,7 +119,7 @@ export default function SetupPage() {
           <p className="section-label">Deploy your own instance</p>
           <h1>Run Agentbox on your own Vercel account without guessing the order.</h1>
           <p className="hero__lede">
-            This guide covers the split-service deployment flow in this repo: npm CLI install, Go backend deploy, Postgres migrations, DB-backed API keys, optional dashboard deploy, and the final ChatGPT MCP connection.
+            This guide covers the split-service deployment flow in this repo: npm CLI install, Go backend deploy, Postgres migrations, tenant-scoped API keys, optional dashboard deploy, and the final ChatGPT MCP connection.
           </p>
           <p className="hero__annotation">
             The Go backend is the core Agentbox service. The Next.js dashboard is optional and deploys separately when you want a browser inbox.

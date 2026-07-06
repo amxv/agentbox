@@ -64,7 +64,10 @@ export function KeysView() {
   }, [router]);
 
   useEffect(() => {
-    void loadKeys();
+    const timeout = window.setTimeout(() => {
+      void loadKeys();
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [loadKeys]);
 
   const latestUpdatedAt = useMemo(() => {

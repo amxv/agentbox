@@ -653,13 +653,13 @@ func (r *Runner) printKeysSubcommandHelp(command string) {
 	usage := map[string]string{
 		"create": `Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]
 
-Create or replace a named tenant-scoped API key. With a logged-in profile this uses the tenant API; with --admin-key it uses the backend admin API. Use "raycast" to print Raycast preference values.`,
+Create or replace a named tenant-scoped API key. With a logged-in profile this uses the tenant API; --admin-key is a legacy/provisioning fallback. Use "raycast" to print Raycast preference values.`,
 		"list": `Usage: agentbox keys list [--base-url <url>] [--admin-key <key>] [--json]
 
-List DB-backed API key names and masked key values through the backend admin API.`,
+List tenant API key names and masked key values. A logged-in profile lists the current tenant; --admin-key is a legacy/provisioning fallback.`,
 		"revoke": `Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]
 
-Revoke a DB-backed API key by name through the backend admin API.`,
+Revoke a tenant API key by name. A logged-in profile revokes inside the current tenant; --admin-key is a legacy/provisioning fallback.`,
 	}
 	if text, ok := usage[command]; ok {
 		fmt.Fprintln(r.Stdout, text)

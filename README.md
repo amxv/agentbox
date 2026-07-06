@@ -78,7 +78,7 @@ agentbox download thr_xxx --output ./downloads
 
 `download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
 
-## Read-only web viewer
+## Web dashboard
 
 Agentbox includes a simple browser viewer for inspecting threads and attachments:
 
@@ -86,12 +86,14 @@ Agentbox includes a simple browser viewer for inspecting threads and attachments
 https://your-agentbox.vercel.app/threads
 ```
 
-Set `AGENTBOX_ADMIN_KEY` in the deployment environment. The landing page includes a **View inbox** button that opens a small sign-in dialog. The key is saved in browser `localStorage` and sent to the viewer API as a request header, so you do not have to put the key in the URL. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
+Create the first tenant admin with `agentbox provision tenant`, then sign in at `/login` with that tenant admin email and password or setup token. Browser requests use the first-party session cookie and tenant-scoped `/api/threads` and `/api/keys` routes; the deployment admin key is only for provisioning and should not be stored in the dashboard. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
 
 ## API
 
 ```text
 GET  /api/health
+GET  /api/auth/me
+GET  /api/me
 GET  /api/assets/:asset_id/download-url
 GET  /api/mcp
 POST /api/mcp
@@ -133,6 +135,7 @@ Required on the deployed server:
 ```text
 DATABASE_URL
 AGENTBOX_ADMIN_KEY
+AGENTBOX_ENV=production
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -143,22 +146,29 @@ Optional:
 
 ```text
 AGENTBOX_ALLOWED_ORIGINS
+AGENTBOX_AUTO_MIGRATE
+AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
 R2_PUBLIC_BASE_URL
 ```
 
-API keys are stored in Postgres and managed through the Go backend admin API. After the backend is deployed and migrated, run:
+API keys are tenant-scoped, hashed in Postgres, and shown only once on creation. After the backend is deployed and migrated, provision a tenant and initial admin user:
 
 ```bash
-agentbox init \
-  --profile-name prod \
+agentbox provision tenant \
   --base-url https://youragentbox.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --local-key-name local \
-  --chatgpt-key-name chatgpt
+  --tenant-slug default \
+  --tenant-name Default \
+  --user-email you@example.com \
+  --user-name "Your Name" \
+  --password "$AGENTBOX_INITIAL_PASSWORD" \
+  --create-cli-key \
+  --key-name local \
+  --profile-name prod
 ```
 
-The init flow creates a local CLI key and a ChatGPT key in Postgres, saves the local profile, and prints the ChatGPT MCP setup URL. Later key management uses `agentbox keys create|list|revoke` with `--admin-key` or `AGENTBOX_ADMIN_KEY`.
+Use `agentbox login` for browser-assisted profile creation on other machines. With a logged-in tenant profile, `agentbox keys create|list|revoke`, `agentbox raycast-key`, and `agentbox connect chatgpt` use tenant-scoped key routes. `agentbox init` and `/api/admin/keys` remain legacy compatibility paths for existing single-tenant setups; prefer provisioning plus login for new deployments.
 
 ## Docs
 

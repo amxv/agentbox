@@ -392,6 +392,47 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 	}
 }
 
+func TestAuthMeSupportsAPIKeyAndAliasWithoutLeakingSecret(t *testing.T) {
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: "ten_acme", Slug: "acme", Name: "Acme"}},
+	}
+	svc := service.New(repo, &assets.FakeStore{})
+	key, err := svc.CreateAPIKeyWithScopes(t.Context(), types.AuthContext{
+		TenantID:    "ten_acme",
+		TenantSlug:  "acme",
+		SubjectType: types.AuthSubjectUserSession,
+		ActorName:   "Acme Admin",
+		UserID:      "usr_acme",
+		Role:        "admin",
+	}, "raycast", []string{"threads:read", "mcp:use"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.Config{}, svc)
+
+	for _, path := range []string{"/api/auth/me", "/api/me"} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("authorization", "Bearer "+key.Key)
+		server.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+		}
+		body := recorder.Body.String()
+		if !strings.Contains(body, `"tenant_id":"ten_acme"`) ||
+			!strings.Contains(body, `"tenant_slug":"acme"`) ||
+			!strings.Contains(body, `"subject_type":"api_key"`) ||
+			!strings.Contains(body, `"actor_name":"raycast"`) ||
+			!strings.Contains(body, `"key_id":"`) ||
+			!strings.Contains(body, `"scopes":["threads:read","mcp:use"]`) {
+			t.Fatalf("%s metadata body=%s", path, body)
+		}
+		if strings.Contains(body, key.Key) || strings.Contains(body, key.TokenHash) {
+			t.Fatalf("%s leaked secret material: %s", path, body)
+		}
+	}
+}
+
 func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
 	repo := &db.MemoryRepository{
 		Tenants: []types.Tenant{{ID: "ten_acme", Slug: "acme", Name: "Acme"}},

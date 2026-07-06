@@ -34,20 +34,20 @@ AGENTBOX_MAX_FILE_SIZE_BYTES="26214400"
 AGENTBOX_DB_POOL_SIZE="4"
 ```
 
-## 3. Create the admin key
+## 3. Create the deployment admin key
 
-Agentbox uses one admin key for setup, read-only viewer access, and API key management.
+Agentbox uses one deployment admin key for tenant/user bootstrap and emergency provisioning APIs. Do not put this key in the browser dashboard or external connector clients.
 
 ```bash
 openssl rand -hex 32
 AGENTBOX_ADMIN_KEY="paste-the-generated-value"
 ```
 
-Normal API and MCP requests do not use the admin key. They use named API keys stored in Postgres.
+Normal dashboard, API, MCP, Raycast, and CLI requests do not use the deployment admin key. They use a browser session cookie or tenant-scoped API keys stored hashed in Postgres.
 
 ## 4. Deploy the required Go backend
 
-The Go backend owns `/api/*`, `/api/mcp`, Postgres, R2, migrations, admin key management, and the API used by the CLI.
+The Go backend owns `/api/*`, `/api/mcp`, Postgres, R2, migrations, tenant provisioning, session auth, tenant-scoped key management, and the API used by the CLI.
 
 ```bash
 vercel link --yes --project agentbox-go
@@ -71,22 +71,27 @@ Run migrations once with the backend production environment available:
 bun run db:migrate
 ```
 
-This creates the thread, message, asset, and API key tables, including `api_keys`.
+This creates the tenant, user, session, thread, message, asset, pending upload, and API key tables. Existing single-tenant data and plaintext keys are migrated into the default tenant and hashed where possible.
 
-## 6. Initialize local and ChatGPT keys
+## 6. Provision the first tenant admin
 
-After the backend is live and migrated, create two DB-backed API keys through the admin API:
+After the backend is live and migrated, create the first tenant and admin user through the deployment-owner admin API:
 
 ```bash
-agentbox init \
-  --profile-name prod \
+agentbox provision tenant \
   --base-url https://youragentbox.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --local-key-name local \
-  --chatgpt-key-name chatgpt
+  --tenant-slug default \
+  --tenant-name Default \
+  --user-email you@example.com \
+  --user-name "Your Name" \
+  --password "$AGENTBOX_INITIAL_PASSWORD" \
+  --create-cli-key \
+  --key-name local \
+  --profile-name prod
 ```
 
-`agentbox init` creates a `local` key and a `chatgpt` key in Postgres, saves the local key in your CLI profile, and prints the ChatGPT key and MCP URL once. Store the ChatGPT secret immediately.
+`agentbox provision tenant` creates or updates the tenant and first tenant admin. With `--create-cli-key`, it also creates a tenant-scoped `local` API key, saves it in your CLI profile, and prints the secret once.
 
 Verify the local profile:
 
@@ -98,16 +103,17 @@ agentbox list
 Manage keys later with:
 
 ```bash
-agentbox keys list --admin-key "$AGENTBOX_ADMIN_KEY"
-agentbox keys create worker --admin-key "$AGENTBOX_ADMIN_KEY"
-agentbox keys revoke worker --admin-key "$AGENTBOX_ADMIN_KEY"
+agentbox login --base-url https://youragentbox.vercel.app --profile-name prod
+agentbox keys list
+agentbox keys create worker
+agentbox keys revoke worker
 ```
 
 If the CLI cannot resolve a backend URL from the active profile, pass `--base-url https://youragentbox.vercel.app`.
 
 ## 7. Connect ChatGPT
 
-Use the MCP URL printed by `agentbox init`, or print one for the active local profile:
+Create a dedicated ChatGPT key and print the tenant-scoped MCP URL:
 
 ```bash
 agentbox connect chatgpt
@@ -119,7 +125,7 @@ In ChatGPT:
 Apps -> Advanced settings -> turn on developer mode -> Create app -> select no auth -> paste the MCP URL
 ```
 
-Agentbox uses no ChatGPT app auth because the API key is embedded in the MCP URL.
+Agentbox uses no ChatGPT app auth because the tenant-scoped API key is embedded in the MCP URL. Revoke or rotate the `chatgpt` key if the URL is exposed.
 
 ## 8. Deploy the optional dashboard
 
@@ -138,7 +144,7 @@ Open:
 https://your-agentbox.vercel.app/threads
 ```
 
-Enter `AGENTBOX_ADMIN_KEY` in the viewer dialog. The browser stores it locally and sends it as `x-agentbox-admin-key` to viewer/admin API routes.
+Sign in at `/login` with the tenant admin email and password from provisioning. The dashboard uses an HTTP-only session cookie and tenant-scoped API routes; it does not store `AGENTBOX_ADMIN_KEY` in browser storage.
 
 ## 9. REST smoke test
 
@@ -165,7 +171,7 @@ Run the backend/dashboard locally:
 bun run dev
 ```
 
-For local API calls, create an API key through the admin API and use it in the `key` query parameter or CLI profile. There is no unauthenticated local API fallback.
+For local API calls, create a tenant-scoped API key through the dashboard or `agentbox keys create` and use it in the `key` query parameter or CLI profile. There is no unauthenticated local API fallback.
 
 Useful checks:
 
@@ -186,7 +192,7 @@ For normal API or MCP requests, confirm the URL includes a DB-backed API key:
 https://youragentbox.vercel.app/api/mcp?key=your-api-key
 ```
 
-For admin routes and the viewer, confirm `AGENTBOX_ADMIN_KEY` is set on the backend and the request sends `x-agentbox-admin-key` or bearer auth.
+For provisioning routes, confirm `AGENTBOX_ADMIN_KEY` is set on the backend and the request sends `x-agentbox-admin-key` or bearer auth. For the dashboard, sign in through `/login`; for CLI, Raycast, MCP, and direct API calls, use a tenant-scoped API key.
 
 ### `DATABASE_URL is required`
 

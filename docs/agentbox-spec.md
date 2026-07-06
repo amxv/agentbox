@@ -484,7 +484,7 @@ codex-local
 claude-code-local
 ```
 
-API keys are stored in Postgres and managed through the backend admin API.
+API keys are tenant-scoped, stored hashed in Postgres, and managed through the dashboard or tenant-scoped CLI key commands after provisioning or browser login.
 
 Clients authenticate by putting the key directly in the endpoint URL:
 
@@ -492,7 +492,7 @@ Clients authenticate by putting the key directly in the endpoint URL:
 https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
 ```
 
-Key records are keyed by name:
+Active key names are unique inside a tenant:
 
 ```text
 chatgpt
@@ -503,9 +503,10 @@ codex-local
 The key name is also used as the actor shown on threads and messages. Create and revoke keys with the CLI:
 
 ```bash
-agentbox keys create chatgpt --admin-key "$AGENTBOX_ADMIN_KEY"
-agentbox keys list --admin-key "$AGENTBOX_ADMIN_KEY"
-agentbox keys revoke chatgpt --admin-key "$AGENTBOX_ADMIN_KEY"
+agentbox login --base-url https://your-agentbox.vercel.app --profile-name prod
+agentbox keys create chatgpt
+agentbox keys list
+agentbox keys revoke chatgpt
 ```
 
 Keys should be stored securely and should not be committed to source control.

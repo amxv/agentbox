@@ -52,6 +52,7 @@ Set these on the Go backend service:
 ```text
 DATABASE_URL
 AGENTBOX_ADMIN_KEY
+AGENTBOX_ENV=production
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -71,18 +72,22 @@ R2_PUBLIC_BASE_URL
 
 `AGENTBOX_AUTO_MIGRATE=true` is acceptable for a preview smoke test but should not be the production default. Production rollout should run `bun run db:migrate` once before traffic is cut over.
 
-API keys are not managed through Vercel environment rewrites. After the backend is deployed and migrated, create the first local and ChatGPT keys through the backend admin API:
+API keys are not managed through Vercel environment rewrites. After the backend is deployed and migrated, provision the first tenant admin and local CLI key through the deployment-owner admin API:
 
 ```bash
-agentbox init \
-  --profile-name prod \
+agentbox provision tenant \
   --base-url https://agentbox-go-preview-or-prod.example.com \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --local-key-name local \
-  --chatgpt-key-name chatgpt
+  --tenant-slug default \
+  --tenant-name Default \
+  --user-email you@example.com \
+  --user-name "Your Name" \
+  --create-cli-key \
+  --key-name local \
+  --profile-name prod
 ```
 
-Use `agentbox keys create|list|revoke` for later DB-backed key management.
+Use `agentbox login` for additional machines and `agentbox keys create|list|revoke`, `agentbox raycast-key`, and `agentbox connect chatgpt` from a tenant profile for later tenant-scoped key management. The legacy `agentbox init` and `/api/admin/keys` paths are compatibility paths only.
 
 Vercel currently caps function request and response payloads at 4.5 MB. On Vercel, direct multipart uploads through `/api/threads/:threadId/messages` must stay below that cap until a direct-to-R2 upload flow exists. Non-Vercel/self-hosted deployments can keep the current default `AGENTBOX_MAX_FILE_SIZE_BYTES` of 25 MiB.
 
@@ -94,7 +99,7 @@ Set these on the Next.js dashboard service:
 AGENTBOX_BACKEND_URL=https://agentbox-go-preview-or-prod.example.com
 ```
 
-The browser viewer stores the admin key locally and sends it as `x-agentbox-admin-key` to `/api/viewer/*`. The dashboard proxy forwards that same-origin request to the Go backend.
+The dashboard uses `/login`, an HTTP-only session cookie, and tenant-scoped `/api/threads`, `/api/viewer/*`, and `/api/keys` proxy routes. It should not store or ask for `AGENTBOX_ADMIN_KEY`.
 
 ## Migrations
 
@@ -175,7 +180,7 @@ Validate the dashboard preview:
 
 - Set dashboard `AGENTBOX_BACKEND_URL` to the Go backend preview URL.
 - Open `/threads`.
-- Add a viewer profile with the admin key.
+- Sign in with the provisioned tenant admin user.
 - Open a thread and verify messages and attachment links render.
 
 ## Production Cutover

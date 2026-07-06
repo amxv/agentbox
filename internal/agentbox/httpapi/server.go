@@ -43,6 +43,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/login", s.authLogin)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
+	s.mux.HandleFunc("/api/me", s.authMe)
 	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
 	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
 	s.mux.HandleFunc("/api/admin/tenants", s.adminTenants)
