@@ -1,6 +1,6 @@
 # Agentbox Raycast Extension
 
-Raycast commands for daily Agentbox workflows: browse latest messages, search threads, inspect messages, create threads, post replies with attachments, copy content to the clipboard, copy the MCP URL, and check the configured connection.
+Raycast commands for daily Agentbox workflows: browse latest messages, search threads, inspect messages, create threads, post replies with attachments, copy content to the clipboard, and check the configured connection.
 
 This package is intentionally self-contained under `raycast/agentbox`. It uses npm and the Raycast extension CLI, talks to Agentbox through the existing HTTP API, and does not require the Go CLI or any bundled native binary at runtime.
 
@@ -45,6 +45,12 @@ npm run publish
 
 Do not publish from feature branches. Before publishing, verify the Raycast organization handle is still `zue-ai`, the `owner` field is present in `package.json`, the extension metadata is acceptable for the private Store, and no API keys, MCP URLs, thread contents, or signed attachment URLs are present in code, docs, screenshots, or release assets.
 
+The Raycast free team plan allows 5 commands across organization extensions. This private package intentionally publishes the five daily commands and leaves MCP URL generation to the Agentbox CLI:
+
+```bash
+agentbox mcp-url
+```
+
 Public Raycast Store distribution can happen later through Raycast's public publish pull request flow. Keep private/team publishing separate from the public Store metadata and review process.
 
 ## Commands
@@ -53,7 +59,6 @@ Public Raycast Store distribution can happen later through Raycast's public publ
 - `Search Threads`: search recent threads, press Enter to copy the visible thread/message content, inspect messages, open dashboard links, copy thread details, post replies, and work with attachments.
 - `Create Thread`: create a thread with an optional first message and optional local attachments.
 - `Post Message`: post a message or local attachments to an existing thread.
-- `Copy MCP URL`: copy `/api/mcp?key=...` using Raycast concealed clipboard content when available.
 - `Check Connection`: verify preferences, `/api/health`, authenticated `/api/threads?limit=1`, and MCP URL construction.
 
 ## Local Checks

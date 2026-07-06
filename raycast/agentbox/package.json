@@ -72,13 +72,6 @@
       "mode": "view"
     },
     {
-      "name": "copy-mcp-url",
-      "title": "Copy MCP URL",
-      "subtitle": "Agentbox",
-      "description": "Copy the configured Agentbox MCP endpoint with a concealed API key.",
-      "mode": "no-view"
-    },
-    {
       "name": "doctor",
       "title": "Check Connection",
       "subtitle": "Agentbox",

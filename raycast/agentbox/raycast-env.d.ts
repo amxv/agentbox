@@ -28,8 +28,6 @@ declare namespace Preferences {
   export type CreateThread = ExtensionPreferences & {}
   /** Preferences accessible in the `post-message` command */
   export type PostMessage = ExtensionPreferences & {}
-  /** Preferences accessible in the `copy-mcp-url` command */
-  export type CopyMcpUrl = ExtensionPreferences & {}
   /** Preferences accessible in the `doctor` command */
   export type Doctor = ExtensionPreferences & {}
 }
@@ -43,8 +41,6 @@ declare namespace Arguments {
   export type CreateThread = {}
   /** Arguments passed to the `post-message` command */
   export type PostMessage = {}
-  /** Arguments passed to the `copy-mcp-url` command */
-  export type CopyMcpUrl = {}
   /** Arguments passed to the `doctor` command */
   export type Doctor = {}
 }
