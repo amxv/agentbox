@@ -148,6 +148,90 @@ func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
 	}
 }
 
+func TestServiceProvisionTenantIsIdempotentAndHashesPassword(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+
+	first, err := svc.ProvisionTenant(context.Background(), ProvisionTenantParams{
+		TenantSlug: "acme",
+		TenantName: "Acme",
+		UserEmail:  "admin@example.com",
+		UserName:   "Acme Admin",
+		Password:   "secret-password",
+		CreateKey:  true,
+		KeyName:    "workstation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Tenant.ID != "ten_acme" || first.User.Role != "admin" || first.APIKey == nil || first.APIKey.Key == "" {
+		t.Fatalf("first result = %#v", first)
+	}
+	if len(repo.Tenants) != 1 || len(repo.Users) != 1 || len(repo.APIKeys) != 1 {
+		t.Fatalf("repo counts tenants=%d users=%d keys=%d", len(repo.Tenants), len(repo.Users), len(repo.APIKeys))
+	}
+	if repo.Users[0].PasswordHash == nil || *repo.Users[0].PasswordHash == "secret-password" {
+		t.Fatalf("password was not hashed: %#v", repo.Users[0].PasswordHash)
+	}
+	if _, _, err := svc.Login(context.Background(), "ten_acme", "admin@example.com", "secret-password"); err != nil {
+		t.Fatalf("login with provisioned password failed: %v", err)
+	}
+
+	second, err := svc.ProvisionTenant(context.Background(), ProvisionTenantParams{
+		TenantSlug: "acme",
+		TenantName: "Acme Renamed",
+		UserEmail:  "admin@example.com",
+		UserName:   "Acme Admin",
+		Password:   "secret-password",
+		CreateKey:  true,
+		KeyName:    "workstation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Tenant.ID != first.Tenant.ID || second.User.ID != first.User.ID {
+		t.Fatalf("provisioning was not idempotent: first=%#v second=%#v", first, second)
+	}
+	if len(repo.Tenants) != 1 || len(repo.Users) != 1 || len(repo.APIKeys) != 1 {
+		t.Fatalf("repo counts after second tenants=%d users=%d keys=%d", len(repo.Tenants), len(repo.Users), len(repo.APIKeys))
+	}
+}
+
+func TestServiceProvisionUserSetupToken(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+	if _, err := repo.UpsertTenant(context.Background(), types.Tenant{ID: "ten_acme", Slug: "acme", Name: "Acme"}); err != nil {
+		t.Fatal(err)
+	}
+	user, setupToken, err := svc.ProvisionUser(context.Background(), ProvisionUserParams{
+		TenantIDOrSlug: "acme",
+		Email:          "new@example.com",
+		DisplayName:    "New Admin",
+		Role:           "admin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.ID == "" || setupToken == "" {
+		t.Fatalf("user=%#v setupToken=%q", user, setupToken)
+	}
+	if _, _, err := svc.Login(context.Background(), "ten_acme", "new@example.com", setupToken); err != nil {
+		t.Fatalf("login with setup token failed: %v", err)
+	}
+	_, secondToken, err := svc.ProvisionUser(context.Background(), ProvisionUserParams{
+		TenantIDOrSlug: "acme",
+		Email:          "new@example.com",
+		DisplayName:    "New Admin",
+		Role:           "admin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondToken != "" {
+		t.Fatalf("existing user should not receive a new setup token, got %q", secondToken)
+	}
+}
+
 func testAuth(tenantID string, actorName string) types.AuthContext {
 	return types.AuthContext{
 		TenantID:    tenantID,

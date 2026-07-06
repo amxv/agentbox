@@ -182,6 +182,93 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	return nil
 }
 
+func (r *Runner) runProvision(args []string, profileName string) error {
+	if len(args) == 0 || args[0] != "tenant" {
+		return errors.New(`Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key]`)
+	}
+	fs := newFlagSet("provision tenant")
+	baseURL := fs.String("base-url", "", "Agentbox backend URL")
+	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	tenantSlug := fs.String("tenant-slug", "", "tenant slug")
+	tenantName := fs.String("tenant-name", "", "tenant display name")
+	userEmail := fs.String("user-email", "", "initial tenant admin email")
+	userName := fs.String("user-name", "", "initial tenant admin display name")
+	password := fs.String("password", "", "initial password; if omitted, a setup token is returned")
+	createCLIKey := fs.Bool("create-cli-key", false, "create an initial tenant-scoped API key and save a CLI profile")
+	keyName := fs.String("key-name", "cli", "initial API key name")
+	provisionProfileName := fs.String("profile-name", "", "stored profile name for --create-cli-key")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("Usage: agentbox provision tenant [options]")
+	}
+	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
+	if err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"tenant_slug": strings.TrimSpace(*tenantSlug),
+		"tenant_name": strings.TrimSpace(*tenantName),
+		"user_email":  strings.TrimSpace(*userEmail),
+		"user_name":   strings.TrimSpace(*userName),
+		"password":    *password,
+		"create_key":  *createCLIKey,
+		"key_name":    strings.TrimSpace(*keyName),
+	})
+	var result remoteProvisionTenantResult
+	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/tenants", http.MethodPost, bytes.NewReader(payload), &result); err != nil {
+		return err
+	}
+	profileSaved := ""
+	if *createCLIKey && result.APIKey.Secret != "" {
+		profileSaved = strings.TrimSpace(*provisionProfileName)
+		if profileSaved == "" {
+			profileSaved = result.Tenant.Slug
+		}
+		if profileSaved == "" {
+			profileSaved = "local"
+		}
+		if _, err := profiles.SaveProfile(profiles.Profile{
+			Name:    profileSaved,
+			BaseURL: resolvedBaseURL,
+			APIKey:  result.APIKey.Secret,
+		}, true); err != nil {
+			return err
+		}
+	}
+	if *jsonOut {
+		output := map[string]any{
+			"tenant":       result.Tenant,
+			"user":         result.User,
+			"profile_name": profileSaved,
+		}
+		if result.SetupToken != "" {
+			output["setup_token"] = result.SetupToken
+		}
+		if result.APIKey.Secret != "" {
+			output["api_key"] = result.APIKey
+		}
+		return printJSON(r.Stdout, output)
+	}
+	fmt.Fprintf(r.Stdout, "Provisioned tenant %q (%s).\n", result.Tenant.Name, result.Tenant.ID)
+	fmt.Fprintf(r.Stdout, "Provisioned admin user %s.\n", result.User.Email)
+	if result.SetupToken != "" {
+		fmt.Fprintf(r.Stdout, "Setup token: %s\n", result.SetupToken)
+		fmt.Fprintln(r.Stdout, "Use this token as the initial password and rotate it after first sign-in.")
+	}
+	if result.APIKey.Secret != "" {
+		fmt.Fprintf(r.Stdout, "Created API key %q.\n", result.APIKey.Name)
+		fmt.Fprintf(r.Stdout, "Secret: %s\n", result.APIKey.Secret)
+		if profileSaved != "" {
+			fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", profileSaved, profiles.DefaultConfigPath())
+		}
+		fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
+	}
+	return nil
+}
+
 func (r *Runner) runDeploy(args []string, globalProfileName string) error {
 	if len(args) == 0 || args[0] != "vercel" {
 		return errors.New(`Usage: agentbox deploy vercel`)
@@ -214,7 +301,7 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel env add AGENTBOX_ENV production",
 		"vercel --prod --yes -A deploy/vercel/backend/vercel.json",
 		"bun run db:migrate",
-		"agentbox init --base-url https://YOUR-BACKEND.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\"",
+		"agentbox provision tenant --base-url https://YOUR-BACKEND.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\" --tenant-slug default --tenant-name Default --user-email you@example.com --user-name \"Your Name\" --create-cli-key --profile-name production",
 		"vercel link --yes --project agentbox",
 		"printf 'https://YOUR-BACKEND.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production",
 		"vercel --prod --yes -A deploy/vercel/dashboard/vercel.json",
@@ -231,11 +318,38 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 }
 
 type remoteAPIKey struct {
+	ID        string `json:"id"`
+	TenantID  string `json:"tenant_id"`
 	Name      string `json:"name"`
 	Secret    string `json:"key"`
 	KeyMasked string `json:"key_masked"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+type remoteTenant struct {
+	ID        string `json:"id"`
+	Slug      string `json:"slug"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type remoteUser struct {
+	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type remoteProvisionTenantResult struct {
+	Tenant     remoteTenant `json:"tenant"`
+	User       remoteUser   `json:"user"`
+	APIKey     remoteAPIKey `json:"api_key"`
+	SetupToken string       `json:"setup_token"`
 }
 
 func (r *Runner) runKeys(args []string, profileName string) error {

@@ -720,6 +720,57 @@ func (r *Repository) MarkAPIKeyUsed(ctx context.Context, keyID string) error {
 	return err
 }
 
+func (r *Repository) UpsertTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.Tenant{}, err
+	}
+	row := r.pool.QueryRow(ctx, `
+insert into tenants (id, slug, name)
+values ($1, $2, $3)
+on conflict (slug) do update
+set name = excluded.name, updated_at = now()
+returning id, slug, name, created_at, updated_at
+`, tenant.ID, tenant.Slug, tenant.Name)
+	return scanTenant(row)
+}
+
+func (r *Repository) GetTenant(ctx context.Context, idOrSlug string) (*types.Tenant, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, err
+	}
+	tenant, err := scanTenant(r.pool.QueryRow(ctx, `
+select id, slug, name, created_at, updated_at
+from tenants
+where id = $1 or slug = $1
+`, strings.TrimSpace(idOrSlug)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &tenant, nil
+}
+
+func (r *Repository) UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.User{}, err
+	}
+	row := r.pool.QueryRow(ctx, `
+insert into users (id, tenant_id, email, display_name, password_hash, role)
+values ($1, $2, $3, $4, $5, $6)
+on conflict (tenant_id, lower(email)) do update
+set
+  display_name = excluded.display_name,
+  password_hash = coalesce(excluded.password_hash, users.password_hash),
+  role = excluded.role,
+  updated_at = now(),
+  disabled_at = null
+returning id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
+`, "usr_"+uuid.NewString(), tenantID, strings.TrimSpace(email), strings.TrimSpace(displayName), passwordHash, role)
+	return scanUser(row)
+}
+
 func (r *Repository) FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
@@ -943,6 +994,16 @@ func scanAPIKey(row threadScanner) (types.APIKey, error) {
 		key.RevokedAt = &value
 	}
 	return key, err
+}
+
+func scanTenant(row threadScanner) (types.Tenant, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	tenant := types.Tenant{}
+	err := row.Scan(&tenant.ID, &tenant.Slug, &tenant.Name, &createdAt, &updatedAt)
+	tenant.CreatedAt = isoMillis(createdAt)
+	tenant.UpdatedAt = isoMillis(updatedAt)
+	return tenant, err
 }
 
 func scanUser(row threadScanner) (types.User, error) {

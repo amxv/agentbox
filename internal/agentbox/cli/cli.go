@@ -167,6 +167,8 @@ func (r *Runner) run(args []string) error {
 		return r.runMCPURL(cmdArgs, *profileName)
 	case "init":
 		return r.runInit(cmdArgs, *profileName)
+	case "provision":
+		return r.runProvision(cmdArgs, *profileName)
 	case "connect":
 		return r.runConnect(cmdArgs, *profileName)
 	case "deploy":
@@ -205,6 +207,7 @@ Commands:
   doctor                  check profile, API, MCP, and attachment access
   mcp-url                 print the full MCP URL for the selected profile
   init                    save a local profile and optionally verify it
+  provision               create tenants and admin users with the deployment admin key
   connect                 print ChatGPT MCP setup instructions
   deploy                  print self-hosting deployment guidance
   keys                    manage DB-backed API keys
@@ -242,6 +245,9 @@ Print the full MCP URL for the selected profile, including its API key.`,
 		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
 
 Create local and ChatGPT API keys through the backend admin API, then save the local CLI profile.`,
+		"provision": `Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key] [--key-name cli] [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--json]
+
+Create or update a tenant and initial tenant admin user through the deployment-owner admin API. No public signup endpoint is exposed.`,
 		"connect": `Usage: agentbox connect chatgpt [--json]
 
 Print the MCP URL for the selected profile plus the ChatGPT app setup steps.`,

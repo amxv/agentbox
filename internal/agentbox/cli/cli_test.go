@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -33,6 +35,11 @@ func TestCLIGlobalVersionFlags(t *testing.T) {
 	}
 }
 
+func dbHashForTest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
 func TestCLIHelpOutput(t *testing.T) {
 	cases := []struct {
 		args []string
@@ -44,6 +51,7 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
+		{[]string{"provision", "--help"}, []string{"Usage: agentbox provision tenant", "deployment-owner admin API"}},
 		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "admin API"}},
 		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "DB-backed"}},
 		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "admin API"}},
@@ -466,7 +474,7 @@ func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 		t.Fatalf("deploy vercel failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "agentbox init --base-url") {
+	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "agentbox provision tenant --base-url") {
 		t.Fatalf("deploy output = %s", output)
 	}
 	if called {
@@ -510,6 +518,64 @@ func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
 	}
 }
 
+func TestCLIProvisionTenantCreatesProfile(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+
+	if code := runner.Run([]string{
+		"provision", "tenant",
+		"--base-url", server.URL,
+		"--admin-key", "adm",
+		"--tenant-slug", "acme",
+		"--tenant-name", "Acme",
+		"--user-email", "admin@example.com",
+		"--user-name", "Acme Admin",
+		"--password", "secret-password",
+		"--create-cli-key",
+		"--key-name", "workstation",
+		"--profile-name", "acme-prod",
+		"--json",
+	}); code != 0 {
+		t.Fatalf("provision tenant failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
+	}
+	var payload struct {
+		Tenant struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"tenant"`
+		User struct {
+			Email string `json:"email"`
+			Role  string `json:"role"`
+		} `json:"user"`
+		APIKey struct {
+			Name   string `json:"name"`
+			Secret string `json:"key"`
+		} `json:"api_key"`
+		ProfileName string `json:"profile_name"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Tenant.ID != "ten_acme" || payload.Tenant.Slug != "acme" || payload.User.Email != "admin@example.com" || payload.User.Role != "admin" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if payload.APIKey.Name != "workstation" || payload.APIKey.Secret == "" || payload.ProfileName != "acme-prod" {
+		t.Fatalf("api/profile payload = %#v", payload)
+	}
+	resolved, err := profiles.Resolve("acme-prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey != payload.APIKey.Secret {
+		t.Fatalf("resolved profile = %#v payload key=%q", resolved, payload.APIKey.Secret)
+	}
+}
+
 func TestShouldReadStdinForPipe(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -526,18 +592,23 @@ func TestShouldReadStdinForPipe(t *testing.T) {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := &db.MemoryRepository{}
-	if _, err := repo.CreateAPIKey(t.Context(), "dev", "dev-key"); err != nil {
+	authContext := types.AuthContext{TenantID: types.DefaultTenantID, SubjectType: types.AuthSubjectAdmin, ActorName: "seed", Role: "admin"}
+	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	if _, err := svc.CreateAPIKey(t.Context(), authContext, "dev"); err != nil {
 		t.Fatal(err)
 	}
+	repo.APIKeys[0].Key = "dev-key"
+	repo.APIKeys[0].TokenHash = dbHashForTest("dev-key")
 	fake := &assets.FakeStore{PublicBaseURL: "https://assets.example.com"}
-	svc := service.New(repo, fake)
-	thread, err := svc.CreateThread(t.Context(), types.Actor{Name: "seed", KeyName: "seed"}, "Seed")
+	svc = service.New(repo, fake)
+	thread, err := svc.CreateThread(t.Context(), authContext, "Seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 	textType := "text/plain"
-	if _, err := repo.PostMessage(t.Context(), thread.ID, "seed", "seed asset", nil, []types.NewAsset{{
-		StorageKey: "agentbox/seed/message/seed.txt",
+	if _, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, authContext, "seed asset", nil, []types.NewAsset{{
+		TenantID:   types.DefaultTenantID,
+		StorageKey: "agentbox/ten_default/seed/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,
 		SizeBytes:  int64(len("seed bytes")),

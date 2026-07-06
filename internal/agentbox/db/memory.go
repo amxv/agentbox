@@ -17,6 +17,7 @@ type MemoryRepository struct {
 	Assets   []types.Asset
 	Pending  []types.PendingUpload
 	APIKeys  []types.APIKey
+	Tenants  []types.Tenant
 	Users    []types.User
 	Sessions []types.UserSession
 }
@@ -342,6 +343,76 @@ func (m *MemoryRepository) MarkAPIKeyUsed(_ context.Context, keyID string) error
 		}
 	}
 	return nil
+}
+
+func (m *MemoryRepository) UpsertTenant(_ context.Context, tenant types.Tenant) (types.Tenant, error) {
+	now := isoMillis(time.Now())
+	if tenant.ID == "" {
+		tenant.ID = tenantOf(tenant.Slug)
+	}
+	tenant.Slug = strings.TrimSpace(tenant.Slug)
+	tenant.Name = strings.TrimSpace(tenant.Name)
+	for i := range m.Tenants {
+		if strings.EqualFold(m.Tenants[i].Slug, tenant.Slug) {
+			m.Tenants[i].Name = tenant.Name
+			m.Tenants[i].UpdatedAt = now
+			return m.Tenants[i], nil
+		}
+	}
+	tenant.CreatedAt = now
+	tenant.UpdatedAt = now
+	m.Tenants = append(m.Tenants, tenant)
+	return tenant, nil
+}
+
+func (m *MemoryRepository) GetTenant(_ context.Context, idOrSlug string) (*types.Tenant, error) {
+	idOrSlug = strings.TrimSpace(idOrSlug)
+	for _, tenant := range m.Tenants {
+		if tenant.ID == idOrSlug || tenant.Slug == idOrSlug {
+			copy := tenant
+			return &copy, nil
+		}
+	}
+	if idOrSlug == types.DefaultTenantID || idOrSlug == "default" {
+		return &types.Tenant{
+			ID:        types.DefaultTenantID,
+			Slug:      "default",
+			Name:      "Default",
+			CreatedAt: isoMillis(time.Now()),
+			UpdatedAt: isoMillis(time.Now()),
+		}, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
+	now := isoMillis(time.Now())
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	for i := range m.Users {
+		if tenantOf(m.Users[i].TenantID) == tenantOf(tenantID) && strings.EqualFold(m.Users[i].Email, email) {
+			m.Users[i].DisplayName = displayName
+			if passwordHash != nil {
+				m.Users[i].PasswordHash = passwordHash
+			}
+			m.Users[i].Role = role
+			m.Users[i].UpdatedAt = now
+			m.Users[i].DisabledAt = nil
+			return m.Users[i], nil
+		}
+	}
+	user := types.User{
+		ID:           "usr_" + uuid.NewString(),
+		TenantID:     tenantOf(tenantID),
+		Email:        email,
+		DisplayName:  displayName,
+		PasswordHash: passwordHash,
+		Role:         role,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	m.Users = append(m.Users, user)
+	return user, nil
 }
 
 func (m *MemoryRepository) FindUserByEmail(_ context.Context, tenantID string, email string) (*types.User, error) {

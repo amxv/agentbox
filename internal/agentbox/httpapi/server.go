@@ -43,6 +43,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/login", s.authLogin)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
+	s.mux.HandleFunc("/api/admin/tenants", s.adminTenants)
+	s.mux.HandleFunc("/api/admin/tenants/", s.adminTenantSubroutes)
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
 	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
 	s.mux.HandleFunc("/api/keys", s.keys)
@@ -182,6 +184,117 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) adminTenants(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		TenantSlug string `json:"tenant_slug"`
+		TenantName string `json:"tenant_name"`
+		UserEmail  string `json:"user_email"`
+		UserName   string `json:"user_name"`
+		Password   string `json:"password"`
+		CreateKey  bool   `json:"create_key"`
+		KeyName    string `json:"key_name"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.service.ProvisionTenant(r.Context(), service.ProvisionTenantParams{
+		TenantSlug: input.TenantSlug,
+		TenantName: input.TenantName,
+		UserEmail:  input.UserEmail,
+		UserName:   input.UserName,
+		Password:   input.Password,
+		CreateKey:  input.CreateKey,
+		KeyName:    input.KeyName,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, provisionTenantResponse(result))
+}
+
+func (s *Server) adminTenantSubroutes(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/admin/tenants/")
+	tenantID, tail, ok := splitFirst(rest)
+	if !ok || tenantID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	switch tail {
+	case "users":
+		s.adminTenantUsers(w, r, tenantID)
+	case "keys":
+		s.adminTenantKeys(w, r, tenantID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) adminTenantUsers(w http.ResponseWriter, r *http.Request, tenantID string) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Email       string `json:"email"`
+		UserEmail   string `json:"user_email"`
+		DisplayName string `json:"display_name"`
+		UserName    string `json:"user_name"`
+		Password    string `json:"password"`
+		Role        string `json:"role"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	email := firstNonEmpty(input.Email, input.UserEmail)
+	displayName := firstNonEmpty(input.DisplayName, input.UserName)
+	user, setupToken, err := s.service.ProvisionUser(r.Context(), service.ProvisionUserParams{
+		TenantIDOrSlug: tenantID,
+		Email:          email,
+		DisplayName:    displayName,
+		Password:       input.Password,
+		Role:           input.Role,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response := map[string]any{"user": user}
+	if setupToken != "" {
+		response["setup_token"] = setupToken
+	}
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) adminTenantKeys(w http.ResponseWriter, r *http.Request, tenantID string) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	key, err := s.service.ProvisionTenantAPIKey(r.Context(), tenantID, input.Name)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"key": apiKeyResponse(key)})
+}
+
 func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
@@ -208,13 +321,7 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"key": map[string]any{
-				"name":       key.Name,
-				"key":        key.Key,
-				"key_masked": key.KeyMasked,
-				"created_at": key.CreatedAt,
-				"updated_at": key.UpdatedAt,
-			},
+			"key": apiKeyResponse(key),
 		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -277,13 +384,7 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"key": map[string]any{
-				"name":       key.Name,
-				"key":        key.Key,
-				"key_masked": key.KeyMasked,
-				"created_at": key.CreatedAt,
-				"updated_at": key.UpdatedAt,
-			},
+			"key": apiKeyResponse(key),
 		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -703,6 +804,33 @@ func adminAuthContext() types.AuthContext {
 	}
 }
 
+func provisionTenantResponse(result service.ProvisionTenantResult) map[string]any {
+	response := map[string]any{
+		"tenant": result.Tenant,
+		"user":   result.User,
+	}
+	if result.SetupToken != "" {
+		response["setup_token"] = result.SetupToken
+	}
+	if result.APIKey != nil {
+		response["api_key"] = apiKeyResponse(*result.APIKey)
+		response["key"] = apiKeyResponse(*result.APIKey)
+	}
+	return response
+}
+
+func apiKeyResponse(key types.APIKey) map[string]any {
+	return map[string]any{
+		"id":         key.ID,
+		"tenant_id":  key.TenantID,
+		"name":       key.Name,
+		"key":        key.Key,
+		"key_masked": key.KeyMasked,
+		"created_at": key.CreatedAt,
+		"updated_at": key.UpdatedAt,
+	}
+}
+
 func tenantAdmin(authContext types.AuthContext) bool {
 	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.Role == "admin"
 }
@@ -730,7 +858,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		code = coded.Code
 		message = coded.Message
 		switch coded.Code {
-		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND":
+		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND":
 			status = http.StatusNotFound
 		case "PERMISSION_DENIED":
 			status = http.StatusForbidden
@@ -747,6 +875,15 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		message = service.ErrThreadNotFound.Error()
 	}
 	writeJSON(w, status, map[string]any{"error": message, "code": code})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func errorCodeForStatus(status int) string {

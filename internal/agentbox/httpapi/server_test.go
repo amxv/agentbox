@@ -464,6 +464,122 @@ func TestAdminKeyRoutesCreateListRevokeAndAuthenticate(t *testing.T) {
 	}
 }
 
+func TestAdminTenantProvisioningAuthorizationAndIdempotency(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	server := NewServer(config.Config{AdminKey: "adm"}, svc)
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{"tenant_slug":"acme"}`)))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{
+		"tenant_slug":"acme",
+		"tenant_name":"Acme",
+		"user_email":"admin@example.com",
+		"user_name":"Acme Admin",
+		"password":"secret-password",
+		"create_key":true,
+		"key_name":"workstation"
+	}`))
+	req.Header.Set("x-agentbox-admin-key", "adm")
+	first := httptest.NewRecorder()
+	server.ServeHTTP(first, req)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	var firstPayload struct {
+		Tenant types.Tenant `json:"tenant"`
+		User   types.User   `json:"user"`
+		APIKey struct {
+			Name   string `json:"name"`
+			Secret string `json:"key"`
+		} `json:"api_key"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPayload); err != nil {
+		t.Fatal(err)
+	}
+	if firstPayload.Tenant.ID != "ten_acme" || firstPayload.User.Email != "admin@example.com" || firstPayload.User.PasswordHash != nil || firstPayload.APIKey.Secret == "" {
+		t.Fatalf("first payload = %#v", firstPayload)
+	}
+	if len(repo.Users) != 1 || repo.Users[0].PasswordHash == nil || *repo.Users[0].PasswordHash == "secret-password" {
+		t.Fatalf("stored user = %#v", repo.Users)
+	}
+
+	normalKeyReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{"tenant_slug":"other"}`))
+	normalKeyReq.Header.Set("authorization", "Bearer "+firstPayload.APIKey.Secret)
+	normalKeyAttempt := httptest.NewRecorder()
+	server.ServeHTTP(normalKeyAttempt, normalKeyReq)
+	if normalKeyAttempt.Code != http.StatusUnauthorized {
+		t.Fatalf("normal key provisioning status=%d body=%s", normalKeyAttempt.Code, normalKeyAttempt.Body.String())
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{
+		"tenant_slug":"acme",
+		"tenant_name":"Acme",
+		"user_email":"admin@example.com",
+		"user_name":"Acme Admin",
+		"password":"secret-password",
+		"create_key":true,
+		"key_name":"workstation"
+	}`))
+	secondReq.Header.Set("x-agentbox-admin-key", "adm")
+	second := httptest.NewRecorder()
+	server.ServeHTTP(second, secondReq)
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	if len(repo.Tenants) != 1 || len(repo.Users) != 1 || len(repo.APIKeys) != 1 {
+		t.Fatalf("repo counts tenants=%d users=%d keys=%d", len(repo.Tenants), len(repo.Users), len(repo.APIKeys))
+	}
+}
+
+func TestAdminTenantUserAndKeyRoutes(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	server := NewServer(config.Config{AdminKey: "adm"}, svc)
+	if _, err := svc.ProvisionTenant(t.Context(), service.ProvisionTenantParams{
+		TenantSlug: "acme",
+		TenantName: "Acme",
+		UserEmail:  "admin@example.com",
+		UserName:   "Acme Admin",
+		Password:   "secret-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	userReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants/acme/users", strings.NewReader(`{"email":"second@example.com","display_name":"Second Admin","role":"admin"}`))
+	userReq.Header.Set("x-agentbox-admin-key", "adm")
+	userRes := httptest.NewRecorder()
+	server.ServeHTTP(userRes, userReq)
+	if userRes.Code != http.StatusCreated || !strings.Contains(userRes.Body.String(), `"setup_token":"setup_`) {
+		t.Fatalf("user status=%d body=%s", userRes.Code, userRes.Body.String())
+	}
+
+	keyReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants/acme/keys", strings.NewReader(`{"name":"raycast"}`))
+	keyReq.Header.Set("x-agentbox-admin-key", "adm")
+	keyRes := httptest.NewRecorder()
+	server.ServeHTTP(keyRes, keyReq)
+	if keyRes.Code != http.StatusCreated {
+		t.Fatalf("key status=%d body=%s", keyRes.Code, keyRes.Body.String())
+	}
+	var keyPayload struct {
+		Key struct {
+			TenantID string `json:"tenant_id"`
+			Name     string `json:"name"`
+			Secret   string `json:"key"`
+		} `json:"key"`
+	}
+	if err := json.Unmarshal(keyRes.Body.Bytes(), &keyPayload); err != nil {
+		t.Fatal(err)
+	}
+	if keyPayload.Key.TenantID != "ten_acme" || keyPayload.Key.Name != "raycast" || keyPayload.Key.Secret == "" {
+		t.Fatalf("key payload=%#v", keyPayload)
+	}
+}
+
 func TestMCPOriginValidation(t *testing.T) {
 	svc := service.New(&db.MemoryRepository{}, &assets.FakeStore{})
 	server := NewServer(config.Config{AllowedOrigins: []string{"https://allowed.test"}}, svc)
