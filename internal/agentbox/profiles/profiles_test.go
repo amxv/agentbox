@@ -80,6 +80,39 @@ func TestGoWrittenProfileShapeIsTypeScriptCompatible(t *testing.T) {
 	}
 }
 
+func TestProfileMetadataRoundTripsAndOldShapesStillParse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTBOX_CONFIG_DIR", dir)
+	if _, err := SaveProfile(Profile{
+		Name:       "tenant",
+		BaseURL:    "https://example.com/",
+		APIKey:     "secret",
+		TenantID:   "ten_acme",
+		TenantSlug: "acme",
+		TenantName: "Acme",
+		UserID:     "usr_123",
+		KeyName:    "cli-workstation",
+		AuthType:   "api_key",
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve("tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.TenantID != "ten_acme" || resolved.TenantSlug != "acme" || resolved.TenantName != "Acme" || resolved.UserID != "usr_123" || resolved.KeyName != "cli-workstation" || resolved.AuthType != "api_key" {
+		t.Fatalf("resolved metadata = %#v", resolved.Profile)
+	}
+
+	parsed, err := ParseProfilesConfig(`[{"name":"old","base_url":"https://old.example.com","api_key":"old-key"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 1 || parsed[0].Name != "old" || parsed[0].TenantID != "" {
+		t.Fatalf("parsed old shape = %#v", parsed)
+	}
+}
+
 func TestEnvProfilePrecedenceAndLegacyFallback(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	if _, err := SaveProfile(Profile{Name: "stored", BaseURL: "https://stored.example.com", APIKey: "stored-key"}, true); err != nil {

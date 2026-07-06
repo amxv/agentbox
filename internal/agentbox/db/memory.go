@@ -20,6 +20,7 @@ type MemoryRepository struct {
 	Tenants  []types.Tenant
 	Users    []types.User
 	Sessions []types.UserSession
+	CLICodes []types.CLILoginCode
 }
 
 func (m *MemoryRepository) EnsureSchema(context.Context) error {
@@ -271,11 +272,16 @@ func (m *MemoryRepository) PostMessage(_ context.Context, tenantID string, threa
 	return message, nil
 }
 
-func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
+func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
 	now := isoMillis(time.Now())
+	var keyUserID *string
+	if strings.TrimSpace(userID) != "" {
+		keyUserID = &userID
+	}
 	created := types.APIKey{
 		ID:          "key_" + uuid.NewString(),
 		TenantID:    tenantOf(tenantID),
+		UserID:      keyUserID,
 		Name:        name,
 		Key:         key,
 		KeyMasked:   maskSecret(key),
@@ -491,6 +497,47 @@ func (m *MemoryRepository) RevokeUserSession(_ context.Context, sessionID string
 		}
 	}
 	return nil
+}
+
+func (m *MemoryRepository) CreateCLILoginCode(_ context.Context, code types.CLILoginCode) (types.CLILoginCode, error) {
+	now := isoMillis(time.Now())
+	if code.ID == "" {
+		code.ID = "clicode_" + uuid.NewString()
+	}
+	if code.TenantID == "" {
+		code.TenantID = types.DefaultTenantID
+	}
+	code.CreatedAt = now
+	if code.ExpiresAt == "" {
+		code.ExpiresAt = isoMillis(time.Now().Add(5 * time.Minute))
+	}
+	m.CLICodes = append(m.CLICodes, code)
+	return code, nil
+}
+
+func (m *MemoryRepository) ConsumeCLILoginCode(_ context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error) {
+	now := time.Now().UTC()
+	consumedAt := isoMillis(now)
+	for i := range m.CLICodes {
+		code := m.CLICodes[i]
+		if code.CodeHash != codeHash || code.StateHash != stateHash || code.RedirectURI != redirectURI || code.ConsumedAt != nil {
+			continue
+		}
+		expiresAt, err := time.Parse(time.RFC3339, code.ExpiresAt)
+		if err != nil || !expiresAt.After(now) {
+			return nil, nil, nil
+		}
+		for _, user := range m.Users {
+			if tenantOf(user.TenantID) == tenantOf(code.TenantID) && user.ID == code.UserID && user.DisabledAt == nil {
+				m.CLICodes[i].ConsumedAt = &consumedAt
+				code.ConsumedAt = &consumedAt
+				userCopy := user
+				return &code, &userCopy, nil
+			}
+		}
+		return nil, nil, nil
+	}
+	return nil, nil, nil
 }
 
 func firstNonEmptyString(values ...string) string {

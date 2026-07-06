@@ -36,6 +36,7 @@ type RuntimeConfig struct {
 	BaseURL     string
 	APIKey      string
 	Source      string
+	Profile     profiles.Profile
 }
 
 type asset struct {
@@ -161,6 +162,8 @@ func (r *Runner) run(args []string) error {
 		return nil
 	case "profiles":
 		return r.runProfiles(cmdArgs, *profileName)
+	case "login":
+		return r.runLogin(cmdArgs, *profileName)
 	case "doctor":
 		return r.runDoctor(cmdArgs, *profileName)
 	case "mcp-url":
@@ -204,6 +207,7 @@ Options:
 
 Commands:
   profiles                inspect and manage CLI profiles
+  login                   sign in through the browser and save a tenant-scoped profile
   doctor                  check profile, API, MCP, and attachment access
   mcp-url                 print the full MCP URL for the selected profile
   init                    save a local profile and optionally verify it
@@ -236,6 +240,9 @@ Commands:
   remove <name>           delete a stored profile
   use <name>              switch the active stored profile
   show [name]             show the resolved profile`,
+		"login": `Usage: agentbox login [--base-url <url>] [--profile-name <name>] [--key-name <name>] [--no-open] [--timeout <seconds>] [--json]
+
+Open browser-based Agentbox auth, exchange the one-time CLI code for a tenant-scoped API key, and save a local profile.`,
 		"doctor": `Usage: agentbox doctor [--json]
 
 Check profile, health, authenticated API access, signed download URLs, and MCP URL generation.`,
@@ -301,6 +308,7 @@ func (r *Runner) runtimeConfig(profileName string) (RuntimeConfig, error) {
 		BaseURL:     resolved.BaseURL,
 		APIKey:      resolved.APIKey,
 		Source:      resolved.Source,
+		Profile:     resolved.Profile,
 	}, nil
 }
 
@@ -443,6 +451,22 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 	add("profile", "pass", fmt.Sprintf("%s (%s)", cfg.ProfileName, cfg.Source))
 	add("base URL", "pass", cfg.BaseURL)
 	add("API key", "pass", fmt.Sprintf("Profile %s includes key %s", cfg.ProfileName, profiles.MaskSecret(cfg.APIKey)))
+	if cfg.Profile.TenantID != "" || cfg.Profile.TenantSlug != "" || cfg.Profile.UserID != "" {
+		parts := []string{}
+		if cfg.Profile.TenantName != "" {
+			parts = append(parts, cfg.Profile.TenantName)
+		}
+		if cfg.Profile.TenantSlug != "" {
+			parts = append(parts, "slug "+cfg.Profile.TenantSlug)
+		}
+		if cfg.Profile.TenantID != "" {
+			parts = append(parts, "id "+cfg.Profile.TenantID)
+		}
+		if cfg.Profile.UserID != "" {
+			parts = append(parts, "user "+cfg.Profile.UserID)
+		}
+		add("profile tenant", "pass", strings.Join(parts, ", "))
+	}
 
 	healthURL, _ := url.JoinPath(strings.TrimRight(cfg.BaseURL, "/"), "/api/health")
 	if res, err := r.HTTPClient.Get(healthURL); err != nil {
@@ -462,6 +486,24 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 		add("authenticated API", "fail", err.Error())
 	} else {
 		add("authenticated API", "pass", fmt.Sprintf("%d thread(s) visible", len(listed.Threads)))
+		var me struct {
+			Auth struct {
+				TenantID   string `json:"tenant_id"`
+				TenantSlug string `json:"tenant_slug"`
+				UserID     string `json:"user_id"`
+				ActorName  string `json:"actor_name"`
+			} `json:"auth"`
+		}
+		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.TenantID != "" {
+			detail := me.Auth.TenantID
+			if me.Auth.TenantSlug != "" {
+				detail += " (" + me.Auth.TenantSlug + ")"
+			}
+			if me.Auth.UserID != "" {
+				detail += ", user " + me.Auth.UserID
+			}
+			add("resolved tenant", "pass", detail)
+		}
 		asset, err := r.findRecentAsset(listed.Threads, profileName)
 		if err != nil {
 			add("signed download URL", "fail", err.Error())

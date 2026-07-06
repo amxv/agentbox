@@ -43,6 +43,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/login", s.authLogin)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
+	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
+	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
 	s.mux.HandleFunc("/api/admin/tenants", s.adminTenants)
 	s.mux.HandleFunc("/api/admin/tenants/", s.adminTenantSubroutes)
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
@@ -108,6 +110,61 @@ func (s *Server) authMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"auth": authContext})
+}
+
+func (s *Server) authCLIAuthorize(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		State       string `json:"state"`
+		RedirectURI string `json:"redirect_uri"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.service.AuthorizeCLILogin(r.Context(), *authContext, input.State, input.RedirectURI)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code":         result.Code,
+		"redirect_uri": result.RedirectURI,
+	})
+}
+
+func (s *Server) authCLIExchange(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Code        string `json:"code"`
+		State       string `json:"state"`
+		RedirectURI string `json:"redirect_uri"`
+		KeyName     string `json:"key_name"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.service.ExchangeCLILogin(r.Context(), input.Code, input.State, input.RedirectURI, input.KeyName)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"api_key":   apiKeyResponse(result.APIKey),
+		"key":       apiKeyResponse(result.APIKey),
+		"tenant":    result.Tenant,
+		"user":      result.User,
+		"auth_type": result.AuthType,
+	})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

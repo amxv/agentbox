@@ -34,16 +34,16 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			return err
 		}
 		source := "none"
-		listed := []map[string]string{}
+		listed := []map[string]any{}
 		if len(envProfiles) > 0 {
 			source = "env"
 			for _, profile := range envProfiles {
-				listed = append(listed, map[string]string{"name": profile.Name, "base_url": profile.BaseURL, "source": "env"})
+				listed = append(listed, profileListing(profile, "env"))
 			}
 		} else if len(store.Profiles) > 0 {
 			source = "config"
 			for _, profile := range store.Profiles {
-				listed = append(listed, map[string]string{"name": profile.Name, "base_url": profile.BaseURL, "source": "config"})
+				listed = append(listed, profileListing(profile, "config"))
 			}
 		} else if (os.Getenv("AGENTBOX_BASE_URL") != "" || os.Getenv("AGENTBOX_URL") != "") && os.Getenv("AGENTBOX_API_KEY") != "" {
 			source = "legacy-env"
@@ -51,7 +51,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			if baseURL == "" {
 				baseURL = os.Getenv("AGENTBOX_URL")
 			}
-			listed = append(listed, map[string]string{"name": "default", "base_url": strings.TrimRight(baseURL, "/"), "source": "legacy-env"})
+			listed = append(listed, map[string]any{"name": "default", "base_url": strings.TrimRight(baseURL, "/"), "source": "legacy-env"})
 		}
 		var active any
 		if resolved != nil {
@@ -76,10 +76,17 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 		fmt.Fprintf(r.Stdout, "Source: %s\n", source)
 		for _, profile := range listed {
 			prefix := " "
-			if activeName, ok := active.(string); ok && profile["name"] == activeName {
+			profileName, _ := profile["name"].(string)
+			profileBaseURL, _ := profile["base_url"].(string)
+			profileSource, _ := profile["source"].(string)
+			if activeName, ok := active.(string); ok && profileName == activeName {
 				prefix = "*"
 			}
-			fmt.Fprintf(r.Stdout, "%s %s\t%s\t%s\n", prefix, profile["name"], profile["base_url"], profile["source"])
+			tenant := ""
+			if slug, _ := profile["tenant_slug"].(string); slug != "" {
+				tenant = "\t" + slug
+			}
+			fmt.Fprintf(r.Stdout, "%s %s\t%s\t%s%s\n", prefix, profileName, profileBaseURL, profileSource, tenant)
 		}
 		return nil
 	}
@@ -178,11 +185,21 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			"api_key_masked": profiles.MaskSecret(resolved.APIKey),
 			"source":         resolved.Source,
 			"config_path":    profiles.DefaultConfigPath(),
+			"tenant_id":      nullString(resolved.TenantID),
+			"tenant_slug":    nullString(resolved.TenantSlug),
+			"tenant_name":    nullString(resolved.TenantName),
+			"user_id":        nullString(resolved.UserID),
+			"key_name":       nullString(resolved.KeyName),
+			"auth_type":      nullString(resolved.AuthType),
 		}
 		if *jsonOut {
 			return printJSON(r.Stdout, result)
 		}
-		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\n", resolved.Name, resolved.BaseURL, resolved.Source, profiles.MaskSecret(resolved.APIKey))
+		tenant := defaultString(resolved.TenantSlug, resolved.TenantID)
+		if tenant == "" {
+			tenant = "unknown-tenant"
+		}
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\t%s\n", resolved.Name, resolved.BaseURL, resolved.Source, tenant, profiles.MaskSecret(resolved.APIKey))
 		return nil
 	default:
 		return fmt.Errorf("Unknown profiles command %q.", subcmd)
@@ -212,9 +229,9 @@ Show the resolved profile for this invocation.`,
 }
 
 func profileStoreResult(key string, value string, store profiles.Store) map[string]any {
-	listed := []map[string]string{}
+	listed := []map[string]any{}
 	for _, profile := range store.Profiles {
-		listed = append(listed, map[string]string{"name": profile.Name, "base_url": profile.BaseURL})
+		listed = append(listed, profileListing(profile, "config"))
 	}
 	return map[string]any{
 		key:              value,
@@ -222,4 +239,27 @@ func profileStoreResult(key string, value string, store profiles.Store) map[stri
 		"config_path":    profiles.DefaultConfigPath(),
 		"profiles":       listed,
 	}
+}
+
+func profileListing(profile profiles.Profile, source string) map[string]any {
+	listed := map[string]any{"name": profile.Name, "base_url": profile.BaseURL, "source": source}
+	if profile.TenantID != "" {
+		listed["tenant_id"] = profile.TenantID
+	}
+	if profile.TenantSlug != "" {
+		listed["tenant_slug"] = profile.TenantSlug
+	}
+	if profile.TenantName != "" {
+		listed["tenant_name"] = profile.TenantName
+	}
+	if profile.UserID != "" {
+		listed["user_id"] = profile.UserID
+	}
+	if profile.KeyName != "" {
+		listed["key_name"] = profile.KeyName
+	}
+	if profile.AuthType != "" {
+		listed["auth_type"] = profile.AuthType
+	}
+	return listed
 }

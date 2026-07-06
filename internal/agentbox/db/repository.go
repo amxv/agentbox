@@ -618,24 +618,28 @@ returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_byt
 	return message, nil
 }
 
-func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
+func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.APIKey{}, err
 	}
 	id := "key_" + uuid.NewString()
+	var keyUserID *string
+	if strings.TrimSpace(userID) != "" {
+		keyUserID = &userID
+	}
 	tag, err := r.pool.Exec(ctx, `
 update api_keys
-set token_prefix = $1, token_hash = $2, updated_at = now(), revoked_at = null
-where tenant_id = $3 and lower(name) = lower($4) and revoked_at is null
-`, tokenPrefix, tokenHash, tenantID, name)
+set user_id = $1, token_prefix = $2, token_hash = $3, updated_at = now(), revoked_at = null
+where tenant_id = $4 and lower(name) = lower($5) and revoked_at is null
+`, keyUserID, tokenPrefix, tokenHash, tenantID, name)
 	if err != nil {
 		return types.APIKey{}, err
 	}
 	if tag.RowsAffected() == 0 {
 		_, err = r.pool.Exec(ctx, `
-insert into api_keys (id, tenant_id, name, token_prefix, token_hash)
-values ($1, $2, $3, $4, $5)
-`, id, tenantID, name, tokenPrefix, tokenHash)
+insert into api_keys (id, tenant_id, user_id, name, token_prefix, token_hash)
+values ($1, $2, $3, $4, $5, $6)
+`, id, tenantID, keyUserID, name, tokenPrefix, tokenHash)
 		if err != nil {
 			return types.APIKey{}, err
 		}
@@ -885,6 +889,65 @@ func (r *Repository) RevokeUserSession(ctx context.Context, sessionID string) er
 	return err
 }
 
+func (r *Repository) CreateCLILoginCode(ctx context.Context, code types.CLILoginCode) (types.CLILoginCode, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return types.CLILoginCode{}, err
+	}
+	id := code.ID
+	if id == "" {
+		id = "clicode_" + uuid.NewString()
+	}
+	return scanCLILoginCode(r.pool.QueryRow(ctx, `
+insert into cli_login_codes (id, tenant_id, user_id, code_hash, state_hash, redirect_uri, expires_at)
+values ($1, $2, $3, $4, $5, $6, $7)
+returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_at, expires_at, consumed_at
+`, id, code.TenantID, code.UserID, code.CodeHash, code.StateHash, code.RedirectURI, code.ExpiresAt))
+}
+
+func (r *Repository) ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error) {
+	if err := r.EnsureSchema(ctx); err != nil {
+		return nil, nil, err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+update cli_login_codes
+set consumed_at = now()
+where code_hash = $1
+  and state_hash = $2
+  and redirect_uri = $3
+  and consumed_at is null
+  and expires_at > now()
+returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_at, expires_at, consumed_at
+`, codeHash, stateHash, redirectURI)
+	code, err := scanCLILoginCode(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	user, err := scanUser(tx.QueryRow(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
+from users
+where tenant_id = $1 and id = $2 and disabled_at is null
+`, code.TenantID, code.UserID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return &code, &user, nil
+}
+
 type threadScanner interface {
 	Scan(dest ...any) error
 }
@@ -1087,6 +1150,21 @@ func scanUserSessionAndUser(row threadScanner) (types.UserSession, types.User, e
 		user.DisabledAt = &value
 	}
 	return session, user, err
+}
+
+func scanCLILoginCode(row threadScanner) (types.CLILoginCode, error) {
+	var createdAt time.Time
+	var expiresAt time.Time
+	var consumedAt *time.Time
+	code := types.CLILoginCode{}
+	err := row.Scan(&code.ID, &code.TenantID, &code.UserID, &code.CodeHash, &code.StateHash, &code.RedirectURI, &createdAt, &expiresAt, &consumedAt)
+	code.CreatedAt = isoMillis(createdAt)
+	code.ExpiresAt = isoMillis(expiresAt)
+	if consumedAt != nil {
+		value := isoMillis(*consumedAt)
+		code.ConsumedAt = &value
+	}
+	return code, err
 }
 
 func hashSecret(value string) string {

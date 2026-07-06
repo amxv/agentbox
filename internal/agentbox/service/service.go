@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ type Repository interface {
 	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error)
 	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error
 	PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
-	CreateAPIKey(ctx context.Context, tenantID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error)
+	CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error)
 	RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error)
@@ -47,6 +48,8 @@ type Repository interface {
 	FindUserSessionBySecretHash(ctx context.Context, secretHash string) (*types.UserSession, *types.User, error)
 	MarkUserSessionUsed(ctx context.Context, sessionID string) error
 	RevokeUserSession(ctx context.Context, sessionID string) error
+	CreateCLILoginCode(ctx context.Context, code types.CLILoginCode) (types.CLILoginCode, error)
+	ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error)
 }
 
 type Service struct {
@@ -366,7 +369,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, auth types.AuthContext, name
 	if err != nil {
 		return types.APIKey{}, err
 	}
-	return s.repo.CreateAPIKey(ctx, auth.TenantID, name, secret, hashSecret(secret), tokenPrefix(secret))
+	return s.repo.CreateAPIKey(ctx, auth.TenantID, auth.UserID, name, secret, hashSecret(secret), tokenPrefix(secret))
 }
 
 func (s *Service) ListAPIKeys(ctx context.Context, auth types.AuthContext) ([]types.APIKey, error) {
@@ -410,6 +413,20 @@ type ProvisionTenantResult struct {
 	User       types.User    `json:"user,omitempty"`
 	APIKey     *types.APIKey `json:"api_key,omitempty"`
 	SetupToken string        `json:"setup_token,omitempty"`
+}
+
+type CLILoginAuthorizeResult struct {
+	Code        string `json:"code"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+type CLILoginExchangeResult struct {
+	ProfileName string       `json:"profile_name,omitempty"`
+	BaseURL     string       `json:"base_url,omitempty"`
+	APIKey      types.APIKey `json:"api_key"`
+	Tenant      types.Tenant `json:"tenant"`
+	User        types.User   `json:"user"`
+	AuthType    string       `json:"auth_type"`
 }
 
 type ProvisionUserParams struct {
@@ -572,14 +589,20 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 	if tenantID == "" {
 		tenantID = types.DefaultTenantID
 	}
-	return &types.AuthContext{
+	authContext := &types.AuthContext{
 		TenantID:    tenantID,
 		UserID:      stringValue(key.UserID),
 		SubjectType: types.AuthSubjectAPIKey,
 		ActorName:   key.Name,
 		KeyID:       key.ID,
 		Scopes:      append([]string(nil), key.Scopes...),
-	}, nil
+	}
+	if tenant, err := s.repo.GetTenant(ctx, tenantID); err != nil {
+		return nil, err
+	} else if tenant != nil {
+		authContext.TenantSlug = tenant.Slug
+	}
+	return authContext, nil
 }
 
 func (s *Service) Login(ctx context.Context, tenantID string, email string, password string) (types.AuthContext, string, error) {
@@ -609,7 +632,13 @@ func (s *Service) Login(ctx context.Context, tenantID string, email string, pass
 	if err != nil {
 		return types.AuthContext{}, "", err
 	}
-	return authContextForUserSession(session, *user), secret, nil
+	authContext := authContextForUserSession(session, *user)
+	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
+		return types.AuthContext{}, "", err
+	} else if tenant != nil {
+		authContext.TenantSlug = tenant.Slug
+	}
+	return authContext, secret, nil
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, secret string) (*types.AuthContext, error) {
@@ -630,6 +659,11 @@ func (s *Service) AuthenticateSession(ctx context.Context, secret string) (*type
 		}
 	}
 	authContext := authContextForUserSession(*session, *user)
+	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
+		return nil, err
+	} else if tenant != nil {
+		authContext.TenantSlug = tenant.Slug
+	}
 	return &authContext, nil
 }
 
@@ -646,6 +680,86 @@ func (s *Service) LogoutSession(ctx context.Context, secret string) error {
 		return nil
 	}
 	return s.repo.RevokeUserSession(ctx, session.ID)
+}
+
+func (s *Service) AuthorizeCLILogin(ctx context.Context, authContext types.AuthContext, state string, redirectURI string) (CLILoginAuthorizeResult, error) {
+	if err := requireAuthContext(authContext); err != nil {
+		return CLILoginAuthorizeResult{}, err
+	}
+	if authContext.SubjectType != types.AuthSubjectUserSession || strings.TrimSpace(authContext.UserID) == "" {
+		return CLILoginAuthorizeResult{}, CodedError{Code: "PERMISSION_DENIED", Message: "Browser session authentication is required."}
+	}
+	state = strings.TrimSpace(state)
+	redirectURI = strings.TrimSpace(redirectURI)
+	if state == "" {
+		return CLILoginAuthorizeResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "state is required."}
+	}
+	if err := validateCLIRedirectURI(redirectURI); err != nil {
+		return CLILoginAuthorizeResult{}, err
+	}
+	code, err := generateCLILoginCode()
+	if err != nil {
+		return CLILoginAuthorizeResult{}, err
+	}
+	expiresAt := time.Now().UTC().Add(5 * time.Minute).Format("2006-01-02T15:04:05.000Z")
+	if _, err := s.repo.CreateCLILoginCode(ctx, types.CLILoginCode{
+		TenantID:    authContext.TenantID,
+		UserID:      authContext.UserID,
+		CodeHash:    hashSecret(code),
+		StateHash:   hashSecret(state),
+		RedirectURI: redirectURI,
+		ExpiresAt:   expiresAt,
+	}); err != nil {
+		return CLILoginAuthorizeResult{}, err
+	}
+	return CLILoginAuthorizeResult{Code: code, RedirectURI: redirectURI}, nil
+}
+
+func (s *Service) ExchangeCLILogin(ctx context.Context, code string, state string, redirectURI string, keyName string) (CLILoginExchangeResult, error) {
+	code = strings.TrimSpace(code)
+	state = strings.TrimSpace(state)
+	redirectURI = strings.TrimSpace(redirectURI)
+	if code == "" || state == "" {
+		return CLILoginExchangeResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "code and state are required."}
+	}
+	if err := validateCLIRedirectURI(redirectURI); err != nil {
+		return CLILoginExchangeResult{}, err
+	}
+	loginCode, user, err := s.repo.ConsumeCLILoginCode(ctx, hashSecret(code), hashSecret(state), redirectURI)
+	if err != nil {
+		return CLILoginExchangeResult{}, err
+	}
+	if loginCode == nil || user == nil {
+		return CLILoginExchangeResult{}, CodedError{Code: "PERMISSION_DENIED", Message: "Invalid or expired CLI login code."}
+	}
+	tenant, err := s.repo.GetTenant(ctx, loginCode.TenantID)
+	if err != nil {
+		return CLILoginExchangeResult{}, err
+	}
+	if tenant == nil {
+		return CLILoginExchangeResult{}, CodedError{Code: "TENANT_NOT_FOUND", Message: "Tenant not found."}
+	}
+	keyName = strings.TrimSpace(keyName)
+	if keyName == "" {
+		keyName = defaultCLIKeyName()
+	}
+	key, err := s.CreateAPIKey(ctx, types.AuthContext{
+		TenantID:    tenant.ID,
+		TenantSlug:  tenant.Slug,
+		UserID:      user.ID,
+		SubjectType: types.AuthSubjectUserSession,
+		ActorName:   user.DisplayName,
+		Role:        user.Role,
+	}, keyName)
+	if err != nil {
+		return CLILoginExchangeResult{}, err
+	}
+	return CLILoginExchangeResult{
+		APIKey:   key,
+		Tenant:   *tenant,
+		User:     *user,
+		AuthType: "api_key",
+	}, nil
 }
 
 func generateSecret() (string, error) {
@@ -670,6 +784,36 @@ func generateSetupToken() (string, error) {
 		return "", err
 	}
 	return "setup_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func generateCLILoginCode() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return "cli_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func defaultCLIKeyName() string {
+	return "cli"
+}
+
+func validateCLIRedirectURI(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "redirect_uri is invalid."}
+	}
+	if parsed.Scheme != "http" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "redirect_uri must use http."}
+	}
+	host := parsed.Hostname()
+	if host != "127.0.0.1" && host != "localhost" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "redirect_uri must point to localhost."}
+	}
+	if parsed.Port() == "" || parsed.Path != "/callback" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "redirect_uri must include a localhost callback port and /callback path."}
+	}
+	return nil
 }
 
 func authContextForUserSession(session types.UserSession, user types.User) types.AuthContext {

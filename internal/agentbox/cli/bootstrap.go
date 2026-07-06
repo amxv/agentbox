@@ -231,9 +231,15 @@ func (r *Runner) runProvision(args []string, profileName string) error {
 			profileSaved = "local"
 		}
 		if _, err := profiles.SaveProfile(profiles.Profile{
-			Name:    profileSaved,
-			BaseURL: resolvedBaseURL,
-			APIKey:  result.APIKey.Secret,
+			Name:       profileSaved,
+			BaseURL:    resolvedBaseURL,
+			APIKey:     result.APIKey.Secret,
+			TenantID:   result.Tenant.ID,
+			TenantSlug: result.Tenant.Slug,
+			TenantName: result.Tenant.Name,
+			UserID:     result.User.ID,
+			KeyName:    result.APIKey.Name,
+			AuthType:   "api_key",
 		}, true); err != nil {
 			return err
 		}

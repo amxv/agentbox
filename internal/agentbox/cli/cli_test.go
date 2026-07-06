@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -573,6 +575,85 @@ func TestCLIProvisionTenantCreatesProfile(t *testing.T) {
 	}
 	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey != payload.APIKey.Secret {
 		t.Fatalf("resolved profile = %#v payload key=%q", resolved, payload.APIKey.Secret)
+	}
+}
+
+func TestCLILoginSavesTenantProfile(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	provisioned, err := svc.ProvisionTenant(t.Context(), service.ProvisionTenantParams{
+		TenantSlug: "acme",
+		TenantName: "Acme",
+		UserEmail:  "admin@example.com",
+		UserName:   "Acme Admin",
+		Password:   "secret-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiServer := httpapi.NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/login/cli" {
+			state := req.URL.Query().Get("state")
+			redirectURI := req.URL.Query().Get("redirect_uri")
+			result, err := svc.AuthorizeCLILogin(req.Context(), types.AuthContext{
+				TenantID:    provisioned.Tenant.ID,
+				TenantSlug:  provisioned.Tenant.Slug,
+				UserID:      provisioned.User.ID,
+				SubjectType: types.AuthSubjectUserSession,
+				ActorName:   provisioned.User.DisplayName,
+				Role:        provisioned.User.Role,
+			}, state, redirectURI)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			target, err := url.Parse(result.RedirectURI)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			query := target.Query()
+			query.Set("code", result.Code)
+			query.Set("state", state)
+			target.RawQuery = query.Encode()
+			http.Redirect(w, req, target.String(), http.StatusFound)
+			return
+		}
+		apiServer.ServeHTTP(w, req)
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	runner.RunExternal = func(name string, args []string, stdin string, env map[string]string) (string, string, error) {
+		if len(args) == 0 {
+			t.Fatalf("browser command %s missing URL", name)
+		}
+		res, err := server.Client().Get(args[len(args)-1])
+		if err != nil {
+			return "", "", err
+		}
+		_ = res.Body.Close()
+		return "", "", nil
+	}
+	if code := runner.Run([]string{"login", "--base-url", server.URL, "--profile-name", "acme-prod", "--key-name", "cli-test"}); code != 0 {
+		t.Fatalf("login failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
+	}
+	resolved, err := profiles.Resolve("acme-prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.TenantID != "ten_acme" || resolved.TenantSlug != "acme" || resolved.TenantName != "Acme" || resolved.UserID != provisioned.User.ID || resolved.KeyName != "cli-test" || resolved.AuthType != "api_key" {
+		t.Fatalf("resolved profile = %#v", resolved)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "acme-prod", "list", "--json"}); code != 0 {
+		t.Fatalf("list after login failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
 	}
 }
 

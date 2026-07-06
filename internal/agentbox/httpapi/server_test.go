@@ -392,6 +392,78 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 	}
 }
 
+func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: "ten_acme", Slug: "acme", Name: "Acme"}},
+	}
+	svc := service.New(repo, &assets.FakeStore{})
+	passwordHash, err := authpkg.HashPassword("let-me-in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.Users = append(repo.Users, testUser("ten_acme", "usr_acme", "admin@example.com", "Acme Admin", "admin", passwordHash))
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
+
+	login := httptest.NewRecorder()
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"tenant_id":"ten_acme","email":"admin@example.com","password":"let-me-in"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	sessionCookie := login.Result().Cookies()[0]
+
+	unauthAuthorize := httptest.NewRecorder()
+	server.ServeHTTP(unauthAuthorize, httptest.NewRequest(http.MethodPost, "/api/auth/cli/authorize", strings.NewReader(`{"state":"state","redirect_uri":"http://127.0.0.1:3456/callback"}`)))
+	if unauthAuthorize.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthAuthorize status=%d body=%s", unauthAuthorize.Code, unauthAuthorize.Body.String())
+	}
+
+	authorize := httptest.NewRecorder()
+	reqAuthorize := httptest.NewRequest(http.MethodPost, "/api/auth/cli/authorize", strings.NewReader(`{"state":"state","redirect_uri":"http://127.0.0.1:3456/callback"}`))
+	reqAuthorize.AddCookie(sessionCookie)
+	server.ServeHTTP(authorize, reqAuthorize)
+	if authorize.Code != http.StatusOK {
+		t.Fatalf("authorize status=%d body=%s", authorize.Code, authorize.Body.String())
+	}
+	var authorized struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(authorize.Body.Bytes(), &authorized); err != nil {
+		t.Fatal(err)
+	}
+	if authorized.Code == "" {
+		t.Fatalf("authorize body=%s", authorize.Body.String())
+	}
+
+	exchange := httptest.NewRecorder()
+	server.ServeHTTP(exchange, httptest.NewRequest(http.MethodPost, "/api/auth/cli/exchange", strings.NewReader(`{"code":"`+authorized.Code+`","state":"state","redirect_uri":"http://127.0.0.1:3456/callback","key_name":"cli-test"}`)))
+	if exchange.Code != http.StatusOK {
+		t.Fatalf("exchange status=%d body=%s", exchange.Code, exchange.Body.String())
+	}
+	var exchanged struct {
+		APIKey struct {
+			Name   string `json:"name"`
+			Secret string `json:"key"`
+		} `json:"api_key"`
+		Tenant types.Tenant `json:"tenant"`
+		User   types.User   `json:"user"`
+	}
+	if err := json.Unmarshal(exchange.Body.Bytes(), &exchanged); err != nil {
+		t.Fatal(err)
+	}
+	if exchanged.APIKey.Name != "cli-test" || exchanged.APIKey.Secret == "" || exchanged.Tenant.ID != "ten_acme" || exchanged.Tenant.Slug != "acme" || exchanged.User.ID != "usr_acme" {
+		t.Fatalf("exchanged = %#v", exchanged)
+	}
+	if len(repo.APIKeys) != 1 || repo.APIKeys[0].UserID == nil || *repo.APIKeys[0].UserID != "usr_acme" {
+		t.Fatalf("repo API keys = %#v", repo.APIKeys)
+	}
+
+	reuse := httptest.NewRecorder()
+	server.ServeHTTP(reuse, httptest.NewRequest(http.MethodPost, "/api/auth/cli/exchange", strings.NewReader(`{"code":"`+authorized.Code+`","state":"state","redirect_uri":"http://127.0.0.1:3456/callback","key_name":"cli-test"}`)))
+	if reuse.Code != http.StatusForbidden {
+		t.Fatalf("reuse status=%d body=%s", reuse.Code, reuse.Body.String())
+	}
+}
+
 func TestAdminKeyRoutesCreateListRevokeAndAuthenticate(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
