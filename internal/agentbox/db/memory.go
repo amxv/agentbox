@@ -71,6 +71,7 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, params types.SearchT
 		}
 		results = append(results, types.SearchThreadResult{
 			ID:                 thread.ID,
+			TenantID:           firstNonEmptyString(thread.TenantID, types.DefaultTenantID),
 			Title:              thread.Title,
 			CreatedAt:          thread.CreatedAt,
 			UpdatedAt:          thread.UpdatedAt,
@@ -90,6 +91,7 @@ func (m *MemoryRepository) CreateThread(_ context.Context, title string, author 
 	now := isoMillis(time.Now())
 	thread := types.Thread{
 		ID:        "thr_" + uuid.NewString(),
+		TenantID:  types.DefaultTenantID,
 		Title:     title,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -103,6 +105,7 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, title stri
 	now := isoMillis(time.Now())
 	thread := types.Thread{
 		ID:        "thr_" + uuid.NewString(),
+		TenantID:  types.DefaultTenantID,
 		Title:     title,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -110,6 +113,7 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, title stri
 	}
 	message := types.Message{
 		ID:              "msg_" + uuid.NewString(),
+		TenantID:        thread.TenantID,
 		ThreadID:        thread.ID,
 		Author:          author,
 		Body:            body,
@@ -160,6 +164,9 @@ func (m *MemoryRepository) GetAsset(_ context.Context, assetID string) (*types.A
 
 func (m *MemoryRepository) CreatePendingUpload(_ context.Context, upload types.PendingUpload) (types.PendingUpload, error) {
 	now := isoMillis(time.Now())
+	if upload.TenantID == "" {
+		upload.TenantID = types.DefaultTenantID
+	}
 	upload.CreatedAt = now
 	if upload.ExpiresAt == "" {
 		upload.ExpiresAt = isoMillis(time.Now().Add(15 * time.Minute))
@@ -211,6 +218,7 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 	now := isoMillis(time.Now())
 	message := types.Message{
 		ID:              "msg_" + uuid.NewString(),
+		TenantID:        firstNonEmptyString(m.Threads[threadIndex].TenantID, types.DefaultTenantID),
 		ThreadID:        threadID,
 		Author:          author,
 		Body:            body,
@@ -224,6 +232,7 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 	for _, asset := range newAssets {
 		createdAsset := types.Asset{
 			ID:          "asset_" + uuid.NewString(),
+			TenantID:    firstNonEmptyString(asset.TenantID, message.TenantID),
 			MessageID:   message.ID,
 			StorageKey:  asset.StorageKey,
 			FileName:    asset.FileName,
@@ -244,11 +253,16 @@ func (m *MemoryRepository) PostMessage(_ context.Context, threadID string, autho
 func (m *MemoryRepository) CreateAPIKey(_ context.Context, name string, key string) (types.APIKey, error) {
 	now := isoMillis(time.Now())
 	created := types.APIKey{
-		Name:      name,
-		Key:       key,
-		KeyMasked: maskSecret(key),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          "key_" + uuid.NewString(),
+		TenantID:    types.DefaultTenantID,
+		Name:        name,
+		Key:         key,
+		KeyMasked:   maskSecret(key),
+		TokenPrefix: tokenPrefix(key),
+		TokenHash:   hashSecret(key),
+		Scopes:      []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use"},
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	for i := range m.APIKeys {
 		if m.APIKeys[i].Name == name {
@@ -284,10 +298,19 @@ func (m *MemoryRepository) RevokeAPIKey(_ context.Context, name string) (bool, e
 
 func (m *MemoryRepository) FindAPIKeyBySecret(_ context.Context, secret string) (*types.APIKey, error) {
 	for _, key := range m.APIKeys {
-		if key.Key == secret {
+		if key.Key == secret || (key.TokenHash != "" && key.TokenHash == hashSecret(secret)) {
 			found := key
 			return &found, nil
 		}
 	}
 	return nil, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

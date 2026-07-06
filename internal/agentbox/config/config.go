@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	DefaultDBPoolSize       = int32(3)
-	DefaultMaxFileSizeBytes = int64(25 * 1024 * 1024)
-	VercelMaxPayloadBytes   = int64(4_500_000)
+	DefaultDBPoolSize        = int32(3)
+	DefaultMaxFileSizeBytes  = int64(25 * 1024 * 1024)
+	DefaultSessionCookieName = "agentbox_session"
+	VercelMaxPayloadBytes    = int64(4_500_000)
 )
 
 type Config struct {
@@ -27,11 +28,16 @@ type Config struct {
 	Environment         string
 	VercelEnvironment   string
 	AutoMigrate         bool
+	AppPublicURL        string
+	SessionCookieName   string
+	SessionSecret       string
+	TokenHashPepper     string
+	SecureCookies       bool
 }
 
 func LoadFromEnv() Config {
 	maxFileSize := int64FromEnv("AGENTBOX_MAX_FILE_SIZE_BYTES", DefaultMaxFileSizeBytes)
-	return Config{
+	cfg := Config{
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		DBPoolSize:          int32FromEnv("AGENTBOX_DB_POOL_SIZE", DefaultDBPoolSize),
 		AllowedOrigins:      commaList(os.Getenv("AGENTBOX_ALLOWED_ORIGINS")),
@@ -46,7 +52,16 @@ func LoadFromEnv() Config {
 		Environment:         firstNonEmpty(os.Getenv("AGENTBOX_ENV"), os.Getenv("NODE_ENV")),
 		VercelEnvironment:   os.Getenv("VERCEL_ENV"),
 		AutoMigrate:         truthy(os.Getenv("AGENTBOX_AUTO_MIGRATE")),
+		AppPublicURL:        strings.TrimRight(os.Getenv("AGENTBOX_APP_PUBLIC_URL"), "/"),
+		SessionCookieName:   firstNonEmpty(os.Getenv("AGENTBOX_SESSION_COOKIE_NAME"), DefaultSessionCookieName),
+		SessionSecret:       os.Getenv("AGENTBOX_SESSION_SECRET"),
+		TokenHashPepper:     os.Getenv("AGENTBOX_TOKEN_HASH_PEPPER"),
 	}
+	cfg.SecureCookies = cfg.IsProduction()
+	if value := strings.TrimSpace(os.Getenv("AGENTBOX_SECURE_COOKIES")); value != "" {
+		cfg.SecureCookies = truthy(value)
+	}
+	return cfg
 }
 
 func (c Config) IsProduction() bool {
