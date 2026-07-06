@@ -1,6 +1,6 @@
 import { Action, ActionPanel, Form } from "@raycast/api";
 
-export default function PostMessage() {
+export default function PostMessage({ initialThreadId = "" }: { initialThreadId?: string }) {
   return (
     <Form
       actions={
@@ -9,7 +9,7 @@ export default function PostMessage() {
         </ActionPanel>
       }
     >
-      <Form.TextField id="threadId" title="Thread ID" placeholder="thr_..." />
+      <Form.TextField id="threadId" title="Thread ID" placeholder="thr_..." defaultValue={initialThreadId} />
       <Form.TextArea id="body" title="Message" placeholder="Write a message for the thread" />
     </Form>
   );
