@@ -270,16 +270,17 @@ create index if not exists pending_uploads_tenant_thread_idx on pending_uploads 
 	return err
 }
 
-func (r *Repository) ListThreads(ctx context.Context, limit int) ([]types.Thread, error) {
+func (r *Repository) ListThreads(ctx context.Context, tenantID string, limit int) ([]types.Thread, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, title, created_at, updated_at, created_by, created_by_user_id, created_by_key_id
 from threads
+where tenant_id = $1
 order by updated_at desc
-limit $1
-`, limit)
+limit $2
+`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +297,7 @@ limit $1
 	return threads, rows.Err()
 }
 
-func (r *Repository) SearchThreads(ctx context.Context, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+func (r *Repository) SearchThreads(ctx context.Context, tenantID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
@@ -322,20 +323,21 @@ select
   t.updated_at,
   t.created_by,
   count(m.id)::int as message_count,
-  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc limit 1), '') as last_message_body,
-  coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $1 order by mm.created_at desc limit 1), '') as matched_message_body
+  coalesce((select lm.body from messages lm where lm.tenant_id = t.tenant_id and lm.thread_id = t.id order by lm.created_at desc limit 1), '') as last_message_body,
+  coalesce((select mm.body from messages mm where mm.tenant_id = t.tenant_id and mm.thread_id = t.id and mm.body ilike $1 order by mm.created_at desc limit 1), '') as matched_message_body
 from threads t
-left join messages m on m.thread_id = t.id
-where ($2::text is null or t.created_by = $2)
-  and ($3::timestamptz is null or t.updated_at > $3)
+left join messages m on m.tenant_id = t.tenant_id and m.thread_id = t.id
+where t.tenant_id = $2
+  and ($3::text is null or t.created_by = $3)
+  and ($4::timestamptz is null or t.updated_at > $4)
   and (
     t.title ilike $1
-    or exists (select 1 from messages sm where sm.thread_id = t.id and sm.body ilike $1)
+    or exists (select 1 from messages sm where sm.tenant_id = t.tenant_id and sm.thread_id = t.id and sm.body ilike $1)
   )
 group by t.id, t.tenant_id, t.title, t.created_at, t.updated_at, t.created_by
 order by t.updated_at desc
-limit $4
-`, pattern, createdBy, updatedAfter, params.Limit)
+limit $5
+`, pattern, tenantID, createdBy, updatedAfter, params.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -362,20 +364,20 @@ limit $4
 	return results, rows.Err()
 }
 
-func (r *Repository) CreateThread(ctx context.Context, title string, author string) (types.Thread, error) {
+func (r *Repository) CreateThread(ctx context.Context, tenantID string, title string, auth types.AuthContext) (types.Thread, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.Thread{}, err
 	}
 	id := "thr_" + uuid.NewString()
 	row := r.pool.QueryRow(ctx, `
-insert into threads (id, title, created_by)
-values ($1, $2, $3)
+insert into threads (id, tenant_id, title, created_by, created_by_user_id, created_by_key_id)
+values ($1, $2, $3, $4, $5, $6)
 returning id, tenant_id, title, created_at, updated_at, created_by, created_by_user_id, created_by_key_id
-`, id, title, author)
+`, id, tenantID, title, auth.ActorName, optionalString(auth.UserID), optionalString(auth.KeyID))
 	return scanThread(row)
 }
 
-func (r *Repository) CreateThreadWithMessage(ctx context.Context, title string, author string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
+func (r *Repository) CreateThreadWithMessage(ctx context.Context, tenantID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
@@ -389,23 +391,23 @@ func (r *Repository) CreateThreadWithMessage(ctx context.Context, title string, 
 
 	threadID := "thr_" + uuid.NewString()
 	thread, err := scanThread(tx.QueryRow(ctx, `
-insert into threads (id, title, created_by)
-values ($1, $2, $3)
+insert into threads (id, tenant_id, title, created_by, created_by_user_id, created_by_key_id)
+values ($1, $2, $3, $4, $5, $6)
 returning id, tenant_id, title, created_at, updated_at, created_by, created_by_user_id, created_by_key_id
-`, threadID, title, author))
+`, threadID, tenantID, title, auth.ActorName, optionalString(auth.UserID), optionalString(auth.KeyID)))
 	if err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
 	messageID := "msg_" + uuid.NewString()
 	message, err := scanMessage(tx.QueryRow(ctx, `
-insert into messages (id, thread_id, author, body, body_content_type)
-values ($1, $2, $3, $4, $5)
+insert into messages (id, tenant_id, thread_id, author, body, body_content_type, created_by_user_id, created_by_key_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8)
 returning id, tenant_id, thread_id, author, body, body_content_type, created_at, created_by_user_id, created_by_key_id
-`, messageID, thread.ID, author, body, bodyContentType), nil)
+`, messageID, tenantID, thread.ID, auth.ActorName, body, bodyContentType, optionalString(auth.UserID), optionalString(auth.KeyID)), nil)
 	if err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
-	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where id = $1`, thread.ID); err != nil {
+	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where tenant_id = $1 and id = $2`, tenantID, thread.ID); err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -414,15 +416,15 @@ returning id, tenant_id, thread_id, author, body, body_content_type, created_at,
 	return thread, message, nil
 }
 
-func (r *Repository) GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error) {
+func (r *Repository) GetThread(ctx context.Context, tenantID string, threadID string) (*types.ThreadWithMessages, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
 	thread, err := scanThread(r.pool.QueryRow(ctx, `
 select id, tenant_id, title, created_at, updated_at, created_by, created_by_user_id, created_by_key_id
 from threads
-where id = $1
-`, threadID))
+where tenant_id = $1 and id = $2
+`, tenantID, threadID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -433,9 +435,9 @@ where id = $1
 	messageRows, err := r.pool.Query(ctx, `
 select id, tenant_id, thread_id, author, body, body_content_type, created_at, created_by_user_id, created_by_key_id
 from messages
-where thread_id = $1
+where tenant_id = $1 and thread_id = $2
 order by created_at asc
-`, threadID)
+`, tenantID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -459,9 +461,9 @@ order by created_at asc
 		assetRows, err := r.pool.Query(ctx, `
 select id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, created_by, created_by_user_id, created_by_key_id
 from assets
-where message_id = any($1)
+where tenant_id = $1 and message_id = any($2)
 order by created_at asc
-`, messageIDs)
+`, tenantID, messageIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -489,15 +491,15 @@ order by created_at asc
 	return &types.ThreadWithMessages{Thread: thread, Messages: messages}, nil
 }
 
-func (r *Repository) GetAsset(ctx context.Context, assetID string) (*types.Asset, error) {
+func (r *Repository) GetAsset(ctx context.Context, tenantID string, assetID string) (*types.Asset, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
 	asset, err := scanAsset(r.pool.QueryRow(ctx, `
 select id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, created_by, created_by_user_id, created_by_key_id
 from assets
-where id = $1
-`, assetID))
+where tenant_id = $1 and id = $2
+`, tenantID, assetID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -518,7 +520,7 @@ returning id, tenant_id, thread_id, storage_key, file_name, mime_type, size_byte
 `, upload.ID, upload.TenantID, upload.ThreadID, upload.StorageKey, upload.FileName, upload.MimeType, upload.SizeBytes, upload.PublicURL, upload.ExpiresAt, upload.CreatedBy, upload.CreatedByUserID, upload.CreatedByKeyID))
 }
 
-func (r *Repository) GetPendingUploads(ctx context.Context, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error) {
+func (r *Repository) GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
@@ -528,8 +530,8 @@ func (r *Repository) GetPendingUploads(ctx context.Context, threadID string, upl
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, thread_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, expires_at, created_by, created_by_user_id, created_by_key_id, consumed_at
 from pending_uploads
-where thread_id = $1 and created_by = $2 and id = any($3)
-`, threadID, author, uploadIDs)
+where tenant_id = $1 and thread_id = $2 and created_by = $3 and id = any($4)
+`, tenantID, threadID, author, uploadIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -545,18 +547,18 @@ where thread_id = $1 and created_by = $2 and id = any($3)
 	return uploads, rows.Err()
 }
 
-func (r *Repository) MarkPendingUploadsConsumed(ctx context.Context, uploadIDs []string) error {
+func (r *Repository) MarkPendingUploadsConsumed(ctx context.Context, tenantID string, uploadIDs []string) error {
 	if len(uploadIDs) == 0 {
 		return nil
 	}
 	if err := r.EnsureSchema(ctx); err != nil {
 		return err
 	}
-	_, err := r.pool.Exec(ctx, `update pending_uploads set consumed_at = now() where id = any($1)`, uploadIDs)
+	_, err := r.pool.Exec(ctx, `update pending_uploads set consumed_at = now() where tenant_id = $1 and id = any($2)`, tenantID, uploadIDs)
 	return err
 }
 
-func (r *Repository) PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
+func (r *Repository) PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.Message{}, err
 	}
@@ -570,15 +572,15 @@ func (r *Repository) PostMessage(ctx context.Context, threadID string, author st
 
 	messageID := "msg_" + uuid.NewString()
 	message, err := scanMessage(tx.QueryRow(ctx, `
-insert into messages (id, thread_id, author, body, body_content_type)
-values ($1, $2, $3, $4, $5)
+insert into messages (id, tenant_id, thread_id, author, body, body_content_type, created_by_user_id, created_by_key_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8)
 returning id, tenant_id, thread_id, author, body, body_content_type, created_at, created_by_user_id, created_by_key_id
-`, messageID, threadID, author, body, bodyContentType), nil)
+`, messageID, tenantID, threadID, auth.ActorName, body, bodyContentType, optionalString(auth.UserID), optionalString(auth.KeyID)), nil)
 	if err != nil {
 		return types.Message{}, err
 	}
 
-	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where id = $1`, threadID); err != nil {
+	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where tenant_id = $1 and id = $2`, tenantID, threadID); err != nil {
 		return types.Message{}, err
 	}
 
@@ -586,10 +588,10 @@ returning id, tenant_id, thread_id, author, body, body_content_type, created_at,
 	for _, asset := range newAssets {
 		assetID := "asset_" + uuid.NewString()
 		created, err := scanAsset(tx.QueryRow(ctx, `
-insert into assets (id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_by)
-values ($1, coalesce(nullif($2, ''), 'ten_default'), $3, $4, $5, $6, $7, $8, $9)
+insert into assets (id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_by, created_by_user_id, created_by_key_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, created_by, created_by_user_id, created_by_key_id
-`, assetID, asset.TenantID, messageID, asset.StorageKey, asset.FileName, asset.MimeType, asset.SizeBytes, asset.PublicURL, author))
+`, assetID, tenantID, messageID, asset.StorageKey, asset.FileName, asset.MimeType, asset.SizeBytes, asset.PublicURL, auth.ActorName, optionalString(auth.UserID), optionalString(auth.KeyID)))
 		if err != nil {
 			return types.Message{}, err
 		}
@@ -602,18 +604,16 @@ returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_byt
 	return message, nil
 }
 
-func (r *Repository) CreateAPIKey(ctx context.Context, name string, key string) (types.APIKey, error) {
+func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.APIKey{}, err
 	}
-	tokenHash := hashSecret(key)
-	tokenPrefix := tokenPrefix(key)
 	id := "key_" + uuid.NewString()
 	tag, err := r.pool.Exec(ctx, `
 update api_keys
 set token_prefix = $1, token_hash = $2, updated_at = now(), revoked_at = null
 where tenant_id = $3 and lower(name) = lower($4) and revoked_at is null
-`, tokenPrefix, tokenHash, types.DefaultTenantID, name)
+`, tokenPrefix, tokenHash, tenantID, name)
 	if err != nil {
 		return types.APIKey{}, err
 	}
@@ -621,7 +621,7 @@ where tenant_id = $3 and lower(name) = lower($4) and revoked_at is null
 		_, err = r.pool.Exec(ctx, `
 insert into api_keys (id, tenant_id, name, token_prefix, token_hash)
 values ($1, $2, $3, $4, $5)
-`, id, types.DefaultTenantID, name, tokenPrefix, tokenHash)
+`, id, tenantID, name, tokenPrefix, tokenHash)
 		if err != nil {
 			return types.APIKey{}, err
 		}
@@ -630,7 +630,7 @@ values ($1, $2, $3, $4, $5)
 select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 from api_keys
 where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null
-`, types.DefaultTenantID, name)
+`, tenantID, name)
 	created, err := scanAPIKey(row)
 	if err != nil {
 		return types.APIKey{}, err
@@ -640,16 +640,16 @@ where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null
 	return created, nil
 }
 
-func (r *Repository) ListAPIKeys(ctx context.Context) ([]types.APIKey, error) {
+func (r *Repository) ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 from api_keys
-where revoked_at is null
-order by tenant_id asc, name asc
-`)
+where tenant_id = $1 and revoked_at is null
+order by name asc
+`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -666,11 +666,11 @@ order by tenant_id asc, name asc
 	return keys, rows.Err()
 }
 
-func (r *Repository) RevokeAPIKey(ctx context.Context, name string) (bool, error) {
+func (r *Repository) RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return false, err
 	}
-	tag, err := r.pool.Exec(ctx, `update api_keys set revoked_at = now(), updated_at = now() where tenant_id = $1 and name = $2 and revoked_at is null`, types.DefaultTenantID, name)
+	tag, err := r.pool.Exec(ctx, `update api_keys set revoked_at = now(), updated_at = now() where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null`, tenantID, name)
 	if err != nil {
 		return false, err
 	}
@@ -693,6 +693,17 @@ where revoked_at is null and (token_hash = $1 or key_value = $2)
 		return nil, err
 	}
 	return &found, nil
+}
+
+func (r *Repository) MarkAPIKeyUsed(ctx context.Context, keyID string) error {
+	if keyID == "" {
+		return nil
+	}
+	if err := r.EnsureSchema(ctx); err != nil {
+		return err
+	}
+	_, err := r.pool.Exec(ctx, `update api_keys set last_used_at = now() where id = $1 and revoked_at is null`, keyID)
+	return err
 }
 
 type threadScanner interface {
@@ -823,6 +834,14 @@ func maskSecret(value string) string {
 		return "****"
 	}
 	return value[:4] + "..." + value[len(value)-4:]
+}
+
+func optionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func StorageKey(threadID string, messageHint string, fileName string) string {

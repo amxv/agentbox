@@ -19,7 +19,7 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	ctx := context.Background()
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	server := New(types.Actor{Name: "tester", KeyName: "test"}, svc)
+	server := New(testAuth(), svc)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	serverSession, err := server.Connect(ctx, serverTransport, nil)
@@ -76,7 +76,7 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 func TestStreamableHTTPAllowsForwardedProductionHost(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	handler := NewHTTPHandler(types.Actor{Name: "tester", KeyName: "test"}, svc)
+	handler := NewHTTPHandler(testAuth(), svc)
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.0.0"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(body))
@@ -99,7 +99,7 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	ctx := context.Background()
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	handler := NewHTTPHandler(types.Actor{Name: "tester", KeyName: "test"}, svc)
+	handler := NewHTTPHandler(testAuth(), svc)
 	httpServer := httptest.NewServer(handler)
 	defer httpServer.Close()
 
@@ -187,6 +187,15 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	}
 	if errPayload.Error.Code != "THREAD_NOT_FOUND" || strings.Contains(text, "SQLSTATE") || strings.Contains(text, "constraint") {
 		t.Fatalf("error payload = %#v text=%s", errPayload, text)
+	}
+}
+
+func testAuth() types.AuthContext {
+	return types.AuthContext{
+		TenantID:    types.DefaultTenantID,
+		SubjectType: types.AuthSubjectAPIKey,
+		ActorName:   "tester",
+		KeyID:       "key_test",
 	}
 }
 

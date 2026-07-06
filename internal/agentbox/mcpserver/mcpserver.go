@@ -17,19 +17,19 @@ import (
 )
 
 type Server struct {
-	actor types.Actor
-	svc   *service.Service
+	auth types.AuthContext
+	svc  *service.Service
 }
 
-func New(actor types.Actor, svc *service.Service) *mcp.Server {
-	builder := &Server{actor: actor, svc: svc}
+func New(auth types.AuthContext, svc *service.Service) *mcp.Server {
+	builder := &Server{auth: auth, svc: svc}
 	return builder.build()
 }
 
-func NewHTTPHandler(actor types.Actor, svc *service.Service) http.Handler {
+func NewHTTPHandler(auth types.AuthContext, svc *service.Service) http.Handler {
 	return mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
-			return New(actor, svc)
+			return New(auth, svc)
 		},
 		&mcp.StreamableHTTPOptions{
 			Stateless:                  true,
@@ -147,7 +147,7 @@ func (s *Server) listThreads(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	if limit > 100 {
 		limit = 100
 	}
-	threads, err := s.svc.ListThreads(ctx, limit)
+	threads, err := s.svc.ListThreads(ctx, s.auth, limit)
 	if err != nil {
 		return errorResult(err), nil
 	}
@@ -168,7 +168,7 @@ func (s *Server) searchThreads(ctx context.Context, req *mcp.CallToolRequest) (*
 	if input.Limit != nil {
 		limit = *input.Limit
 	}
-	threads, err := s.svc.SearchThreads(ctx, types.SearchThreadParams{
+	threads, err := s.svc.SearchThreads(ctx, s.auth, types.SearchThreadParams{
 		Query:        input.Query,
 		Limit:        limit,
 		CreatedBy:    input.CreatedBy,
@@ -190,7 +190,7 @@ func (s *Server) getThread(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 	if err := validate.ThreadID(input.ThreadID); err != nil {
 		return errorResult(err), nil
 	}
-	thread, err := s.svc.GetThread(ctx, input.ThreadID)
+	thread, err := s.svc.GetThread(ctx, s.auth, input.ThreadID)
 	if err != nil {
 		return errorResult(err), nil
 	}
@@ -207,13 +207,13 @@ func (s *Server) createThread(ctx context.Context, req *mcp.CallToolRequest) (*m
 		return errorResult(err), nil
 	}
 	if input.InitialMessage != nil {
-		thread, message, err := s.svc.CreateThreadWithMessage(ctx, s.actor, input.Title, *input.InitialMessage, input.BodyContentType)
+		thread, message, err := s.svc.CreateThreadWithMessage(ctx, s.auth, input.Title, *input.InitialMessage, input.BodyContentType)
 		if err != nil {
 			return errorResult(err), nil
 		}
 		return result("Created Agentbox thread with initial message.", map[string]any{"thread": thread, "message": message}), nil
 	}
-	thread, err := s.svc.CreateThread(ctx, s.actor, input.Title)
+	thread, err := s.svc.CreateThread(ctx, s.auth, input.Title)
 	if err != nil {
 		return errorResult(err), nil
 	}
@@ -238,7 +238,7 @@ func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		}
 		file = parsed
 	}
-	message, err := s.svc.PostMessage(ctx, s.actor, service.PostMessageParams{
+	message, err := s.svc.PostMessage(ctx, s.auth, service.PostMessageParams{
 		ThreadID:        raw.ThreadID,
 		Body:            raw.Body,
 		BodyContentType: raw.BodyContentType,

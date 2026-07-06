@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -36,14 +38,18 @@ func TestHealth(t *testing.T) {
 
 func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	if _, err := repo.CreateAPIKey(t.Context(), "local", "dev-key"); err != nil {
+	svc := service.New(repo, &assets.FakeStore{})
+	if _, err := svc.CreateAPIKey(t.Context(), authContext(types.DefaultTenantID, "local"), "local"); err != nil {
 		t.Fatal(err)
 	}
-	svc := service.New(repo, &assets.FakeStore{})
+	repo.APIKeys[0].Key = "dev-key"
+	repo.APIKeys[0].TokenHash = dbHashForTest("dev-key")
 	server := NewServer(config.Config{}, svc)
 
 	create := httptest.NewRecorder()
-	server.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/threads?key=dev-key", strings.NewReader(`{"title":"Go API"}`)))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/threads", strings.NewReader(`{"title":"Go API"}`))
+	createReq.Header.Set("authorization", "Bearer dev-key")
+	server.ServeHTTP(create, createReq)
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
 	}
@@ -212,11 +218,11 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	imageType := "image/png"
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	thread, err := svc.CreateThread(t.Context(), actor(), "Viewer")
+	thread, err := svc.CreateThread(t.Context(), authContext(types.DefaultTenantID, "tester"), "Viewer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.PostMessage(t.Context(), thread.ID, "author", "body", nil, []types.NewAsset{{
+	if _, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, authContext(types.DefaultTenantID, "author"), "body", nil, []types.NewAsset{{
 		StorageKey: "agentbox/thread/message/image.png",
 		FileName:   "image.png",
 		MimeType:   &imageType,
@@ -343,16 +349,14 @@ func TestMCPOriginValidation(t *testing.T) {
 	}
 }
 
-func actor() types.Actor {
-	return types.Actor{Name: "tester", KeyName: "test"}
-}
-
 func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	if _, err := repo.CreateAPIKey(t.Context(), "user", "user-key"); err != nil {
+	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	if _, err := svc.CreateAPIKey(t.Context(), authContext(types.DefaultTenantID, "user"), "user"); err != nil {
 		t.Fatal(err)
 	}
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	repo.APIKeys[0].Key = "user-key"
+	repo.APIKeys[0].TokenHash = dbHashForTest("user-key")
 	server := NewServer(config.Config{}, svc)
 
 	create := httptest.NewRecorder()
@@ -410,4 +414,125 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if posted.Message.Author != "user" || len(posted.Message.Assets) != 1 || posted.Message.Assets[0].FileName != "note.md" || posted.Message.Assets[0].PublicURL == nil {
 		t.Fatalf("posted = %#v", posted)
 	}
+}
+
+func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	keyA, err := svc.CreateAPIKey(t.Context(), authContext("ten_a", "tenant-a"), "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := svc.CreateAPIKey(t.Context(), authContext("ten_b", "tenant-b"), "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.Config{}, svc)
+
+	createA := httptest.NewRecorder()
+	reqA := httptest.NewRequest(http.MethodPost, "/api/threads", strings.NewReader(`{"title":"Tenant A"}`))
+	reqA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(createA, reqA)
+	if createA.Code != http.StatusCreated {
+		t.Fatalf("createA status=%d body=%s", createA.Code, createA.Body.String())
+	}
+	var payloadA struct {
+		Thread struct {
+			ID       string `json:"id"`
+			TenantID string `json:"tenant_id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(createA.Body.Bytes(), &payloadA); err != nil {
+		t.Fatal(err)
+	}
+
+	createB := httptest.NewRecorder()
+	server.ServeHTTP(createB, httptest.NewRequest(http.MethodPost, "/api/threads?key="+keyB.Key, strings.NewReader(`{"title":"Tenant B"}`)))
+	if createB.Code != http.StatusCreated {
+		t.Fatalf("createB status=%d body=%s", createB.Code, createB.Body.String())
+	}
+	var payloadB struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(createB.Body.Bytes(), &payloadB); err != nil {
+		t.Fatal(err)
+	}
+
+	listA := httptest.NewRecorder()
+	reqListA := httptest.NewRequest(http.MethodGet, "/api/threads", nil)
+	reqListA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(listA, reqListA)
+	if listA.Code != http.StatusOK {
+		t.Fatalf("listA status=%d body=%s", listA.Code, listA.Body.String())
+	}
+	if strings.Contains(listA.Body.String(), payloadB.Thread.ID) || !strings.Contains(listA.Body.String(), payloadA.Thread.ID) {
+		t.Fatalf("listA leaked or missed thread: %s", listA.Body.String())
+	}
+
+	getBWithA := httptest.NewRecorder()
+	reqGetBWithA := httptest.NewRequest(http.MethodGet, "/api/threads/"+payloadB.Thread.ID, nil)
+	reqGetBWithA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(getBWithA, reqGetBWithA)
+	if getBWithA.Code != http.StatusNotFound {
+		t.Fatalf("getBWithA status=%d body=%s", getBWithA.Code, getBWithA.Body.String())
+	}
+
+	postBWithA := httptest.NewRecorder()
+	reqPostBWithA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadB.Thread.ID+"/messages", strings.NewReader(`{"body":"blocked"}`))
+	reqPostBWithA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(postBWithA, reqPostBWithA)
+	if postBWithA.Code != http.StatusNotFound {
+		t.Fatalf("postBWithA status=%d body=%s", postBWithA.Code, postBWithA.Body.String())
+	}
+
+	messageB := types.Message{ID: "msg_b", TenantID: "ten_b", ThreadID: payloadB.Thread.ID, Author: "tenant-b", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
+	repo.Messages = append(repo.Messages, messageB)
+	repo.Assets = append(repo.Assets, types.Asset{
+		ID:         "asset_b",
+		TenantID:   "ten_b",
+		MessageID:  messageB.ID,
+		StorageKey: "agentbox/ten_b/thread/file.txt",
+		FileName:   "file.txt",
+		SizeBytes:  1,
+		CreatedAt:  messageB.CreatedAt,
+		CreatedBy:  "tenant-b",
+	})
+	downloadBWithA := httptest.NewRecorder()
+	reqDownloadBWithA := httptest.NewRequest(http.MethodGet, "/api/assets/asset_b/download-url", nil)
+	reqDownloadBWithA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(downloadBWithA, reqDownloadBWithA)
+	if downloadBWithA.Code != http.StatusNotFound {
+		t.Fatalf("downloadBWithA status=%d body=%s", downloadBWithA.Code, downloadBWithA.Body.String())
+	}
+
+	if err := svc.RevokeAPIKey(t.Context(), authContext("ten_a", "tenant-a"), "shared"); err != nil {
+		t.Fatal(err)
+	}
+	afterRevokeA := httptest.NewRecorder()
+	reqAfterRevokeA := httptest.NewRequest(http.MethodGet, "/api/threads", nil)
+	reqAfterRevokeA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(afterRevokeA, reqAfterRevokeA)
+	if afterRevokeA.Code != http.StatusUnauthorized {
+		t.Fatalf("afterRevokeA status=%d body=%s", afterRevokeA.Code, afterRevokeA.Body.String())
+	}
+	stillB := httptest.NewRecorder()
+	server.ServeHTTP(stillB, httptest.NewRequest(http.MethodGet, "/api/threads?key="+keyB.Key, nil))
+	if stillB.Code != http.StatusOK {
+		t.Fatalf("stillB status=%d body=%s", stillB.Code, stillB.Body.String())
+	}
+}
+
+func authContext(tenantID string, actorName string) types.AuthContext {
+	return types.AuthContext{
+		TenantID:    tenantID,
+		SubjectType: types.AuthSubjectAPIKey,
+		ActorName:   actorName,
+	}
+}
+
+func dbHashForTest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }

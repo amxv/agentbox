@@ -63,14 +63,15 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.requireActor(w, r); !ok {
+		authContext, ok := s.requireAuth(w, r)
+		if !ok {
 			return
 		}
 		limit := numberQuery(r, "limit", 50)
 		if query := strings.TrimSpace(r.URL.Query().Get("query")); query != "" {
 			createdBy := optionalQuery(r, "created_by")
 			updatedAfter := optionalQuery(r, "updated_after")
-			threads, err := s.service.SearchThreads(r.Context(), types.SearchThreadParams{
+			threads, err := s.service.SearchThreads(r.Context(), *authContext, types.SearchThreadParams{
 				Query:        query,
 				Limit:        limit,
 				CreatedBy:    createdBy,
@@ -83,14 +84,14 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
 			return
 		}
-		threads, err := s.service.ListThreads(r.Context(), limit)
+		threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
 	case http.MethodPost:
-		actor, ok := s.requireActor(w, r)
+		authContext, ok := s.requireAuth(w, r)
 		if !ok {
 			return
 		}
@@ -104,7 +105,7 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if input.InitialMessage != nil {
-			thread, message, err := s.service.CreateThreadWithMessage(r.Context(), *actor, input.Title, *input.InitialMessage, input.BodyContentType)
+			thread, message, err := s.service.CreateThreadWithMessage(r.Context(), *authContext, input.Title, *input.InitialMessage, input.BodyContentType)
 			if err != nil {
 				writeServiceError(w, err)
 				return
@@ -112,7 +113,7 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusCreated, map[string]any{"thread": thread, "message": message})
 			return
 		}
-		thread, err := s.service.CreateThread(r.Context(), *actor, input.Title)
+		thread, err := s.service.CreateThread(r.Context(), *authContext, input.Title)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -129,7 +130,7 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		keys, err := s.service.ListAPIKeys(r.Context())
+		keys, err := s.service.ListAPIKeys(r.Context(), adminAuthContext())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -143,7 +144,7 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		key, err := s.service.CreateAPIKey(r.Context(), input.Name)
+		key, err := s.service.CreateAPIKey(r.Context(), adminAuthContext(), input.Name)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -173,7 +174,7 @@ func (s *Server) adminKey(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodDelete:
-		if err := s.service.RevokeAPIKey(r.Context(), name); err != nil {
+		if err := s.service.RevokeAPIKey(r.Context(), adminAuthContext(), name); err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, service.ErrAPIKeyNotFound) {
 				status = http.StatusNotFound
@@ -213,10 +214,11 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request, threadID stri
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	if _, ok := s.requireActor(w, r); !ok {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
 		return
 	}
-	thread, err := s.service.GetThread(r.Context(), threadID)
+	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, service.ErrThreadNotFound) {
@@ -232,7 +234,7 @@ func (s *Server) createUploadIntents(w http.ResponseWriter, r *http.Request, thr
 	if !method(w, r, http.MethodPost) {
 		return
 	}
-	actor, ok := s.requireActor(w, r)
+	authContext, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
@@ -243,7 +245,7 @@ func (s *Server) createUploadIntents(w http.ResponseWriter, r *http.Request, thr
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	uploads, err := s.service.CreatePresignedUploads(r.Context(), *actor, threadID, input.Files)
+	uploads, err := s.service.CreatePresignedUploads(r.Context(), *authContext, threadID, input.Files)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -255,13 +257,13 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	if !method(w, r, http.MethodPost) {
 		return
 	}
-	actor, ok := s.requireActor(w, r)
+	authContext, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	contentType := r.Header.Get("content-type")
 	if strings.Contains(contentType, "multipart/form-data") {
-		s.postMessageMultipart(w, r, actor, threadID)
+		s.postMessageMultipart(w, r, authContext, threadID)
 		return
 	}
 
@@ -292,7 +294,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 			FileName:    input.File.FileName,
 		}
 	}
-	message, err := s.service.PostMessage(r.Context(), *actor, service.PostMessageParams{
+	message, err := s.service.PostMessage(r.Context(), *authContext, service.PostMessageParams{
 		ThreadID:        threadID,
 		Body:            body,
 		BodyContentType: input.BodyContentType,
@@ -306,7 +308,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	writeJSON(w, http.StatusCreated, map[string]any{"message": message})
 }
 
-func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, actor *types.Actor, threadID string) {
+func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, authContext *types.AuthContext, threadID string) {
 	limit := s.cfg.MultipartLimitBytes
 	if limit <= 0 {
 		limit = config.DefaultMaxFileSizeBytes
@@ -348,7 +350,7 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, ac
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	message, err := s.service.PostMessageWithAsset(r.Context(), *actor, service.PostMessageWithAssetParams{
+	message, err := s.service.PostMessageWithAsset(r.Context(), *authContext, service.PostMessageWithAssetParams{
 		ThreadID:        threadID,
 		Body:            body,
 		BodyContentType: bodyContentType,
@@ -373,10 +375,11 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	if _, ok := s.requireActor(w, r); !ok {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
 		return
 	}
-	asset, err := s.service.GetAsset(r.Context(), assetID)
+	asset, err := s.service.GetAsset(r.Context(), *authContext, assetID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -416,7 +419,7 @@ func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
 	if limit > 200 {
 		limit = 200
 	}
-	threads, err := s.service.ListThreads(r.Context(), limit)
+	threads, err := s.service.ListThreads(r.Context(), adminAuthContext(), limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -436,7 +439,7 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	thread, err := s.service.GetThread(r.Context(), threadID)
+	thread, err := s.service.GetThread(r.Context(), adminAuthContext(), threadID)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, service.ErrThreadNotFound) {
@@ -463,30 +466,30 @@ func (s *Server) mcpHandler() http.Handler {
 			writeError(w, http.StatusForbidden, "Forbidden origin")
 			return
 		}
-		actor, err := s.service.AuthenticateAPIKey(r.Context(), r.URL.Query().Get("key"))
+		authContext, err := s.service.AuthenticateAPIKey(r.Context(), authSecretFromRequest(r))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if actor == nil {
+		if authContext == nil {
 			writeError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
-		mcpserver.NewHTTPHandler(*actor, s.service).ServeHTTP(w, r)
+		mcpserver.NewHTTPHandler(*authContext, s.service).ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) requireActor(w http.ResponseWriter, r *http.Request) (*types.Actor, bool) {
-	actor, err := s.service.AuthenticateAPIKey(r.Context(), r.URL.Query().Get("key"))
+func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (*types.AuthContext, bool) {
+	authContext, err := s.service.AuthenticateAPIKey(r.Context(), authSecretFromRequest(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil, false
 	}
-	if actor == nil {
+	if authContext == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")
 		return nil, false
 	}
-	return actor, true
+	return authContext, true
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -499,6 +502,26 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func authSecretFromRequest(r *http.Request) string {
+	if bearer := strings.TrimSpace(r.Header.Get("authorization")); bearer != "" {
+		if strings.HasPrefix(strings.ToLower(bearer), "bearer ") {
+			if secret := strings.TrimSpace(bearer[len("Bearer "):]); secret != "" {
+				return secret
+			}
+		}
+	}
+	return strings.TrimSpace(r.URL.Query().Get("key"))
+}
+
+func adminAuthContext() types.AuthContext {
+	return types.AuthContext{
+		TenantID:    types.DefaultTenantID,
+		SubjectType: types.AuthSubjectAdmin,
+		ActorName:   "admin",
+		Role:        "admin",
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

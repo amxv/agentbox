@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -20,20 +22,21 @@ var ErrAPIKeyNotFound = errors.New("API key not found.")
 
 type Repository interface {
 	EnsureSchema(ctx context.Context) error
-	ListThreads(ctx context.Context, limit int) ([]types.Thread, error)
-	SearchThreads(ctx context.Context, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
-	CreateThread(ctx context.Context, title string, author string) (types.Thread, error)
-	CreateThreadWithMessage(ctx context.Context, title string, author string, body string, bodyContentType *string) (types.Thread, types.Message, error)
-	GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error)
-	GetAsset(ctx context.Context, assetID string) (*types.Asset, error)
+	ListThreads(ctx context.Context, tenantID string, limit int) ([]types.Thread, error)
+	SearchThreads(ctx context.Context, tenantID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
+	CreateThread(ctx context.Context, tenantID string, title string, auth types.AuthContext) (types.Thread, error)
+	CreateThreadWithMessage(ctx context.Context, tenantID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
+	GetThread(ctx context.Context, tenantID string, threadID string) (*types.ThreadWithMessages, error)
+	GetAsset(ctx context.Context, tenantID string, assetID string) (*types.Asset, error)
 	CreatePendingUpload(ctx context.Context, upload types.PendingUpload) (types.PendingUpload, error)
-	GetPendingUploads(ctx context.Context, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error)
-	MarkPendingUploadsConsumed(ctx context.Context, uploadIDs []string) error
-	PostMessage(ctx context.Context, threadID string, author string, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
-	CreateAPIKey(ctx context.Context, name string, key string) (types.APIKey, error)
-	ListAPIKeys(ctx context.Context) ([]types.APIKey, error)
-	RevokeAPIKey(ctx context.Context, name string) (bool, error)
+	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error)
+	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, uploadIDs []string) error
+	PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
+	CreateAPIKey(ctx context.Context, tenantID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error)
+	ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error)
+	RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error)
+	MarkAPIKeyUsed(ctx context.Context, keyID string) error
 }
 
 type Service struct {
@@ -45,14 +48,20 @@ func New(repo Repository, assetStore assets.AssetStore) *Service {
 	return &Service{repo: repo, assets: assetStore}
 }
 
-func (s *Service) ListThreads(ctx context.Context, limit int) ([]types.Thread, error) {
+func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit int) ([]types.Thread, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return nil, err
+	}
 	if limit == 0 {
 		limit = 50
 	}
-	return s.repo.ListThreads(ctx, limit)
+	return s.repo.ListThreads(ctx, auth.TenantID, limit)
 }
 
-func (s *Service) SearchThreads(ctx context.Context, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return nil, err
+	}
 	params.Query = strings.TrimSpace(params.Query)
 	if params.Query == "" {
 		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "query is required."}
@@ -79,17 +88,23 @@ func (s *Service) SearchThreads(ctx context.Context, params types.SearchThreadPa
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "updated_after must be an RFC3339 timestamp."}
 		}
 	}
-	return s.repo.SearchThreads(ctx, params)
+	return s.repo.SearchThreads(ctx, auth.TenantID, params)
 }
 
-func (s *Service) CreateThread(ctx context.Context, actor types.Actor, title string) (types.Thread, error) {
+func (s *Service) CreateThread(ctx context.Context, auth types.AuthContext, title string) (types.Thread, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return types.Thread{}, err
+	}
 	if err := validate.CreateThreadTitle(title); err != nil {
 		return types.Thread{}, err
 	}
-	return s.repo.CreateThread(ctx, title, actor.Name)
+	return s.repo.CreateThread(ctx, auth.TenantID, title, auth)
 }
 
-func (s *Service) CreateThreadWithMessage(ctx context.Context, actor types.Actor, title string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
+func (s *Service) CreateThreadWithMessage(ctx context.Context, auth types.AuthContext, title string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return types.Thread{}, types.Message{}, err
+	}
 	if err := validate.CreateThreadTitle(title); err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
@@ -97,11 +112,14 @@ func (s *Service) CreateThreadWithMessage(ctx context.Context, actor types.Actor
 	if err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
-	return s.repo.CreateThreadWithMessage(ctx, title, actor.Name, body, &resolvedContentType)
+	return s.repo.CreateThreadWithMessage(ctx, auth.TenantID, title, auth, body, &resolvedContentType)
 }
 
-func (s *Service) GetThread(ctx context.Context, threadID string) (*types.ThreadWithMessages, error) {
-	thread, err := s.repo.GetThread(ctx, threadID)
+func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadWithMessages, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return nil, err
+	}
+	thread, err := s.repo.GetThread(ctx, auth.TenantID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -111,15 +129,21 @@ func (s *Service) GetThread(ctx context.Context, threadID string) (*types.Thread
 	return thread, nil
 }
 
-func (s *Service) GetAsset(ctx context.Context, assetID string) (*types.Asset, error) {
-	return s.repo.GetAsset(ctx, assetID)
+func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID string) (*types.Asset, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return nil, err
+	}
+	return s.repo.GetAsset(ctx, auth.TenantID, assetID)
 }
 
-func (s *Service) PostMessage(ctx context.Context, actor types.Actor, params PostMessageParams) (types.Message, error) {
+func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, params PostMessageParams) (types.Message, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return types.Message{}, err
+	}
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
 	}
-	thread, err := s.repo.GetThread(ctx, params.ThreadID)
+	thread, err := s.repo.GetThread(ctx, auth.TenantID, params.ThreadID)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -136,16 +160,17 @@ func (s *Service) PostMessage(ctx context.Context, actor types.Actor, params Pos
 		if err != nil {
 			return types.Message{}, err
 		}
+		asset.TenantID = auth.TenantID
 		newAssets = append(newAssets, asset)
 	}
 	if len(params.UploadedAssets) > 0 {
-		assets, err := s.pendingUploadsToAssets(ctx, actor, params.ThreadID, params.UploadedAssets)
+		assets, err := s.pendingUploadsToAssets(ctx, auth, params.ThreadID, params.UploadedAssets)
 		if err != nil {
 			return types.Message{}, err
 		}
 		newAssets = append(newAssets, assets...)
 	}
-	message, err := s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAssets)
+	message, err := s.repo.PostMessage(ctx, auth.TenantID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -154,18 +179,21 @@ func (s *Service) PostMessage(ctx context.Context, actor types.Actor, params Pos
 		for _, uploaded := range params.UploadedAssets {
 			ids = append(ids, strings.TrimSpace(uploaded.UploadID))
 		}
-		if err := s.repo.MarkPendingUploadsConsumed(ctx, ids); err != nil {
+		if err := s.repo.MarkPendingUploadsConsumed(ctx, auth.TenantID, ids); err != nil {
 			return types.Message{}, err
 		}
 	}
 	return message, nil
 }
 
-func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, params PostMessageWithAssetParams) (types.Message, error) {
+func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthContext, params PostMessageWithAssetParams) (types.Message, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return types.Message{}, err
+	}
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
 	}
-	thread, err := s.repo.GetThread(ctx, params.ThreadID)
+	thread, err := s.repo.GetThread(ctx, auth.TenantID, params.ThreadID)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -187,16 +215,20 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, actor types.Actor, p
 		if err != nil {
 			return types.Message{}, err
 		}
+		asset.TenantID = auth.TenantID
 		newAssets = append(newAssets, asset)
 	}
-	return s.repo.PostMessage(ctx, params.ThreadID, actor.Name, params.Body, &bodyContentType, newAssets)
+	return s.repo.PostMessage(ctx, auth.TenantID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
 }
 
-func (s *Service) CreatePresignedUploads(ctx context.Context, actor types.Actor, threadID string, files []types.UploadIntentFile) ([]types.PresignedUpload, error) {
+func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthContext, threadID string, files []types.UploadIntentFile) ([]types.PresignedUpload, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return nil, err
+	}
 	if err := validate.PostMessage(threadID); err != nil {
 		return nil, err
 	}
-	thread, err := s.repo.GetThread(ctx, threadID)
+	thread, err := s.repo.GetThread(ctx, auth.TenantID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -232,15 +264,18 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, actor types.Actor,
 		}
 		expiresAt := time.Now().UTC().Add(time.Duration(presigned.ExpiresIn) * time.Second).Format("2006-01-02T15:04:05.000Z")
 		if _, err := s.repo.CreatePendingUpload(ctx, types.PendingUpload{
-			ID:         presigned.UploadID,
-			ThreadID:   threadID,
-			StorageKey: presigned.StorageKey,
-			FileName:   presigned.FileName,
-			MimeType:   presigned.MimeType,
-			SizeBytes:  presigned.SizeBytes,
-			PublicURL:  presigned.PublicURL,
-			ExpiresAt:  expiresAt,
-			CreatedBy:  actor.Name,
+			ID:              presigned.UploadID,
+			TenantID:        auth.TenantID,
+			ThreadID:        threadID,
+			StorageKey:      presigned.StorageKey,
+			FileName:        presigned.FileName,
+			MimeType:        presigned.MimeType,
+			SizeBytes:       presigned.SizeBytes,
+			PublicURL:       presigned.PublicURL,
+			ExpiresAt:       expiresAt,
+			CreatedBy:       auth.ActorName,
+			CreatedByUserID: optionalString(auth.UserID),
+			CreatedByKeyID:  optionalString(auth.KeyID),
 		}); err != nil {
 			return nil, err
 		}
@@ -249,7 +284,7 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, actor types.Actor,
 	return uploads, nil
 }
 
-func (s *Service) pendingUploadsToAssets(ctx context.Context, actor types.Actor, threadID string, refs []types.UploadedAssetReference) ([]types.NewAsset, error) {
+func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthContext, threadID string, refs []types.UploadedAssetReference) ([]types.NewAsset, error) {
 	ids := make([]string, 0, len(refs))
 	seen := map[string]bool{}
 	for _, ref := range refs {
@@ -265,7 +300,7 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, actor types.Actor,
 	if len(ids) == 0 {
 		return []types.NewAsset{}, nil
 	}
-	pending, err := s.repo.GetPendingUploads(ctx, threadID, ids, actor.Name)
+	pending, err := s.repo.GetPendingUploads(ctx, auth.TenantID, threadID, ids, auth.ActorName)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +322,7 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, actor types.Actor,
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload has expired."}
 		}
 		assets = append(assets, types.NewAsset{
+			TenantID:   auth.TenantID,
 			StorageKey: upload.StorageKey,
 			FileName:   upload.FileName,
 			MimeType:   upload.MimeType,
@@ -306,7 +342,10 @@ func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset,
 	})
 }
 
-func (s *Service) CreateAPIKey(ctx context.Context, name string) (types.APIKey, error) {
+func (s *Service) CreateAPIKey(ctx context.Context, auth types.AuthContext, name string) (types.APIKey, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return types.APIKey{}, err
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return types.APIKey{}, errors.New("API key name is required.")
@@ -315,19 +354,25 @@ func (s *Service) CreateAPIKey(ctx context.Context, name string) (types.APIKey, 
 	if err != nil {
 		return types.APIKey{}, err
 	}
-	return s.repo.CreateAPIKey(ctx, name, secret)
+	return s.repo.CreateAPIKey(ctx, auth.TenantID, name, secret, hashSecret(secret), tokenPrefix(secret))
 }
 
-func (s *Service) ListAPIKeys(ctx context.Context) ([]types.APIKey, error) {
-	return s.repo.ListAPIKeys(ctx)
+func (s *Service) ListAPIKeys(ctx context.Context, auth types.AuthContext) ([]types.APIKey, error) {
+	if err := requireAuthContext(auth); err != nil {
+		return nil, err
+	}
+	return s.repo.ListAPIKeys(ctx, auth.TenantID)
 }
 
-func (s *Service) RevokeAPIKey(ctx context.Context, name string) error {
+func (s *Service) RevokeAPIKey(ctx context.Context, auth types.AuthContext, name string) error {
+	if err := requireAuthContext(auth); err != nil {
+		return err
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("API key name is required.")
 	}
-	removed, err := s.repo.RevokeAPIKey(ctx, name)
+	removed, err := s.repo.RevokeAPIKey(ctx, auth.TenantID, name)
 	if err != nil {
 		return err
 	}
@@ -337,7 +382,7 @@ func (s *Service) RevokeAPIKey(ctx context.Context, name string) error {
 	return nil
 }
 
-func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types.Actor, error) {
+func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types.AuthContext, error) {
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
 		return nil, nil
@@ -349,7 +394,23 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 	if key == nil {
 		return nil, nil
 	}
-	return &types.Actor{Name: key.Name, KeyName: key.Name}, nil
+	if key.ID != "" {
+		if err := s.repo.MarkAPIKeyUsed(ctx, key.ID); err != nil {
+			return nil, err
+		}
+	}
+	tenantID := key.TenantID
+	if tenantID == "" {
+		tenantID = types.DefaultTenantID
+	}
+	return &types.AuthContext{
+		TenantID:    tenantID,
+		UserID:      stringValue(key.UserID),
+		SubjectType: types.AuthSubjectAPIKey,
+		ActorName:   key.Name,
+		KeyID:       key.ID,
+		Scopes:      append([]string(nil), key.Scopes...),
+	}, nil
 }
 
 func generateSecret() (string, error) {
@@ -357,7 +418,44 @@ func generateSecret() (string, error) {
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return "agb_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func hashSecret(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func tokenPrefix(value string) string {
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
+
+func requireAuthContext(auth types.AuthContext) error {
+	if strings.TrimSpace(auth.TenantID) == "" {
+		return CodedError{Code: "PERMISSION_DENIED", Message: "Authentication context is required."}
+	}
+	if strings.TrimSpace(auth.ActorName) == "" {
+		return CodedError{Code: "PERMISSION_DENIED", Message: "Authentication context is required."}
+	}
+	return nil
+}
+
+func optionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 type PostMessageParams struct {
