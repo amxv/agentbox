@@ -199,6 +199,8 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	assertScopeDenied("upload intent", err)
 	_, err = svc.GetAsset(context.Background(), *restrictedAuth, message.Assets[0].ID)
 	assertScopeDenied("get asset", err)
+	_, err = svc.SignedAssetDownloadURL(context.Background(), *restrictedAuth, message.Assets[0], 300)
+	assertScopeDenied("sign asset", err)
 
 	scopedKey, err := svc.CreateAPIKeyWithScopes(context.Background(), adminAuth, "worker", []string{"threads:read", "threads:write", "assets:read", "assets:write"})
 	if err != nil {
@@ -219,6 +221,9 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	}
 	if _, err := svc.GetAsset(context.Background(), *scopedAuth, message.Assets[0].ID); err != nil {
 		t.Fatalf("scoped get asset failed: %v", err)
+	}
+	if _, err := svc.SignedAssetDownloadURL(context.Background(), *scopedAuth, message.Assets[0], 300); err != nil {
+		t.Fatalf("scoped sign asset failed: %v", err)
 	}
 	if _, err := svc.CreatePresignedUploads(context.Background(), *scopedAuth, thread.ID, []types.UploadIntentFile{{FileName: "next.txt"}}); err != nil {
 		t.Fatalf("scoped upload intent failed: %v", err)

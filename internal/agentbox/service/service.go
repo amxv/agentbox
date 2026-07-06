@@ -361,7 +361,10 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 	return assets, nil
 }
 
-func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset, expiresInSeconds int) (string, error) {
+func (s *Service) SignedAssetDownloadURL(ctx context.Context, auth types.AuthContext, asset types.Asset, expiresInSeconds int) (string, error) {
+	if err := requireScope(auth, "assets:read"); err != nil {
+		return "", err
+	}
 	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
 		StorageKey:       asset.StorageKey,
 		FileName:         asset.FileName,

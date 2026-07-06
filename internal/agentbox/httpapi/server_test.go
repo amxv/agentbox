@@ -976,6 +976,10 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	threadReadKey, err := svc.CreateAPIKeyWithScopes(t.Context(), adminAuth, "thread-reader", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	scopedKey, err := svc.CreateAPIKeyWithScopes(t.Context(), adminAuth, "worker", []string{"threads:read", "threads:write", "assets:read", "assets:write"})
 	if err != nil {
 		t.Fatal(err)
@@ -997,6 +1001,12 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 		}
 	}
 
+	viewerThreadOnly := httptest.NewRecorder()
+	server.ServeHTTP(viewerThreadOnly, httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID+"?key="+url.QueryEscape(threadReadKey.Key), nil))
+	if viewerThreadOnly.Code != http.StatusForbidden {
+		t.Fatalf("thread-read-only viewer status=%d body=%s", viewerThreadOnly.Code, viewerThreadOnly.Body.String())
+	}
+
 	list := httptest.NewRecorder()
 	server.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/threads?key="+url.QueryEscape(scopedKey.Key), nil))
 	if list.Code != http.StatusOK {
@@ -1011,6 +1021,14 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	server.ServeHTTP(downloadURL, httptest.NewRequest(http.MethodGet, "/api/assets/"+message.Assets[0].ID+"/download-url?key="+url.QueryEscape(scopedKey.Key), nil))
 	if downloadURL.Code != http.StatusOK {
 		t.Fatalf("scoped download-url status=%d body=%s", downloadURL.Code, downloadURL.Body.String())
+	}
+	viewerScoped := httptest.NewRecorder()
+	server.ServeHTTP(viewerScoped, httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID+"?key="+url.QueryEscape(scopedKey.Key), nil))
+	if viewerScoped.Code != http.StatusOK {
+		t.Fatalf("scoped viewer status=%d body=%s", viewerScoped.Code, viewerScoped.Body.String())
+	}
+	if !strings.Contains(viewerScoped.Body.String(), `"download_url"`) || !strings.Contains(viewerScoped.Body.String(), "seed.txt") {
+		t.Fatalf("scoped viewer missing signed asset data: %s", viewerScoped.Body.String())
 	}
 }
 

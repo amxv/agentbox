@@ -687,9 +687,9 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := numberQuery(r, "expires_in", 300)
 	safeExpires := validate.ClampSignedURLExpiry(expires)
-	downloadURL, err := s.service.SignedAssetDownloadURL(r.Context(), *asset, safeExpires)
+	downloadURL, err := s.service.SignedAssetDownloadURL(r.Context(), *authContext, *asset, safeExpires)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -743,9 +743,9 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	viewer, err := withViewerAssetURLs(r, s.service, thread)
+	viewer, err := withViewerAssetURLs(r, s.service, *authContext, thread)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"thread": viewer})
@@ -1049,7 +1049,7 @@ type viewerAsset struct {
 	PreviewURL  *string `json:"preview_url"`
 }
 
-func withViewerAssetURLs(r *http.Request, svc *service.Service, thread *types.ThreadWithMessages) (viewerThread, error) {
+func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext types.AuthContext, thread *types.ThreadWithMessages) (viewerThread, error) {
 	result := viewerThread{Thread: thread.Thread, Messages: []viewerMessage{}}
 	for _, message := range thread.Messages {
 		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
@@ -1059,7 +1059,7 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, thread *types.Th
 			if isImage {
 				expires = 900
 			}
-			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), asset, expires)
+			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset, expires)
 			if err != nil {
 				return viewerThread{}, err
 			}
