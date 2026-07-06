@@ -1,6 +1,6 @@
 # Agentbox Raycast Extension
 
-Raycast commands for daily Agentbox workflows: search threads, inspect messages, create threads, post replies with attachments, copy the MCP URL, and check the configured connection.
+Raycast commands for daily Agentbox workflows: browse latest messages, search threads, inspect messages, create threads, post replies with attachments, copy content to the clipboard, copy the MCP URL, and check the configured connection.
 
 This package is intentionally self-contained under `raycast/agentbox`. It uses npm and the Raycast extension CLI, talks to Agentbox through the existing HTTP API, and does not require the Go CLI or any bundled native binary at runtime.
 
@@ -22,12 +22,35 @@ This package is intentionally self-contained under `raycast/agentbox`. It uses n
 
    - `Agentbox URL`: the Agentbox dashboard or API proxy URL. For production, use `https://agentbox-black.vercel.app`.
    - `Agentbox API Key`: an actor API key that can list, create, and update threads.
+   - `Attachment Download Folder`: optional folder for attachment download actions. If unset, downloads go to `~/Downloads/Agentbox`.
 
-The extension stores credentials only in Raycast preferences. It does not read or write Agentbox CLI profiles, does not need an admin key for daily use, and does not call the Go CLI.
+Each user needs to configure their own Agentbox URL and API key in Raycast preferences. The extension stores credentials only in Raycast preferences. It does not read or write Agentbox CLI profiles, does not need an admin key for daily use, and does not call the Go CLI.
+
+## Sharing and Distribution
+
+For local or development installs, share the repository checkout. From `raycast/agentbox`, each user runs:
+
+```bash
+npm install
+npm run dev
+```
+
+Raycast will load the extension in development mode and prompt for that user's preferences.
+
+For private team distribution, this package is configured with Raycast owner `zue-ai`. After the branch is integrated and checks pass, a maintainer can publish it to the `zue-ai` private Raycast Store from `raycast/agentbox`:
+
+```bash
+npm run publish
+```
+
+Do not publish from feature branches. Before publishing, verify the Raycast organization handle is still `zue-ai`, the `owner` field is present in `package.json`, the extension metadata is acceptable for the private Store, and no API keys, MCP URLs, thread contents, or signed attachment URLs are present in code, docs, screenshots, or release assets.
+
+Public Raycast Store distribution can happen later through Raycast's public publish pull request flow. Keep private/team publishing separate from the public Store metadata and review process.
 
 ## Commands
 
-- `Search Threads`: search recent threads, inspect messages, open dashboard links, copy thread details, post replies, and create signed attachment URLs.
+- `Latest Messages`: browse recent messages across threads, press Enter to copy message content, inspect context, open the source thread, and work with attachments.
+- `Search Threads`: search recent threads, press Enter to copy the visible thread/message content, inspect messages, open dashboard links, copy thread details, post replies, and work with attachments.
 - `Create Thread`: create a thread with an optional first message and optional local attachments.
 - `Post Message`: post a message or local attachments to an existing thread.
 - `Copy MCP URL`: copy `/api/mcp?key=...` using Raycast concealed clipboard content when available.
@@ -46,10 +69,9 @@ For cross-repo validation, run the root checks required by the active rollout pl
 
 ## Release Notes
 
-The package is ready for local and private/team installation once preferences are configured. Public Raycast Store submission still needs final decisions outside this implementation phase:
+The package is ready for local and private/team installation once preferences are configured. Private `zue-ai` Store publishing should be done manually by the lead after integration. Public Raycast Store submission still needs final decisions outside this implementation phase:
 
 - Replace or confirm the `author` value with the maintainer's Raycast username.
-- Confirm whether a private team `owner` field is needed before publishing privately.
 - Replace or approve the current icon as the final production icon.
 - Resolve the repo-level Apache-2.0 preference versus Raycast manifest validation, which currently requires the extension manifest `license` field to remain `MIT`.
 - Add Store screenshots and review copy, taking care not to expose API keys, MCP URLs, thread contents, or attachment URLs.

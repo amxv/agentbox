@@ -11,13 +11,17 @@ type ExtensionPreferences = {
   /** Agentbox URL - Dashboard or API proxy URL. The production dashboard proxies /api requests. */
   "baseUrl": string,
   /** Agentbox API Key - Actor API key for thread, message, attachment, and MCP requests. */
-  "apiKey": string
+  "apiKey": string,
+  /** Attachment Download Folder - Folder where attachment download actions save files. */
+  "downloadDirectory"?: string
 }
 
 /** Preferences accessible in all the extension's commands */
 declare type Preferences = ExtensionPreferences
 
 declare namespace Preferences {
+  /** Preferences accessible in the `latest-messages` command */
+  export type LatestMessages = ExtensionPreferences & {}
   /** Preferences accessible in the `search-threads` command */
   export type SearchThreads = ExtensionPreferences & {}
   /** Preferences accessible in the `create-thread` command */
@@ -31,6 +35,8 @@ declare namespace Preferences {
 }
 
 declare namespace Arguments {
+  /** Arguments passed to the `latest-messages` command */
+  export type LatestMessages = {}
   /** Arguments passed to the `search-threads` command */
   export type SearchThreads = {}
   /** Arguments passed to the `create-thread` command */

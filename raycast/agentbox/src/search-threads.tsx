@@ -1,30 +1,28 @@
 import {
   Action,
   ActionPanel,
-  Clipboard,
   Detail,
   Icon,
   Keyboard,
   List,
   Toast,
-  open,
   openExtensionPreferences,
   showToast,
 } from "@raycast/api";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AgentboxAPIError,
-  Asset,
   SearchThreadResult,
   Thread,
   ThreadWithMessages,
   dashboardThreadUrl,
-  getAssetDownloadUrl,
   getThread,
   listThreads,
   mcpUrl,
   searchThreads,
 } from "./api";
+import { AttachmentActions } from "./attachment-actions";
+import { escapeBlockquote, escapeMarkdown, formatDate, threadMessagesMarkdown } from "./markdown";
 import PostMessage from "./post-message";
 import { AgentboxUtilityActions } from "./utility-actions";
 
@@ -48,7 +46,6 @@ type LoadState = {
 const RECENT_LIMIT = 50;
 const SEARCH_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 300;
-const SIGNED_URL_EXPIRY_SECONDS = 60 * 60;
 
 export default function SearchThreads() {
   const [searchText, setSearchText] = useState("");
@@ -184,7 +181,7 @@ function ThreadDetailView({ threadId, seedTitle }: { threadId: string; seedTitle
   return (
     <Detail
       isLoading={loadState.isLoading}
-      markdown={thread ? threadDetailMarkdown(thread) : detailPlaceholderMarkdown(loadState.error, threadId)}
+      markdown={thread ? threadMessagesMarkdown(thread) : detailPlaceholderMarkdown(loadState.error, threadId)}
       metadata={thread ? <ThreadDetailMetadata thread={thread} /> : undefined}
       actions={
         <ThreadActions
@@ -216,10 +213,16 @@ function ThreadActions({
   const threadUrl = safeDashboardThreadUrl(thread.id);
   const mcpEndpoint = safeMcpUrl();
   const isConfigError = isConfigurationError(error);
+  const copyContent = detailedThread ? threadMessagesMarkdown(detailedThread) : threadListMarkdown(thread);
+  const copyTitle = detailedThread ? "Copy Thread Messages" : "Copy Thread Preview";
+  const assets =
+    detailedThread?.messages.flatMap((message) => message.assets.map((asset) => ({ ...asset, messageId: message.id }))) ??
+    [];
 
   return (
     <ActionPanel>
       <ActionPanel.Section>
+        <Action.CopyToClipboard title={copyTitle} icon={Icon.Clipboard} content={copyContent} />
         <Action.Push
           title="Inspect Thread"
           icon={Icon.Sidebar}
@@ -244,7 +247,7 @@ function ThreadActions({
         <Action.CopyToClipboard title="Copy Thread URL" content={threadUrl} />
         <Action.CopyToClipboard title="Copy MCP URL" content={mcpEndpoint} concealed />
       </ActionPanel.Section>
-      {detailedThread && <AttachmentActions thread={detailedThread} />}
+      <AttachmentActions assets={assets} />
       <AgentboxUtilityActions />
       {isConfigError && (
         <ActionPanel.Section>
@@ -256,40 +259,6 @@ function ThreadActions({
         </ActionPanel.Section>
       )}
     </ActionPanel>
-  );
-}
-
-function AttachmentActions({ thread }: { thread: ThreadWithMessages }) {
-  const assets = thread.messages.flatMap((message) =>
-    message.assets.map((asset) => ({ ...asset, messageId: message.id })),
-  );
-  if (assets.length === 0) {
-    return null;
-  }
-
-  return (
-    <ActionPanel.Section title="Attachments">
-      {assets.map((asset) => (
-        <ActionPanel.Submenu
-          key={asset.id}
-          title={`Attachment: ${asset.file_name || asset.filename || asset.id}`}
-          icon={Icon.Paperclip}
-        >
-          <Action
-            title="Open Signed Download URL"
-            icon={Icon.Globe}
-            onAction={() => void openSignedDownloadUrl(asset)}
-          />
-          <Action
-            title="Copy Signed Download URL"
-            icon={Icon.Clipboard}
-            onAction={() => void copySignedDownloadUrl(asset)}
-          />
-          <Action.CopyToClipboard title="Copy Asset ID" content={asset.id} />
-          <Action.CopyToClipboard title="Copy Message ID" content={asset.messageId} />
-        </ActionPanel.Submenu>
-      ))}
-    </ActionPanel.Section>
   );
 }
 
@@ -446,82 +415,11 @@ function threadListMarkdown(thread: ListedThread): string {
   return lines.join("\n");
 }
 
-function threadDetailMarkdown(thread: ThreadWithMessages): string {
-  const lines = [`# ${escapeMarkdown(thread.title || thread.id)}`, "", `\`${thread.id}\``];
-  if (thread.messages.length === 0) {
-    lines.push("", "No messages yet.");
-    return lines.join("\n");
-  }
-
-  thread.messages.forEach((message, index) => {
-    lines.push(
-      "",
-      "---",
-      "",
-      `## #${index + 1} ${escapeMarkdown(message.author || "Unknown")}`,
-      "",
-      `- Time: ${escapeMarkdown(formatDate(message.created_at))}`,
-      `- Message ID: \`${message.id}\``,
-      `- Format: ${escapeMarkdown(message.body_content_type || "auto")}`,
-      "",
-      message.body.trim() ? message.body : "_Empty message_",
-    );
-    if (message.assets.length > 0) {
-      lines.push("", "### Attachments");
-      for (const asset of message.assets) {
-        lines.push(
-          `- ${escapeMarkdown(asset.file_name || asset.filename || asset.id)} (${escapeMarkdown(asset.mime_type || "unknown type")}, ${formatBytes(asset.size_bytes)}) - \`${asset.id}\``,
-        );
-      }
-    }
-  });
-
-  return lines.join("\n");
-}
-
 function detailPlaceholderMarkdown(error: Error | null, threadId: string): string {
   if (error) {
     return `# Could Not Load Thread\n\n\`${threadId}\`\n\n${escapeMarkdown(error.message)}`;
   }
   return `# Loading Thread\n\n\`${threadId}\``;
-}
-
-async function openSignedDownloadUrl(asset: Asset) {
-  const toast = await showToast({
-    style: Toast.Style.Animated,
-    title: "Creating signed URL",
-    message: asset.file_name,
-  });
-  try {
-    const signed = await getAssetDownloadUrl(asset.id, SIGNED_URL_EXPIRY_SECONDS);
-    await open(signed.download_url);
-    toast.style = Toast.Style.Success;
-    toast.title = "Opened attachment";
-    toast.message = signed.file_name;
-  } catch (error) {
-    toast.style = Toast.Style.Failure;
-    toast.title = "Could not open attachment";
-    toast.message = normalizeError(error).message;
-  }
-}
-
-async function copySignedDownloadUrl(asset: Asset) {
-  const toast = await showToast({
-    style: Toast.Style.Animated,
-    title: "Creating signed URL",
-    message: asset.file_name,
-  });
-  try {
-    const signed = await getAssetDownloadUrl(asset.id, SIGNED_URL_EXPIRY_SECONDS);
-    await Clipboard.copy(signed.download_url, { concealed: true });
-    toast.style = Toast.Style.Success;
-    toast.title = "Copied signed URL";
-    toast.message = signed.file_name;
-  } catch (error) {
-    toast.style = Toast.Style.Failure;
-    toast.title = "Could not copy signed URL";
-    toast.message = normalizeError(error).message;
-  }
 }
 
 function safeDashboardThreadUrl(threadId: string): string {
@@ -561,36 +459,4 @@ function isConfigurationError(error: Error | null | undefined): boolean {
     message.includes("base url") ||
     message.includes("unauthorized")
   );
-}
-
-function formatDate(value: string): string {
-  if (!value) {
-    return "Unknown";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 B";
-  }
-  const units = ["B", "KB", "MB", "GB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / 1024 ** index;
-  return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
-}
-
-function escapeMarkdown(value: string): string {
-  return value.replace(/[\\`*_{}[\]()#+\-.!|>]/g, "\\$&");
-}
-
-function escapeBlockquote(value: string): string {
-  return escapeMarkdown(value).replace(/\n/g, "\n> ");
 }

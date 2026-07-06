@@ -7,6 +7,7 @@ export type BodyContentType = "auto" | "text/markdown" | "text/plain";
 export type AgentboxPreferences = {
   baseUrl: string;
   apiKey: string;
+  downloadDirectory?: string;
 };
 
 export type BackendErrorPayload = {
@@ -164,6 +165,7 @@ export function getPreferences(): AgentboxPreferences {
   return {
     baseUrl: trimTrailingSlashes(preferences.baseUrl),
     apiKey: preferences.apiKey.trim(),
+    downloadDirectory: preferences.downloadDirectory?.trim(),
   };
 }
 

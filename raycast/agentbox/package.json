@@ -5,6 +5,7 @@
   "title": "Agentbox",
   "icon": "icon.png",
   "author": "amxv",
+  "owner": "zue-ai",
   "license": "MIT",
   "platforms": ["macOS"],
   "categories": ["Productivity", "Developer Tools"],
@@ -32,9 +33,23 @@
       "type": "password",
       "required": true,
       "placeholder": "Paste an Agentbox API key"
+    },
+    {
+      "name": "downloadDirectory",
+      "title": "Attachment Download Folder",
+      "description": "Folder where attachment download actions save files.",
+      "type": "directory",
+      "required": false
     }
   ],
   "commands": [
+    {
+      "name": "latest-messages",
+      "title": "Latest Messages",
+      "subtitle": "Agentbox",
+      "description": "Browse recent messages across Agentbox threads and copy message content.",
+      "mode": "view"
+    },
     {
       "name": "search-threads",
       "title": "Search Threads",
