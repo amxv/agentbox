@@ -1,19 +1,29 @@
-import { Clipboard, getPreferenceValues, showHUD } from "@raycast/api";
-
-type Preferences = {
-  baseUrl: string;
-  apiKey: string;
-};
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
-}
+import { Clipboard, Toast, openExtensionPreferences, showHUD, showToast } from "@raycast/api";
+import { mcpUrl } from "./api";
 
 export default async function CopyMcpUrl() {
-  const preferences = getPreferenceValues<Preferences>();
-  const url = new URL("/api/mcp", trimTrailingSlash(preferences.baseUrl));
-  url.searchParams.set("key", preferences.apiKey);
+  try {
+    await Clipboard.copy(mcpUrl(), { concealed: true });
+    await showHUD("Copied Agentbox MCP URL");
+  } catch (error) {
+    const normalized = normalizeError(error);
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Could not copy MCP URL",
+      message: normalized.message,
+      primaryAction: {
+        title: "Open Preferences",
+        onAction: () => {
+          void openExtensionPreferences();
+        },
+      },
+    });
+  }
+}
 
-  await Clipboard.copy(url.toString(), { concealed: true });
-  await showHUD("Copied Agentbox MCP URL");
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(String(error));
 }

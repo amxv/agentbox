@@ -2,6 +2,7 @@ import { Action, ActionPanel, Clipboard, Form, Icon, Toast, open, showToast } fr
 import { useMemo, useState } from "react";
 import { dashboardThreadUrl, postMessage } from "./api";
 import { BODY_FORMATS, FormValuesBase, normalizeFormError, uploadFilesForThread } from "./form-helpers";
+import { AgentboxUtilityActions } from "./utility-actions";
 
 type PostMessageValues = FormValuesBase & {
   threadId: string;
@@ -96,9 +97,11 @@ export default function PostMessage(props: PostMessageProps) {
           {postedThreadId && (
             <ActionPanel.Section title="Thread">
               <Action.OpenInBrowser title="Open Thread" url={dashboardThreadUrl(postedThreadId)} icon={Icon.Globe} />
+              <Action.CopyToClipboard title="Copy Thread URL" content={dashboardThreadUrl(postedThreadId)} />
               <Action.CopyToClipboard title="Copy Thread ID" content={postedThreadId} />
             </ActionPanel.Section>
           )}
+          <AgentboxUtilityActions />
         </ActionPanel>
       }
     >

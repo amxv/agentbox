@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Thread, createThread, dashboardThreadUrl, postMessage } from "./api";
 import PostMessage from "./post-message";
 import { BODY_FORMATS, FormValuesBase, normalizeFormError, uploadFilesForThread } from "./form-helpers";
+import { AgentboxUtilityActions } from "./utility-actions";
 
 type CreateThreadValues = FormValuesBase & {
   title: string;
@@ -87,6 +88,7 @@ export default function CreateThread() {
           {createdThread && (
             <ActionPanel.Section title="Created Thread">
               <Action.OpenInBrowser title="Open Thread" url={dashboardThreadUrl(createdThread.id)} icon={Icon.Globe} />
+              <Action.CopyToClipboard title="Copy Thread URL" content={dashboardThreadUrl(createdThread.id)} />
               <Action.CopyToClipboard title="Copy Thread ID" content={createdThread.id} />
               <Action.Push
                 title="Post Follow-Up"
@@ -95,6 +97,7 @@ export default function CreateThread() {
               />
             </ActionPanel.Section>
           )}
+          <AgentboxUtilityActions />
         </ActionPanel>
       }
     >

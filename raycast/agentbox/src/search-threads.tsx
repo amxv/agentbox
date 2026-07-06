@@ -26,6 +26,7 @@ import {
   searchThreads,
 } from "./api";
 import PostMessage from "./post-message";
+import { AgentboxUtilityActions } from "./utility-actions";
 
 type ListedThread = {
   id: string;
@@ -244,6 +245,7 @@ function ThreadActions({
         <Action.CopyToClipboard title="Copy MCP URL" content={mcpEndpoint} concealed />
       </ActionPanel.Section>
       {detailedThread && <AttachmentActions thread={detailedThread} />}
+      <AgentboxUtilityActions />
       {isConfigError && (
         <ActionPanel.Section>
           <Action
