@@ -1,13 +1,4 @@
-import {
-  Action,
-  ActionPanel,
-  Icon,
-  Keyboard,
-  List,
-  Toast,
-  openExtensionPreferences,
-  showToast,
-} from "@raycast/api";
+import { Action, ActionPanel, Icon, Keyboard, List, Toast, openExtensionPreferences, showToast } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentboxAPIError, Message, ThreadWithMessages, dashboardThreadUrl, getThread, listThreads } from "./api";
 import { AttachmentActions } from "./attachment-actions";
@@ -92,11 +83,7 @@ export default function LatestMessages() {
       ) : (
         <List.Section title="Latest Messages" subtitle={`${filteredMessages.length}`}>
           {filteredMessages.map((message) => (
-            <MessageListItem
-              key={message.id}
-              message={message}
-              onRefresh={() => setRefreshKey((value) => value + 1)}
-            />
+            <MessageListItem key={message.id} message={message} onRefresh={() => setRefreshKey((value) => value + 1)} />
           ))}
         </List.Section>
       )}
@@ -124,7 +111,11 @@ function MessageActions({ message, onRefresh }: { message: InboxMessage; onRefre
     <ActionPanel>
       <ActionPanel.Section>
         <Action.CopyToClipboard title="Copy Message" icon={Icon.Clipboard} content={message.body} />
-        <Action.CopyToClipboard title="Copy Message as Markdown" icon={Icon.Document} content={messageMarkdown(message)} />
+        <Action.CopyToClipboard
+          title="Copy Message as Markdown"
+          icon={Icon.Document}
+          content={messageMarkdown(message)}
+        />
         <Action.OpenInBrowser title="Open Thread in Dashboard" icon={Icon.Globe} url={threadUrl} />
         <Action.Push
           title="Post Reply"
@@ -215,7 +206,11 @@ function MessageMetadata({ message }: { message: InboxMessage }) {
       <List.Item.Detail.Metadata.Separator />
       <List.Item.Detail.Metadata.Label title="Thread ID" text={message.thread_id} />
       <List.Item.Detail.Metadata.Label title="Message ID" text={message.id} />
-      <List.Item.Detail.Metadata.Link title="Dashboard" text="Open thread" target={safeDashboardThreadUrl(message.thread_id)} />
+      <List.Item.Detail.Metadata.Link
+        title="Dashboard"
+        text="Open thread"
+        target={safeDashboardThreadUrl(message.thread_id)}
+      />
     </List.Item.Detail.Metadata>
   );
 }

@@ -216,8 +216,9 @@ function ThreadActions({
   const copyContent = detailedThread ? threadMessagesMarkdown(detailedThread) : threadListMarkdown(thread);
   const copyTitle = detailedThread ? "Copy Thread Messages" : "Copy Thread Preview";
   const assets =
-    detailedThread?.messages.flatMap((message) => message.assets.map((asset) => ({ ...asset, messageId: message.id }))) ??
-    [];
+    detailedThread?.messages.flatMap((message) =>
+      message.assets.map((asset) => ({ ...asset, messageId: message.id })),
+    ) ?? [];
 
   return (
     <ActionPanel>

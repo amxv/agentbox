@@ -57,7 +57,9 @@ export function AttachmentActions({ assets, title = "Attachments" }: { assets: A
             icon={Icon.Link}
             onAction={() => void copySignedDownloadUrl(asset)}
           />
-          {asset.public_url && <Action.CopyToClipboard title="Copy Public URL" icon={Icon.Link} content={asset.public_url} />}
+          {asset.public_url && (
+            <Action.CopyToClipboard title="Copy Public URL" icon={Icon.Link} content={asset.public_url} />
+          )}
           {asset.download_url && (
             <Action.CopyToClipboard title="Copy Asset Download URL" icon={Icon.Link} content={asset.download_url} />
           )}
