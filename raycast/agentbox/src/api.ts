@@ -115,6 +115,22 @@ export type HealthResponse = {
   service: string;
 };
 
+export type AuthContext = {
+  tenant_id: string;
+  tenant_slug?: string;
+  user_id?: string;
+  subject_type: string;
+  actor_name: string;
+  key_id?: string;
+  session_id?: string;
+  scopes?: string[];
+  role?: string;
+};
+
+export type AuthMeResponse = {
+  auth: AuthContext;
+};
+
 export type SearchThreadsParams = {
   query: string;
   limit?: number;
@@ -190,6 +206,11 @@ export function dashboardThreadUrl(threadId: string): string {
 
 export async function health(): Promise<HealthResponse> {
   return agentboxFetch<HealthResponse>("/api/health", { authenticated: false });
+}
+
+export async function authMe(): Promise<AuthContext> {
+  const data = await agentboxFetch<AuthMeResponse>("/api/auth/me");
+  return data.auth;
 }
 
 export async function listThreads(limit = 50): Promise<Thread[]> {

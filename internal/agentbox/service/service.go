@@ -35,7 +35,7 @@ type Repository interface {
 	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error)
 	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error
 	PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
-	CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error)
+	CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error)
 	RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error)
@@ -358,6 +358,10 @@ func (s *Service) SignedAssetDownloadURL(ctx context.Context, asset types.Asset,
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, auth types.AuthContext, name string) (types.APIKey, error) {
+	return s.CreateAPIKeyWithScopes(ctx, auth, name, defaultAPIKeyScopes())
+}
+
+func (s *Service) CreateAPIKeyWithScopes(ctx context.Context, auth types.AuthContext, name string, scopes []string) (types.APIKey, error) {
 	if err := requireAuthContext(auth); err != nil {
 		return types.APIKey{}, err
 	}
@@ -369,7 +373,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, auth types.AuthContext, name
 	if err != nil {
 		return types.APIKey{}, err
 	}
-	return s.repo.CreateAPIKey(ctx, auth.TenantID, auth.UserID, name, secret, hashSecret(secret), tokenPrefix(secret))
+	return s.repo.CreateAPIKey(ctx, auth.TenantID, auth.UserID, name, secret, hashSecret(secret), tokenPrefix(secret), normalizeScopes(scopes))
 }
 
 func (s *Service) ListAPIKeys(ctx context.Context, auth types.AuthContext) ([]types.APIKey, error) {
@@ -469,14 +473,14 @@ func (s *Service) ProvisionTenant(ctx context.Context, params ProvisionTenantPar
 		if keyName == "" {
 			keyName = "cli"
 		}
-		key, err := s.CreateAPIKey(ctx, types.AuthContext{
+		key, err := s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
 			TenantID:    tenant.ID,
 			TenantSlug:  tenant.Slug,
 			UserID:      user.ID,
 			SubjectType: types.AuthSubjectAdmin,
 			ActorName:   "admin",
 			Role:        "admin",
-		}, keyName)
+		}, keyName, cliAPIKeyScopes())
 		if err != nil {
 			return ProvisionTenantResult{}, err
 		}
@@ -512,13 +516,13 @@ func (s *Service) ProvisionTenantAPIKey(ctx context.Context, tenantIDOrSlug stri
 	if tenant == nil {
 		return types.APIKey{}, CodedError{Code: "TENANT_NOT_FOUND", Message: "Tenant not found."}
 	}
-	return s.CreateAPIKey(ctx, types.AuthContext{
+	return s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
 		TenantID:    tenant.ID,
 		TenantSlug:  tenant.Slug,
 		SubjectType: types.AuthSubjectAdmin,
 		ActorName:   "admin",
 		Role:        "admin",
-	}, name)
+	}, name, cliAPIKeyScopes())
 }
 
 func (s *Service) provisionUser(ctx context.Context, tenantID string, params ProvisionUserParams) (types.User, string, error) {
@@ -743,14 +747,14 @@ func (s *Service) ExchangeCLILogin(ctx context.Context, code string, state strin
 	if keyName == "" {
 		keyName = defaultCLIKeyName()
 	}
-	key, err := s.CreateAPIKey(ctx, types.AuthContext{
+	key, err := s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
 		TenantID:    tenant.ID,
 		TenantSlug:  tenant.Slug,
 		UserID:      user.ID,
 		SubjectType: types.AuthSubjectUserSession,
 		ActorName:   user.DisplayName,
 		Role:        user.Role,
-	}, keyName)
+	}, keyName, cliAPIKeyScopes())
 	if err != nil {
 		return CLILoginExchangeResult{}, err
 	}
@@ -768,6 +772,43 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return "agb_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func defaultAPIKeyScopes() []string {
+	return []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use"}
+}
+
+func cliAPIKeyScopes() []string {
+	return append(defaultAPIKeyScopes(), "keys:read", "keys:write")
+}
+
+func ConnectorAPIKeyScopes(purpose string) []string {
+	switch strings.ToLower(strings.TrimSpace(purpose)) {
+	case "chatgpt", "raycast":
+		return defaultAPIKeyScopes()
+	default:
+		return defaultAPIKeyScopes()
+	}
+}
+
+func normalizeScopes(scopes []string) []string {
+	if len(scopes) == 0 {
+		return defaultAPIKeyScopes()
+	}
+	seen := map[string]bool{}
+	normalized := []string{}
+	for _, scope := range scopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" || seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		normalized = append(normalized, scope)
+	}
+	if len(normalized) == 0 {
+		return defaultAPIKeyScopes()
+	}
+	return normalized
 }
 
 func generateSessionSecret() (string, error) {

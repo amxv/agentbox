@@ -133,6 +133,9 @@ func TestCLIMCPURLPrintsFullKeyURL(t *testing.T) {
 	if !strings.Contains(out.String(), `"mcp_url": "`+want+`"`) || !strings.Contains(out.String(), `"profile": "local"`) {
 		t.Fatalf("mcp-url json output = %s", out.String())
 	}
+	if !strings.Contains(out.String(), `"mcp_url_masked"`) || !strings.Contains(out.String(), `"auth"`) {
+		t.Fatalf("mcp-url json missing diagnostics = %s", out.String())
+	}
 }
 
 func TestCLIProfilesAndThreadCommands(t *testing.T) {
@@ -445,11 +448,43 @@ func TestCLIConnectChatGPTPrintsMCPInstructions(t *testing.T) {
 		t.Fatalf("connect chatgpt failed: code=%d stderr=%s", code, stderr.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, server.URL+"/api/mcp?key=dev-key") {
+	if !strings.Contains(output, "Created ChatGPT API key \"chatgpt\"") || !strings.Contains(output, server.URL+"/api/mcp?key=") || strings.Contains(output, server.URL+"/api/mcp?key=dev-key") {
 		t.Fatalf("connect output missing mcp url: %s", output)
 	}
 	if !strings.Contains(output, "Apps -> Advanced settings") || !strings.Contains(output, "Select no auth") {
 		t.Fatalf("connect output missing ChatGPT instructions: %s", output)
+	}
+}
+
+func TestCLIRaycastKeyPrintsPreferences(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "local", "--base-url", server.URL, "--api-key", "dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"raycast-key"}); code != 0 {
+		t.Fatalf("raycast-key failed: code=%d stderr=%s", code, stderr.String())
+	}
+	output := out.String()
+	if !strings.Contains(output, `Created Raycast API key "raycast"`) || !strings.Contains(output, "Agentbox URL: "+server.URL) || !strings.Contains(output, "Agentbox API Key: ") {
+		t.Fatalf("raycast-key output = %s", output)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"keys", "create", "raycast", "--json"}); code != 0 {
+		t.Fatalf("keys create raycast failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), `"raycast_base_url": "`+server.URL+`"`) || !strings.Contains(out.String(), `"raycast_api_key": "`) {
+		t.Fatalf("keys create raycast json = %s", out.String())
 	}
 }
 
@@ -675,7 +710,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	repo := &db.MemoryRepository{}
 	authContext := types.AuthContext{TenantID: types.DefaultTenantID, SubjectType: types.AuthSubjectAdmin, ActorName: "seed", Role: "admin"}
 	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
-	if _, err := svc.CreateAPIKey(t.Context(), authContext, "dev"); err != nil {
+	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use", "keys:read", "keys:write"}); err != nil {
 		t.Fatal(err)
 	}
 	repo.APIKeys[0].Key = "dev-key"

@@ -190,6 +190,71 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	}
 }
 
+func TestMCPToolsUseTenantAuthContext(t *testing.T) {
+	ctx := context.Background()
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	authA := types.AuthContext{TenantID: "ten_a", SubjectType: types.AuthSubjectAPIKey, ActorName: "tenant-a", KeyID: "key_a"}
+	authB := types.AuthContext{TenantID: "ten_b", SubjectType: types.AuthSubjectAPIKey, ActorName: "tenant-b", KeyID: "key_b"}
+	threadA, err := svc.CreateThread(ctx, authA, "Tenant A thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadB, err := svc.CreateThread(ctx, authB, "Tenant B thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := New(authA, svc)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	listed, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_threads",
+		Arguments: map[string]any{"limit": 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(listed.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Threads []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"threads"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Threads) != 1 || payload.Threads[0].ID != threadA.ID {
+		t.Fatalf("tenant A list payload = %#v; tenant B thread = %s", payload, threadB.ID)
+	}
+
+	crossTenant, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "get_thread",
+		Arguments: map[string]any{"thread_id": threadB.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !crossTenant.IsError {
+		t.Fatalf("expected cross-tenant get_thread to fail, got %#v", crossTenant)
+	}
+}
+
 func testAuth() types.AuthContext {
 	return types.AuthContext{
 		TenantID:    types.DefaultTenantID,

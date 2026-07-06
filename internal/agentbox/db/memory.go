@@ -272,7 +272,7 @@ func (m *MemoryRepository) PostMessage(_ context.Context, tenantID string, threa
 	return message, nil
 }
 
-func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
+func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
 	now := isoMillis(time.Now())
 	var keyUserID *string
 	if strings.TrimSpace(userID) != "" {
@@ -287,7 +287,7 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, user
 		KeyMasked:   maskSecret(key),
 		TokenPrefix: tokenPrefix,
 		TokenHash:   tokenHash,
-		Scopes:      []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use"},
+		Scopes:      append([]string(nil), scopes...),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}

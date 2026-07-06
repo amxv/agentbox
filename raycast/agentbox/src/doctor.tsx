@@ -10,7 +10,7 @@ import {
   showToast,
 } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AgentboxAPIError, getPreferences, health, listThreads, mcpUrl } from "./api";
+import { AgentboxAPIError, authMe, getPreferences, health, listThreads, mcpUrl } from "./api";
 import { AgentboxUtilityActions, safeBaseUrl } from "./utility-actions";
 
 type CheckStatus = "pending" | "pass" | "fail";
@@ -26,6 +26,7 @@ type DoctorCheck = {
 const INITIAL_CHECKS: DoctorCheck[] = [
   { id: "preferences", title: "Preferences", status: "pending", detail: "Checking Raycast configuration" },
   { id: "health", title: "Health Endpoint", status: "pending", detail: "Checking /api/health" },
+  { id: "account", title: "Account", status: "pending", detail: "Checking /api/auth/me" },
   { id: "authenticated-api", title: "Authenticated API", status: "pending", detail: "Checking /api/threads?limit=1" },
   { id: "mcp-url", title: "MCP URL", status: "pending", detail: "Checking /api/mcp URL construction" },
 ];
@@ -59,12 +60,13 @@ export default function Doctor() {
       return;
     }
 
-    const [healthCheck, authCheck, mcpCheck] = await Promise.all([
+    const [healthCheck, accountCheck, authCheck, mcpCheck] = await Promise.all([
       checkHealth(),
+      checkAccount(),
       checkAuthenticatedAPI(),
       checkMcpUrl(),
     ]);
-    const nextChecks = [preferencesCheck, healthCheck, authCheck, mcpCheck];
+    const nextChecks = [preferencesCheck, healthCheck, accountCheck, authCheck, mcpCheck];
     setChecks(nextChecks);
     setIsLoading(false);
 
@@ -168,6 +170,25 @@ async function checkHealth(): Promise<DoctorCheck> {
     return pass("health", "Health Endpoint", `Service ${response.service} is healthy.`);
   } catch (error) {
     return fail("health", "Health Endpoint", "Could not reach /api/health.", explainRequestError(error));
+  }
+}
+
+async function checkAccount(): Promise<DoctorCheck> {
+  try {
+    const auth = await authMe();
+    const detailParts = [`tenant ${auth.tenant_id}`];
+    if (auth.tenant_slug) {
+      detailParts.push(`slug ${auth.tenant_slug}`);
+    }
+    if (auth.actor_name) {
+      detailParts.push(`actor ${auth.actor_name}`);
+    }
+    if (auth.subject_type) {
+      detailParts.push(auth.subject_type);
+    }
+    return pass("account", "Account", detailParts.join(", "));
+  } catch (error) {
+    return fail("account", "Account", "Could not resolve API key account metadata.", explainRequestError(error));
   }
 }
 

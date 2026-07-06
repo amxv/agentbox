@@ -174,6 +174,8 @@ func (r *Runner) run(args []string) error {
 		return r.runProvision(cmdArgs, *profileName)
 	case "connect":
 		return r.runConnect(cmdArgs, *profileName)
+	case "raycast-key":
+		return r.runRaycastKey(cmdArgs, *profileName)
 	case "deploy":
 		return r.runDeploy(cmdArgs, *profileName)
 	case "keys":
@@ -213,6 +215,7 @@ Commands:
   init                    save a local profile and optionally verify it
   provision               create tenants and admin users with the deployment admin key
   connect                 print ChatGPT MCP setup instructions
+  raycast-key             create a Raycast API key and print preferences
   deploy                  print self-hosting deployment guidance
   keys                    manage DB-backed API keys
   list                    list recent threads
@@ -248,7 +251,7 @@ Open browser-based Agentbox auth, exchange the one-time CLI code for a tenant-sc
 Check profile, health, authenticated API access, signed download URLs, and MCP URL generation.`,
 		"mcp-url": `Usage: agentbox mcp-url [--json]
 
-Print the full MCP URL for the selected profile, including its API key.`,
+Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized diagnostics and tenant metadata when available.`,
 		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
 
 Create local and ChatGPT API keys through the backend admin API, then save the local CLI profile.`,
@@ -257,16 +260,19 @@ Create local and ChatGPT API keys through the backend admin API, then save the l
 Create or update a tenant and initial tenant admin user through the deployment-owner admin API. No public signup endpoint is exposed.`,
 		"connect": `Usage: agentbox connect chatgpt [--json]
 
-Print the MCP URL for the selected profile plus the ChatGPT app setup steps.`,
+Create a tenant-scoped ChatGPT key, then print the MCP URL and ChatGPT app setup steps.`,
+		"raycast-key": `Usage: agentbox raycast-key [--json]
+
+Create a tenant-scoped Raycast key and print the Agentbox URL and API key preferences.`,
 		"deploy": `Usage: agentbox deploy vercel
 
 Print the Vercel commands for deploying the backend and optional dashboard. This command does not mutate Vercel projects or env vars.`,
 		"keys": `Usage: agentbox keys [command]
 
-Manage DB-backed API keys through the backend admin API.
+Manage tenant-scoped DB-backed API keys.
 
 Commands:
-  create <name>           create or replace a named API key
+  create <name>           create or replace a named API key; use "raycast" for Raycast preferences
   list                    show configured key names
   revoke <name>           revoke a named API key`,
 		"list": `Usage: agentbox list [-n <limit>] [--json]
@@ -329,6 +335,23 @@ func (r *Runner) endpoint(path string, profileName string) (*url.URL, error) {
 	resolved := parsed.ResolveReference(endpoint)
 	query := resolved.Query()
 	query.Set("key", cfg.APIKey)
+	resolved.RawQuery = query.Encode()
+	return resolved, nil
+}
+
+func endpointWithKey(baseURL string, path string, apiKey string) (*url.URL, error) {
+	base := strings.TrimRight(baseURL, "/") + "/"
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := url.Parse(strings.TrimLeft(path, "/"))
+	if err != nil {
+		return nil, err
+	}
+	resolved := parsed.ResolveReference(endpoint)
+	query := resolved.Query()
+	query.Set("key", apiKey)
 	resolved.RawQuery = query.Encode()
 	return resolved, nil
 }
@@ -423,11 +446,30 @@ func (r *Runner) runMCPURL(args []string, profileName string) error {
 		if err != nil {
 			return err
 		}
-		return printJSON(r.Stdout, map[string]any{
-			"mcp_url": endpoint.String(),
-			"profile": cfg.ProfileName,
-			"source":  cfg.Source,
-		})
+		output := map[string]any{
+			"mcp_url":        endpoint.String(),
+			"mcp_url_masked": profiles.SanitizeURL(endpoint.String()),
+			"profile":        cfg.ProfileName,
+			"source":         cfg.Source,
+		}
+		if cfg.Profile.TenantID != "" || cfg.Profile.TenantSlug != "" || cfg.Profile.TenantName != "" {
+			output["tenant"] = map[string]any{
+				"id":   cfg.Profile.TenantID,
+				"slug": cfg.Profile.TenantSlug,
+				"name": cfg.Profile.TenantName,
+			}
+		}
+		var me struct {
+			Auth types.AuthContext `json:"auth"`
+		}
+		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.TenantID != "" {
+			output["auth"] = me.Auth
+			output["tenant"] = map[string]any{
+				"id":   me.Auth.TenantID,
+				"slug": me.Auth.TenantSlug,
+			}
+		}
+		return printJSON(r.Stdout, output)
 	}
 	fmt.Fprintln(r.Stdout, endpoint.String())
 	return nil

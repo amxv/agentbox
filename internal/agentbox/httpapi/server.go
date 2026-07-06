@@ -415,12 +415,12 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !tenantAdmin(*authContext) {
-		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role is required.")
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
+		if !canReadKeys(*authContext) {
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:read scope is required.")
+			return
+		}
 		keys, err := s.service.ListAPIKeys(r.Context(), *authContext)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -428,14 +428,24 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 	case http.MethodPost:
+		if !canManageKeys(*authContext) {
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:write scope is required.")
+			return
+		}
 		var input struct {
-			Name string `json:"name"`
+			Name    string   `json:"name"`
+			Purpose string   `json:"purpose"`
+			Scopes  []string `json:"scopes"`
 		}
 		if err := parseJSON(r, &input); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		key, err := s.service.CreateAPIKey(r.Context(), *authContext, input.Name)
+		scopes := input.Scopes
+		if len(scopes) == 0 {
+			scopes = service.ConnectorAPIKeyScopes(input.Purpose)
+		}
+		key, err := s.service.CreateAPIKeyWithScopes(r.Context(), *authContext, input.Name, scopes)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -453,8 +463,8 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !tenantAdmin(*authContext) {
-		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role is required.")
+	if !canManageKeys(*authContext) {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:write scope is required.")
 		return
 	}
 	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
@@ -767,6 +777,10 @@ func (s *Server) mcpHandler() http.Handler {
 			writeError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
+		if len(authContext.Scopes) > 0 && !hasScope(*authContext, "mcp:use") {
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "mcp:use scope is required.")
+			return
+		}
 		mcpserver.NewHTTPHandler(*authContext, s.service).ServeHTTP(w, r)
 	})
 }
@@ -890,6 +904,23 @@ func apiKeyResponse(key types.APIKey) map[string]any {
 
 func tenantAdmin(authContext types.AuthContext) bool {
 	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.Role == "admin"
+}
+
+func canManageKeys(authContext types.AuthContext) bool {
+	return tenantAdmin(authContext) || hasScope(authContext, "keys:write")
+}
+
+func canReadKeys(authContext types.AuthContext) bool {
+	return canManageKeys(authContext) || hasScope(authContext, "keys:read")
+}
+
+func hasScope(authContext types.AuthContext, scope string) bool {
+	for _, candidate := range authContext.Scopes {
+		if candidate == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

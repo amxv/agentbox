@@ -152,11 +152,15 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	if err := parseFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	endpoint, err := r.endpoint("/api/mcp", profileName)
+	key, err := r.createTenantAPIKeyForProfile(profileName, "chatgpt", "chatgpt")
 	if err != nil {
 		return err
 	}
 	cfg, err := r.runtimeConfig(profileName)
+	if err != nil {
+		return err
+	}
+	endpoint, err := endpointWithKey(cfg.BaseURL, "/api/mcp", key.Secret)
 	if err != nil {
 		return err
 	}
@@ -170,13 +174,21 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, map[string]any{
-			"profile": cfg.ProfileName,
-			"source":  cfg.Source,
-			"mcp_url": endpoint.String(),
-			"steps":   steps,
+			"profile":        cfg.ProfileName,
+			"source":         cfg.Source,
+			"key_name":       key.Name,
+			"key_masked":     key.KeyMasked,
+			"tenant":         tenantMetadata(cfg.Profile),
+			"mcp_url":        endpoint.String(),
+			"mcp_url_masked": profiles.SanitizeURL(endpoint.String()),
+			"steps":          steps,
 		})
 	}
 	fmt.Fprintf(r.Stdout, "Profile: %s (%s)\n", cfg.ProfileName, cfg.Source)
+	if cfg.Profile.TenantSlug != "" || cfg.Profile.TenantID != "" {
+		fmt.Fprintf(r.Stdout, "Tenant: %s\n", tenantLabel(cfg.Profile))
+	}
+	fmt.Fprintf(r.Stdout, "Created ChatGPT API key %q. Store this secret now: %s\n", key.Name, key.Secret)
 	fmt.Fprintf(r.Stdout, "MCP URL: %s\n\n", endpoint.String())
 	printNumberedSteps(r.Stdout, "ChatGPT setup:", steps)
 	return nil
@@ -393,7 +405,11 @@ func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	if fs.NArg() != 1 {
 		return errors.New("Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]")
 	}
-	key, err := r.createRemoteAPIKeyForProfile(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(fs.Arg(0)))
+	name := strings.TrimSpace(fs.Arg(0))
+	if strings.EqualFold(name, "raycast") && strings.TrimSpace(*adminKey) == "" {
+		return r.printRaycastKey(profileName, *jsonOut)
+	}
+	key, err := r.createRemoteAPIKeyForProfile(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), name)
 	if err != nil {
 		return err
 	}
@@ -407,6 +423,53 @@ func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	}
 	fmt.Fprintf(r.Stdout, "Created API key %q.\n", key.Name)
 	fmt.Fprintf(r.Stdout, "Secret: %s\n", key.Secret)
+	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
+	return nil
+}
+
+func (r *Runner) runRaycastKey(args []string, profileName string) error {
+	fs := newFlagSet("raycast-key")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("Usage: agentbox raycast-key [--json]")
+	}
+	return r.printRaycastKey(profileName, *jsonOut)
+}
+
+func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
+	cfg, err := r.runtimeConfig(profileName)
+	if err != nil {
+		return err
+	}
+	key, err := r.createTenantAPIKeyForProfile(profileName, "raycast", "raycast")
+	if err != nil {
+		return err
+	}
+	result := map[string]any{
+		"profile":             cfg.ProfileName,
+		"source":              cfg.Source,
+		"tenant":              tenantMetadata(cfg.Profile),
+		"key_name":            key.Name,
+		"key":                 key.Secret,
+		"key_masked":          key.KeyMasked,
+		"raycast_base_url":    strings.TrimRight(cfg.BaseURL, "/"),
+		"raycast_api_key":     key.Secret,
+		"preference_base_url": "Agentbox URL",
+		"preference_api_key":  "Agentbox API Key",
+	}
+	if jsonOut {
+		return printJSON(r.Stdout, result)
+	}
+	fmt.Fprintf(r.Stdout, "Created Raycast API key %q.\n", key.Name)
+	if cfg.Profile.TenantSlug != "" || cfg.Profile.TenantID != "" {
+		fmt.Fprintf(r.Stdout, "Tenant: %s\n", tenantLabel(cfg.Profile))
+	}
+	fmt.Fprintln(r.Stdout, "Raycast preferences:")
+	fmt.Fprintf(r.Stdout, "Agentbox URL: %s\n", strings.TrimRight(cfg.BaseURL, "/"))
+	fmt.Fprintf(r.Stdout, "Agentbox API Key: %s\n", key.Secret)
 	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
 	return nil
 }
@@ -472,11 +535,33 @@ func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 }
 
 func (r *Runner) createRemoteAPIKeyForProfile(profileName string, explicitBaseURL string, explicitAdminKey string, name string) (remoteAPIKey, error) {
+	if strings.TrimSpace(explicitAdminKey) == "" && strings.TrimSpace(explicitBaseURL) == "" {
+		return r.createTenantAPIKeyForProfile(profileName, name, "")
+	}
 	baseURL, adminKey, err := r.adminConnection(profileName, explicitBaseURL, explicitAdminKey)
 	if err != nil {
 		return remoteAPIKey{}, err
 	}
 	return r.createRemoteAPIKey(baseURL, adminKey, name)
+}
+
+func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, purpose string) (remoteAPIKey, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return remoteAPIKey{}, errors.New("API key name is required.")
+	}
+	payload := map[string]any{"name": name}
+	if strings.TrimSpace(purpose) != "" {
+		payload["purpose"] = strings.TrimSpace(purpose)
+	}
+	payloadBytes, _ := json.Marshal(payload)
+	var data struct {
+		Key remoteAPIKey `json:"key"`
+	}
+	if err := r.request("/api/keys", http.MethodPost, bytes.NewReader(payloadBytes), map[string]string{"content-type": "application/json"}, profileName, &data); err != nil {
+		return remoteAPIKey{}, err
+	}
+	return data.Key, nil
 }
 
 func (r *Runner) createRemoteAPIKey(baseURL string, adminKey string, name string) (remoteAPIKey, error) {
@@ -568,7 +653,7 @@ func (r *Runner) printKeysSubcommandHelp(command string) {
 	usage := map[string]string{
 		"create": `Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]
 
-Create or replace a named DB-backed API key through the backend admin API. The secret is printed once.`,
+Create or replace a named tenant-scoped API key. With a logged-in profile this uses the tenant API; with --admin-key it uses the backend admin API. Use "raycast" to print Raycast preference values.`,
 		"list": `Usage: agentbox keys list [--base-url <url>] [--admin-key <key>] [--json]
 
 List DB-backed API key names and masked key values through the backend admin API.`,
@@ -600,6 +685,31 @@ func printNumberedSteps(output io.Writer, title string, steps []string) {
 	for i, step := range steps {
 		fmt.Fprintf(output, "%d. %s\n", i+1, step)
 	}
+}
+
+func tenantMetadata(profile profiles.Profile) map[string]any {
+	return map[string]any{
+		"id":   profile.TenantID,
+		"slug": profile.TenantSlug,
+		"name": profile.TenantName,
+	}
+}
+
+func tenantLabel(profile profiles.Profile) string {
+	parts := []string{}
+	if profile.TenantName != "" {
+		parts = append(parts, profile.TenantName)
+	}
+	if profile.TenantSlug != "" {
+		parts = append(parts, "slug "+profile.TenantSlug)
+	}
+	if profile.TenantID != "" {
+		parts = append(parts, "id "+profile.TenantID)
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func promptRequired(reader *bufio.Reader, output io.Writer, label string) (string, error) {

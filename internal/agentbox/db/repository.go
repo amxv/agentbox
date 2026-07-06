@@ -618,7 +618,7 @@ returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_byt
 	return message, nil
 }
 
-func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error) {
+func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return types.APIKey{}, err
 	}
@@ -629,17 +629,17 @@ func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, userID s
 	}
 	tag, err := r.pool.Exec(ctx, `
 update api_keys
-set user_id = $1, token_prefix = $2, token_hash = $3, updated_at = now(), revoked_at = null
-where tenant_id = $4 and lower(name) = lower($5) and revoked_at is null
-`, keyUserID, tokenPrefix, tokenHash, tenantID, name)
+set user_id = $1, token_prefix = $2, token_hash = $3, scopes = $4, updated_at = now(), revoked_at = null
+where tenant_id = $5 and lower(name) = lower($6) and revoked_at is null
+`, keyUserID, tokenPrefix, tokenHash, scopes, tenantID, name)
 	if err != nil {
 		return types.APIKey{}, err
 	}
 	if tag.RowsAffected() == 0 {
 		_, err = r.pool.Exec(ctx, `
-insert into api_keys (id, tenant_id, user_id, name, token_prefix, token_hash)
-values ($1, $2, $3, $4, $5, $6)
-`, id, tenantID, keyUserID, name, tokenPrefix, tokenHash)
+insert into api_keys (id, tenant_id, user_id, name, token_prefix, token_hash, scopes)
+values ($1, $2, $3, $4, $5, $6, $7)
+`, id, tenantID, keyUserID, name, tokenPrefix, tokenHash, scopes)
 		if err != nil {
 			return types.APIKey{}, err
 		}
