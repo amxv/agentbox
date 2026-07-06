@@ -148,6 +148,83 @@ func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
 	}
 }
 
+func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+	adminAuth := types.AuthContext{TenantID: "ten_a", SubjectType: types.AuthSubjectAdmin, ActorName: "admin", Role: "admin"}
+	thread, err := svc.CreateThread(context.Background(), adminAuth, "Scoped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := svc.PostMessageWithAsset(context.Background(), adminAuth, PostMessageWithAssetParams{
+		ThreadID: thread.ID,
+		Body:     "with asset",
+		Bytes:    []byte("asset"),
+		FileName: "asset.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Assets) != 1 {
+		t.Fatalf("expected one asset, got %#v", message.Assets)
+	}
+
+	restrictedKey, err := svc.CreateAPIKeyWithScopes(context.Background(), adminAuth, "keys-only", []string{"keys:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restrictedAuth, err := svc.AuthenticateAPIKey(context.Background(), restrictedKey.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restrictedAuth == nil {
+		t.Fatal("restricted key did not authenticate")
+	}
+	assertScopeDenied := func(label string, err error) {
+		t.Helper()
+		var coded CodedError
+		if !errors.As(err, &coded) || coded.Code != "PERMISSION_DENIED" {
+			t.Fatalf("%s expected PERMISSION_DENIED, got %#v", label, err)
+		}
+	}
+	_, err = svc.ListThreads(context.Background(), *restrictedAuth, 10)
+	assertScopeDenied("list", err)
+	_, err = svc.GetThread(context.Background(), *restrictedAuth, thread.ID)
+	assertScopeDenied("get thread", err)
+	_, err = svc.CreateThread(context.Background(), *restrictedAuth, "Nope")
+	assertScopeDenied("create thread", err)
+	_, err = svc.PostMessage(context.Background(), *restrictedAuth, PostMessageParams{ThreadID: thread.ID, Body: "nope"})
+	assertScopeDenied("post message", err)
+	_, err = svc.CreatePresignedUploads(context.Background(), *restrictedAuth, thread.ID, []types.UploadIntentFile{{FileName: "asset.txt"}})
+	assertScopeDenied("upload intent", err)
+	_, err = svc.GetAsset(context.Background(), *restrictedAuth, message.Assets[0].ID)
+	assertScopeDenied("get asset", err)
+
+	scopedKey, err := svc.CreateAPIKeyWithScopes(context.Background(), adminAuth, "worker", []string{"threads:read", "threads:write", "assets:read", "assets:write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopedAuth, err := svc.AuthenticateAPIKey(context.Background(), scopedKey.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scopedAuth == nil {
+		t.Fatal("scoped key did not authenticate")
+	}
+	if _, err := svc.ListThreads(context.Background(), *scopedAuth, 10); err != nil {
+		t.Fatalf("scoped list failed: %v", err)
+	}
+	if _, err := svc.PostMessage(context.Background(), *scopedAuth, PostMessageParams{ThreadID: thread.ID, Body: "ok"}); err != nil {
+		t.Fatalf("scoped post failed: %v", err)
+	}
+	if _, err := svc.GetAsset(context.Background(), *scopedAuth, message.Assets[0].ID); err != nil {
+		t.Fatalf("scoped get asset failed: %v", err)
+	}
+	if _, err := svc.CreatePresignedUploads(context.Background(), *scopedAuth, thread.ID, []types.UploadIntentFile{{FileName: "next.txt"}}); err != nil {
+		t.Fatalf("scoped upload intent failed: %v", err)
+	}
+}
+
 func TestServiceProvisionTenantIsIdempotentAndHashesPassword(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})

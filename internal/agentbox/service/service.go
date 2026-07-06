@@ -62,7 +62,7 @@ func New(repo Repository, assetStore assets.AssetStore) *Service {
 }
 
 func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit int) ([]types.Thread, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:read"); err != nil {
 		return nil, err
 	}
 	if limit == 0 {
@@ -72,7 +72,7 @@ func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit
 }
 
 func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:read"); err != nil {
 		return nil, err
 	}
 	params.Query = strings.TrimSpace(params.Query)
@@ -105,7 +105,7 @@ func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, par
 }
 
 func (s *Service) CreateThread(ctx context.Context, auth types.AuthContext, title string) (types.Thread, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:write"); err != nil {
 		return types.Thread{}, err
 	}
 	if err := validate.CreateThreadTitle(title); err != nil {
@@ -115,7 +115,7 @@ func (s *Service) CreateThread(ctx context.Context, auth types.AuthContext, titl
 }
 
 func (s *Service) CreateThreadWithMessage(ctx context.Context, auth types.AuthContext, title string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:write"); err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
 	if err := validate.CreateThreadTitle(title); err != nil {
@@ -129,7 +129,7 @@ func (s *Service) CreateThreadWithMessage(ctx context.Context, auth types.AuthCo
 }
 
 func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadWithMessages, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:read"); err != nil {
 		return nil, err
 	}
 	thread, err := s.repo.GetThread(ctx, auth.TenantID, threadID)
@@ -143,15 +143,20 @@ func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadI
 }
 
 func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID string) (*types.Asset, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "assets:read"); err != nil {
 		return nil, err
 	}
 	return s.repo.GetAsset(ctx, auth.TenantID, assetID)
 }
 
 func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, params PostMessageParams) (types.Message, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:write"); err != nil {
 		return types.Message{}, err
+	}
+	if params.File != nil || len(params.UploadedAssets) > 0 {
+		if err := requireScope(auth, "assets:write"); err != nil {
+			return types.Message{}, err
+		}
 	}
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
@@ -200,8 +205,13 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 }
 
 func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthContext, params PostMessageWithAssetParams) (types.Message, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:write"); err != nil {
 		return types.Message{}, err
+	}
+	if len(params.Bytes) > 0 || params.FileName != "" {
+		if err := requireScope(auth, "assets:write"); err != nil {
+			return types.Message{}, err
+		}
 	}
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
@@ -236,7 +246,10 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthConte
 }
 
 func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthContext, threadID string, files []types.UploadIntentFile) ([]types.PresignedUpload, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireScope(auth, "threads:write"); err != nil {
+		return nil, err
+	}
+	if err := requireScope(auth, "assets:write"); err != nil {
 		return nil, err
 	}
 	if err := validate.PostMessage(threadID); err != nil {
@@ -912,6 +925,21 @@ func requireAuthContext(auth types.AuthContext) error {
 		return CodedError{Code: "PERMISSION_DENIED", Message: "Authentication context is required."}
 	}
 	return nil
+}
+
+func requireScope(auth types.AuthContext, scope string) error {
+	if err := requireAuthContext(auth); err != nil {
+		return err
+	}
+	if auth.SubjectType != types.AuthSubjectAPIKey || len(auth.Scopes) == 0 {
+		return nil
+	}
+	for _, candidate := range auth.Scopes {
+		if candidate == scope {
+			return nil
+		}
+	}
+	return CodedError{Code: "PERMISSION_DENIED", Message: scope + " scope is required."}
 }
 
 func optionalString(value string) *string {

@@ -559,6 +559,69 @@ func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
 	}
 }
 
+func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+	if _, err := profiles.SaveProfile(profiles.Profile{
+		Name:       "tenant",
+		BaseURL:    server.URL,
+		APIKey:     "dev-key",
+		TenantID:   types.DefaultTenantID,
+		TenantSlug: "default",
+		KeyName:    "dev",
+		AuthType:   "api_key",
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+
+	if code := runner.Run([]string{"--profile", "tenant", "keys", "create", "tenant-managed"}); code != 0 {
+		t.Fatalf("profile keys create failed: code=%d stderr=%s", code, stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "tenant", "keys", "list", "--json"}); code != 0 {
+		t.Fatalf("profile keys list failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var listed struct {
+		Keys []remoteAPIKey `json:"keys"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &listed); err != nil {
+		t.Fatalf("list output is not JSON: %v output=%s", err, out.String())
+	}
+	found := false
+	for _, key := range listed.Keys {
+		if key.Name == "tenant-managed" {
+			found = true
+			if key.TenantID != types.DefaultTenantID {
+				t.Fatalf("tenant-managed key tenant_id=%q", key.TenantID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("tenant-managed key missing from tenant list: %#v", listed.Keys)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "tenant", "keys", "revoke", "tenant-managed", "--json"}); code != 0 {
+		t.Fatalf("profile keys revoke failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var revoked struct {
+		Revoked string `json:"revoked"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &revoked); err != nil {
+		t.Fatalf("revoke output is not JSON: %v output=%s", err, out.String())
+	}
+	if revoked.Revoked != "tenant-managed" {
+		t.Fatalf("revoked payload = %#v", revoked)
+	}
+}
+
 func TestCLIProvisionTenantCreatesProfile(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)

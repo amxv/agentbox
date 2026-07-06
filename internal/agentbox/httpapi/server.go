@@ -204,7 +204,7 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 		}
 		threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeServiceError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
@@ -233,7 +233,7 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 		}
 		thread, err := s.service.CreateThread(r.Context(), *authContext, input.Title)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeServiceError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": thread})
@@ -521,11 +521,7 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request, threadID stri
 	}
 	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrThreadNotFound) {
-			status = http.StatusNotFound
-		}
-		writeError(w, status, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
@@ -682,7 +678,7 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	asset, err := s.service.GetAsset(r.Context(), *authContext, assetID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	if asset == nil {
@@ -723,7 +719,7 @@ func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
 	}
 	threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
@@ -744,11 +740,7 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 	}
 	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrThreadNotFound) {
-			status = http.StatusNotFound
-		}
-		writeError(w, status, err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	viewer, err := withViewerAssetURLs(r, s.service, thread)

@@ -482,15 +482,21 @@ func (r *Runner) runKeysList(args []string, profileName string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-	if err != nil {
-		return err
-	}
 	var data struct {
 		Keys []remoteAPIKey `json:"keys"`
 	}
-	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys", http.MethodGet, nil, &data); err != nil {
-		return err
+	if strings.TrimSpace(*adminKey) == "" && strings.TrimSpace(*baseURL) == "" {
+		if err := r.request("/api/keys", http.MethodGet, nil, nil, profileName, &data); err != nil {
+			return err
+		}
+	} else {
+		resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
+		if err != nil {
+			return err
+		}
+		if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys", http.MethodGet, nil, &data); err != nil {
+			return err
+		}
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
@@ -517,15 +523,21 @@ func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 		return errors.New("Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]")
 	}
 	name := strings.TrimSpace(fs.Arg(0))
-	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-	if err != nil {
-		return err
-	}
 	var data struct {
 		Revoked string `json:"revoked"`
 	}
-	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys/"+url.PathEscape(name), http.MethodDelete, nil, &data); err != nil {
-		return err
+	if strings.TrimSpace(*adminKey) == "" && strings.TrimSpace(*baseURL) == "" {
+		if err := r.request("/api/keys/"+url.PathEscape(name), http.MethodDelete, nil, nil, profileName, &data); err != nil {
+			return err
+		}
+	} else {
+		resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
+		if err != nil {
+			return err
+		}
+		if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys/"+url.PathEscape(name), http.MethodDelete, nil, &data); err != nil {
+			return err
+		}
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)

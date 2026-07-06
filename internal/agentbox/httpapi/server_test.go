@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -944,6 +945,72 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	server.ServeHTTP(stillB, httptest.NewRequest(http.MethodGet, "/api/threads?key="+keyB.Key, nil))
 	if stillB.Code != http.StatusOK {
 		t.Fatalf("stillB status=%d body=%s", stillB.Code, stillB.Body.String())
+	}
+}
+
+func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	adminAuth := authContext(types.DefaultTenantID, "admin")
+	adminAuth.SubjectType = types.AuthSubjectAdmin
+	adminAuth.Role = "admin"
+	thread, err := svc.CreateThread(t.Context(), adminAuth, "Scoped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	textType := "text/plain"
+	message, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, adminAuth, "seed asset", nil, []types.NewAsset{{
+		TenantID:   types.DefaultTenantID,
+		StorageKey: "agentbox/ten_default/scoped/message/seed.txt",
+		FileName:   "seed.txt",
+		MimeType:   &textType,
+		SizeBytes:  int64(len("seed bytes")),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(message.Assets) != 1 {
+		t.Fatalf("expected asset, got %#v", message.Assets)
+	}
+	restrictedKey, err := svc.CreateAPIKeyWithScopes(t.Context(), adminAuth, "keys-only", []string{"keys:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopedKey, err := svc.CreateAPIKeyWithScopes(t.Context(), adminAuth, "worker", []string{"threads:read", "threads:write", "assets:read", "assets:write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.Config{}, svc)
+
+	for label, req := range map[string]*http.Request{
+		"list":        httptest.NewRequest(http.MethodGet, "/api/threads?key="+url.QueryEscape(restrictedKey.Key), nil),
+		"get":         httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.ID+"?key="+url.QueryEscape(restrictedKey.Key), nil),
+		"create":      httptest.NewRequest(http.MethodPost, "/api/threads?key="+url.QueryEscape(restrictedKey.Key), strings.NewReader(`{"title":"Nope"}`)),
+		"post":        httptest.NewRequest(http.MethodPost, "/api/threads/"+thread.ID+"/messages?key="+url.QueryEscape(restrictedKey.Key), strings.NewReader(`{"body":"nope"}`)),
+		"upload":      httptest.NewRequest(http.MethodPost, "/api/threads/"+thread.ID+"/uploads?key="+url.QueryEscape(restrictedKey.Key), strings.NewReader(`{"files":[{"file_name":"asset.txt"}]}`)),
+		"downloadURL": httptest.NewRequest(http.MethodGet, "/api/assets/"+message.Assets[0].ID+"/download-url?key="+url.QueryEscape(restrictedKey.Key), nil),
+	} {
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("%s status=%d body=%s", label, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	list := httptest.NewRecorder()
+	server.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/threads?key="+url.QueryEscape(scopedKey.Key), nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("scoped list status=%d body=%s", list.Code, list.Body.String())
+	}
+	post := httptest.NewRecorder()
+	server.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/api/threads/"+thread.ID+"/messages?key="+url.QueryEscape(scopedKey.Key), strings.NewReader(`{"body":"ok"}`)))
+	if post.Code != http.StatusCreated {
+		t.Fatalf("scoped post status=%d body=%s", post.Code, post.Body.String())
+	}
+	downloadURL := httptest.NewRecorder()
+	server.ServeHTTP(downloadURL, httptest.NewRequest(http.MethodGet, "/api/assets/"+message.Assets[0].ID+"/download-url?key="+url.QueryEscape(scopedKey.Key), nil))
+	if downloadURL.Code != http.StatusOK {
+		t.Fatalf("scoped download-url status=%d body=%s", downloadURL.Code, downloadURL.Body.String())
 	}
 }
 
