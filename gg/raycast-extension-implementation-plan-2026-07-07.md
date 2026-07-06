@@ -80,6 +80,7 @@ Relevant findings:
 - Command modes are `view`, `no-view`, and `menu-bar`. `view` is appropriate for thread lists, search, details, and forms. `no-view` is appropriate for one-shot commands such as copying an MCP URL or opening the dashboard.
 - Raycast preferences are the correct place for configuration such as Agentbox base URL and API key. Required preferences block command use until filled. Password preferences are supported.
 - Store review expects `author` to be a Raycast username, `license` to be MIT, latest Raycast API, npm dependencies with `package-lock.json`, local `npm run build`, and `npm run lint`.
+- User preference is to use Apache-2.0 licensing where possible. Current Raycast CLI manifest validation requires the extension manifest `license` field to be `MIT`, so keep the Raycast package manifest MIT for build/lint/store compatibility and track Apache-2.0 as a release/legal follow-up rather than bypassing Raycast validation.
 - If platform-specific APIs are used, the manifest should restrict `platforms`. This feature is intentionally macOS-native in experience and can set `platforms: ["macOS"]`.
 - Raycast extensions can use built-in native-feeling UI components: `List`, `List.Item.Detail`, `Form`, `ActionPanel`, `Action`, `Toast`, `Clipboard`, and file pickers. These are realistic native macOS affordances inside Raycast.
 - Useful affordances for Agentbox:
@@ -155,7 +156,7 @@ What to do:
   - `description`: short daily workflow description
   - `icon`: `assets/icon.png`
   - `author`: placeholder that must be replaced with the maintainer Raycast username before public store submission
-  - `license`: `MIT`
+  - `license`: `MIT` in the Raycast manifest because Raycast CLI validation currently requires it; keep the Apache-2.0 preference documented as a release/legal follow-up
   - `platforms`: `["macOS"]`
   - categories such as `Productivity` and/or `Developer Tools`
   - extension preferences for `baseUrl` and `apiKey`
@@ -180,6 +181,8 @@ Risks/fallbacks:
   - Fallback: add a targeted root exclude for the Raycast package or place the Raycast extension outside root TS inclusion if maintainers prefer.
 - Risk: public Raycast Store metadata requires a real Raycast username and production icon.
   - Fallback: ship local/private extension first with a clearly marked metadata TODO, then update before store submission.
+- Risk: maintainers prefer Apache-2.0 but Raycast CLI/store validation requires MIT in the extension manifest.
+  - Fallback: keep the Raycast manifest on MIT so local and store checks pass, and resolve any broader Apache-2.0 licensing requirement before public release without bypassing Raycast validation.
 - Risk: npm lockfile differs from repo's Bun preference.
   - Fallback: keep npm strictly scoped to `raycast/agentbox` because Raycast Store CI expects npm.
 
@@ -431,7 +434,7 @@ Validation strategy:
 - Test production build in Raycast, not only development mode.
 - From root: `bun run typecheck`, `bun run lint`, targeted Go tests, and optionally full `go test ./...`.
 - Store checklist:
-  - MIT license
+  - MIT license in the Raycast manifest unless Raycast validation changes; Apache-2.0 remains a tracked release/legal follow-up
   - no default Raycast icon
   - no external analytics
   - no admin key required for daily use

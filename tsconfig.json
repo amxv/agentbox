@@ -39,6 +39,7 @@
   "exclude": [
     "archive",
     "node_modules",
+    "raycast/agentbox",
     "dist"
   ]
 }
