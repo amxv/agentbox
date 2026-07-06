@@ -29,8 +29,8 @@ type Repository interface {
 	GetThread(ctx context.Context, tenantID string, threadID string) (*types.ThreadWithMessages, error)
 	GetAsset(ctx context.Context, tenantID string, assetID string) (*types.Asset, error)
 	CreatePendingUpload(ctx context.Context, upload types.PendingUpload) (types.PendingUpload, error)
-	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error)
-	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, uploadIDs []string) error
+	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error)
+	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error
 	PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
 	CreateAPIKey(ctx context.Context, tenantID string, name string, key string, tokenHash string, tokenPrefix string) (types.APIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error)
@@ -156,7 +156,7 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 	}
 	newAssets := []types.NewAsset{}
 	if params.File != nil {
-		asset, err := s.assets.UploadChatGPTFile(ctx, params.ThreadID, *params.File)
+		asset, err := s.assets.UploadChatGPTFile(ctx, auth.TenantID, params.ThreadID, *params.File)
 		if err != nil {
 			return types.Message{}, err
 		}
@@ -179,7 +179,7 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 		for _, uploaded := range params.UploadedAssets {
 			ids = append(ids, strings.TrimSpace(uploaded.UploadID))
 		}
-		if err := s.repo.MarkPendingUploadsConsumed(ctx, auth.TenantID, ids); err != nil {
+		if err := s.repo.MarkPendingUploadsConsumed(ctx, auth.TenantID, params.ThreadID, ids, auth); err != nil {
 			return types.Message{}, err
 		}
 	}
@@ -207,6 +207,7 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthConte
 	newAssets := []types.NewAsset{}
 	if len(params.Bytes) > 0 || params.FileName != "" {
 		asset, err := s.assets.UploadAssetBytes(ctx, assets.UploadBytesParams{
+			TenantID: auth.TenantID,
 			ThreadID: params.ThreadID,
 			Bytes:    params.Bytes,
 			FileName: params.FileName,
@@ -252,6 +253,7 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 		}
 		uploadID := "upl_" + uuid.NewString()
 		presigned, err := s.assets.CreatePresignedAssetUploadURL(ctx, assets.PresignedUploadParams{
+			TenantID:         auth.TenantID,
 			ThreadID:         threadID,
 			UploadID:         uploadID,
 			FileName:         file.FileName,
@@ -300,7 +302,7 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 	if len(ids) == 0 {
 		return []types.NewAsset{}, nil
 	}
-	pending, err := s.repo.GetPendingUploads(ctx, auth.TenantID, threadID, ids, auth.ActorName)
+	pending, err := s.repo.GetPendingUploads(ctx, auth.TenantID, threadID, ids, auth)
 	if err != nil {
 		return nil, err
 	}

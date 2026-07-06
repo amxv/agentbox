@@ -189,28 +189,28 @@ func (m *MemoryRepository) CreatePendingUpload(_ context.Context, upload types.P
 	return upload, nil
 }
 
-func (m *MemoryRepository) GetPendingUploads(_ context.Context, tenantID string, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error) {
+func (m *MemoryRepository) GetPendingUploads(_ context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error) {
 	wanted := map[string]bool{}
 	for _, id := range uploadIDs {
 		wanted[id] = true
 	}
 	uploads := []types.PendingUpload{}
 	for _, upload := range m.Pending {
-		if tenantOf(upload.TenantID) == tenantOf(tenantID) && upload.ThreadID == threadID && upload.CreatedBy == author && wanted[upload.ID] {
+		if tenantOf(upload.TenantID) == tenantOf(tenantID) && upload.ThreadID == threadID && pendingUploadOwnedBy(upload, owner) && wanted[upload.ID] {
 			uploads = append(uploads, upload)
 		}
 	}
 	return uploads, nil
 }
 
-func (m *MemoryRepository) MarkPendingUploadsConsumed(_ context.Context, tenantID string, uploadIDs []string) error {
+func (m *MemoryRepository) MarkPendingUploadsConsumed(_ context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error {
 	wanted := map[string]bool{}
 	for _, id := range uploadIDs {
 		wanted[id] = true
 	}
 	now := isoMillis(time.Now())
 	for i := range m.Pending {
-		if tenantOf(m.Pending[i].TenantID) == tenantOf(tenantID) && wanted[m.Pending[i].ID] {
+		if tenantOf(m.Pending[i].TenantID) == tenantOf(tenantID) && m.Pending[i].ThreadID == threadID && pendingUploadOwnedBy(m.Pending[i], owner) && wanted[m.Pending[i].ID] {
 			m.Pending[i].ConsumedAt = &now
 		}
 	}
@@ -357,4 +357,17 @@ func tenantOf(value string) string {
 		return types.DefaultTenantID
 	}
 	return value
+}
+
+func pendingUploadOwnedBy(upload types.PendingUpload, owner types.AuthContext) bool {
+	if upload.CreatedBy != owner.ActorName {
+		return false
+	}
+	if owner.UserID != "" && (upload.CreatedByUserID == nil || *upload.CreatedByUserID != owner.UserID) {
+		return false
+	}
+	if owner.KeyID != "" && (upload.CreatedByKeyID == nil || *upload.CreatedByKeyID != owner.KeyID) {
+		return false
+	}
+	return true
 }

@@ -392,6 +392,9 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if len(intentPayload.Uploads) != 1 || intentPayload.Uploads[0].UploadID == "" || intentPayload.Uploads[0].UploadURL == "" || intentPayload.Uploads[0].StorageKey == "" || intentPayload.Uploads[0].RequiredHeaders["content-type"] != "text/markdown" {
 		t.Fatalf("intent payload = %#v", intentPayload)
 	}
+	if !strings.HasPrefix(intentPayload.Uploads[0].StorageKey, "agentbox/"+types.DefaultTenantID+"/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
+		t.Fatalf("storage key = %q", intentPayload.Uploads[0].StorageKey)
+	}
 
 	postBody := `{"body":"attached","uploaded_assets":[{"upload_id":"` + intentPayload.Uploads[0].UploadID + `"}]}`
 	post := httptest.NewRecorder()
@@ -487,6 +490,46 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 		t.Fatalf("postBWithA status=%d body=%s", postBWithA.Code, postBWithA.Body.String())
 	}
 
+	uploadBWithA := httptest.NewRecorder()
+	reqUploadBWithA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadB.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"blocked.txt","size_bytes":1}]}`))
+	reqUploadBWithA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(uploadBWithA, reqUploadBWithA)
+	if uploadBWithA.Code != http.StatusNotFound {
+		t.Fatalf("uploadBWithA status=%d body=%s", uploadBWithA.Code, uploadBWithA.Body.String())
+	}
+
+	intentA := httptest.NewRecorder()
+	reqIntentA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadA.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"tenant-a.txt","size_bytes":1}]}`))
+	reqIntentA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(intentA, reqIntentA)
+	if intentA.Code != http.StatusCreated {
+		t.Fatalf("intentA status=%d body=%s", intentA.Code, intentA.Body.String())
+	}
+	var intentAPayload struct {
+		Uploads []struct {
+			UploadID   string `json:"upload_id"`
+			StorageKey string `json:"storage_key"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(intentA.Body.Bytes(), &intentAPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(intentAPayload.Uploads) != 1 || !strings.HasPrefix(intentAPayload.Uploads[0].StorageKey, "agentbox/ten_a/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
+		t.Fatalf("intentAPayload = %#v", intentAPayload)
+	}
+
+	finalizeAWithB := httptest.NewRecorder()
+	reqFinalizeAWithB := httptest.NewRequest(
+		http.MethodPost,
+		"/api/threads/"+payloadB.Thread.ID+"/messages",
+		strings.NewReader(`{"body":"blocked","uploaded_assets":[{"upload_id":"`+intentAPayload.Uploads[0].UploadID+`"}]}`),
+	)
+	reqFinalizeAWithB.Header.Set("authorization", "Bearer "+keyB.Key)
+	server.ServeHTTP(finalizeAWithB, reqFinalizeAWithB)
+	if finalizeAWithB.Code != http.StatusBadRequest {
+		t.Fatalf("finalizeAWithB status=%d body=%s", finalizeAWithB.Code, finalizeAWithB.Body.String())
+	}
+
 	messageB := types.Message{ID: "msg_b", TenantID: "ten_b", ThreadID: payloadB.Thread.ID, Author: "tenant-b", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
 	repo.Messages = append(repo.Messages, messageB)
 	repo.Assets = append(repo.Assets, types.Asset{
@@ -505,6 +548,29 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	server.ServeHTTP(downloadBWithA, reqDownloadBWithA)
 	if downloadBWithA.Code != http.StatusNotFound {
 		t.Fatalf("downloadBWithA status=%d body=%s", downloadBWithA.Code, downloadBWithA.Body.String())
+	}
+
+	messageA := types.Message{ID: "msg_a", TenantID: "ten_a", ThreadID: payloadA.Thread.ID, Author: "tenant-a", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
+	repo.Messages = append(repo.Messages, messageA)
+	repo.Assets = append(repo.Assets, types.Asset{
+		ID:         "asset_legacy_a",
+		TenantID:   "ten_a",
+		MessageID:  messageA.ID,
+		StorageKey: "agentbox/legacy-thread/message/legacy.txt",
+		FileName:   "legacy.txt",
+		SizeBytes:  1,
+		CreatedAt:  messageA.CreatedAt,
+		CreatedBy:  "tenant-a",
+	})
+	downloadLegacyA := httptest.NewRecorder()
+	reqDownloadLegacyA := httptest.NewRequest(http.MethodGet, "/api/assets/asset_legacy_a/download-url", nil)
+	reqDownloadLegacyA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(downloadLegacyA, reqDownloadLegacyA)
+	if downloadLegacyA.Code != http.StatusOK {
+		t.Fatalf("downloadLegacyA status=%d body=%s", downloadLegacyA.Code, downloadLegacyA.Body.String())
+	}
+	if !strings.Contains(downloadLegacyA.Body.String(), "agentbox/legacy-thread/message/legacy.txt") || strings.Contains(downloadLegacyA.Body.String(), "agentbox/ten_a/legacy-thread") {
+		t.Fatalf("legacy download rewrote storage key: %s", downloadLegacyA.Body.String())
 	}
 
 	if err := svc.RevokeAPIKey(t.Context(), authContext("ten_a", "tenant-a"), "shared"); err != nil {

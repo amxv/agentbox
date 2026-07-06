@@ -17,8 +17,8 @@ func TestFilenameMimeStorageAndPublicURLHelpers(t *testing.T) {
 	if mimeType == nil || *mimeType != "text/plain; charset=utf-8" {
 		t.Fatalf("mime type = %#v", mimeType)
 	}
-	key := MakeStorageKey("thr_1", "message", "report.txt")
-	if !strings.HasPrefix(key, "agentbox/thr_1/message/") || !strings.HasSuffix(key, "-report.txt") {
+	key := MakeStorageKey("ten_1", "thr_1", "message", "report.txt")
+	if !strings.HasPrefix(key, "agentbox/ten_1/thr_1/message/") || !strings.HasSuffix(key, "-report.txt") {
 		t.Fatalf("storage key = %q", key)
 	}
 	publicURL := PublicURLForKey("https://cdn.example/", key)
@@ -44,6 +44,7 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	store := &FakeStore{MaxFileSizeBytes: 10, PublicBaseURL: "https://cdn.example"}
 	mimeType := "text/plain"
 	asset, err := store.UploadAssetBytes(context.Background(), UploadBytesParams{
+		TenantID: "ten_1",
 		ThreadID: "thr_1",
 		Bytes:    []byte("hello"),
 		FileName: "report one.txt",
@@ -54,6 +55,9 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	}
 	if asset.FileName != "report-one.txt" || asset.SizeBytes != 5 || asset.PublicURL == nil {
 		t.Fatalf("unexpected asset: %#v", asset)
+	}
+	if !strings.HasPrefix(asset.StorageKey, "agentbox/ten_1/thr_1/message/") {
+		t.Fatalf("storage key = %q", asset.StorageKey)
 	}
 	url, err := store.CreateSignedAssetDownloadURL(context.Background(), SignedURLParams{
 		StorageKey:       asset.StorageKey,

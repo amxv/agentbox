@@ -23,7 +23,7 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 		return types.NewAsset{}, errTooLarge(limit)
 	}
 	fileName := SanitizeFilename(params.FileName)
-	storageKey := MakeStorageKey(params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
+	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
 	asset := types.NewAsset{
 		StorageKey: storageKey,
 		FileName:   fileName,
@@ -36,33 +36,33 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 }
 
 func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params PresignedUploadParams) (types.PresignedUpload, error) {
-limit := f.MaxFileSizeBytes
-if limit == 0 {
-limit = 25 * 1024 * 1024
-}
-if params.SizeBytes > limit {
-return types.PresignedUpload{}, errTooLarge(limit)
-}
-fileName := SanitizeFilename(params.FileName)
-storageKey := MakeStorageKey(params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
-mimeType := InferMimeType(fileName, params.MimeType)
-contentType := "application/octet-stream"
-if mimeType != nil {
-contentType = *mimeType
-}
-return types.PresignedUpload{
-UploadID:   params.UploadID,
-StorageKey: storageKey,
-FileName:   fileName,
-MimeType:   mimeType,
-SizeBytes:  params.SizeBytes,
-PublicURL:  PublicURLForKey(f.PublicBaseURL, storageKey),
-UploadURL:  "https://r2-upload.test/" + storageKey,
-ExpiresIn:  900,
-RequiredHeaders: map[string]string{
-"content-type": contentType,
-},
-}, nil
+	limit := f.MaxFileSizeBytes
+	if limit == 0 {
+		limit = 25 * 1024 * 1024
+	}
+	if params.SizeBytes > limit {
+		return types.PresignedUpload{}, errTooLarge(limit)
+	}
+	fileName := SanitizeFilename(params.FileName)
+	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+	mimeType := InferMimeType(fileName, params.MimeType)
+	contentType := "application/octet-stream"
+	if mimeType != nil {
+		contentType = *mimeType
+	}
+	return types.PresignedUpload{
+		UploadID:   params.UploadID,
+		StorageKey: storageKey,
+		FileName:   fileName,
+		MimeType:   mimeType,
+		SizeBytes:  params.SizeBytes,
+		PublicURL:  PublicURLForKey(f.PublicBaseURL, storageKey),
+		UploadURL:  "https://r2-upload.test/" + storageKey,
+		ExpiresIn:  900,
+		RequiredHeaders: map[string]string{
+			"content-type": contentType,
+		},
+	}, nil
 }
 
 func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params SignedURLParams) (string, error) {
@@ -81,7 +81,7 @@ func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params Signe
 	return u.String(), nil
 }
 
-func (f *FakeStore) UploadChatGPTFile(ctx context.Context, threadID string, input ChatGPTFileInput) (types.NewAsset, error) {
+func (f *FakeStore) UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (types.NewAsset, error) {
 	file, err := NormalizeChatGPTFileInput(input)
 	if err != nil {
 		return types.NewAsset{}, err
@@ -91,6 +91,7 @@ func (f *FakeStore) UploadChatGPTFile(ctx context.Context, threadID string, inpu
 		fileName = *file.FileName
 	}
 	return f.UploadAssetBytes(ctx, UploadBytesParams{
+		TenantID:    tenantID,
 		ThreadID:    threadID,
 		MessageHint: file.FileID,
 		Bytes:       []byte("fake-chatgpt-file"),

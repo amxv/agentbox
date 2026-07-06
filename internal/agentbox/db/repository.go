@@ -520,7 +520,7 @@ returning id, tenant_id, thread_id, storage_key, file_name, mime_type, size_byte
 `, upload.ID, upload.TenantID, upload.ThreadID, upload.StorageKey, upload.FileName, upload.MimeType, upload.SizeBytes, upload.PublicURL, upload.ExpiresAt, upload.CreatedBy, upload.CreatedByUserID, upload.CreatedByKeyID))
 }
 
-func (r *Repository) GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, author string) ([]types.PendingUpload, error) {
+func (r *Repository) GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error) {
 	if err := r.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
@@ -530,8 +530,13 @@ func (r *Repository) GetPendingUploads(ctx context.Context, tenantID string, thr
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, thread_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, expires_at, created_by, created_by_user_id, created_by_key_id, consumed_at
 from pending_uploads
-where tenant_id = $1 and thread_id = $2 and created_by = $3 and id = any($4)
-`, tenantID, threadID, author, uploadIDs)
+where tenant_id = $1
+  and thread_id = $2
+  and id = any($3)
+  and created_by = $4
+  and ($5::text is null or created_by_user_id = $5)
+  and ($6::text is null or created_by_key_id = $6)
+`, tenantID, threadID, uploadIDs, owner.ActorName, optionalString(owner.UserID), optionalString(owner.KeyID))
 	if err != nil {
 		return nil, err
 	}
@@ -547,14 +552,23 @@ where tenant_id = $1 and thread_id = $2 and created_by = $3 and id = any($4)
 	return uploads, rows.Err()
 }
 
-func (r *Repository) MarkPendingUploadsConsumed(ctx context.Context, tenantID string, uploadIDs []string) error {
+func (r *Repository) MarkPendingUploadsConsumed(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error {
 	if len(uploadIDs) == 0 {
 		return nil
 	}
 	if err := r.EnsureSchema(ctx); err != nil {
 		return err
 	}
-	_, err := r.pool.Exec(ctx, `update pending_uploads set consumed_at = now() where tenant_id = $1 and id = any($2)`, tenantID, uploadIDs)
+	_, err := r.pool.Exec(ctx, `
+update pending_uploads
+set consumed_at = now()
+where tenant_id = $1
+  and thread_id = $2
+  and id = any($3)
+  and created_by = $4
+  and ($5::text is null or created_by_user_id = $5)
+  and ($6::text is null or created_by_key_id = $6)
+`, tenantID, threadID, uploadIDs, owner.ActorName, optionalString(owner.UserID), optionalString(owner.KeyID))
 	return err
 }
 

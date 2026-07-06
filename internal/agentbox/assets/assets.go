@@ -24,6 +24,7 @@ import (
 )
 
 type UploadBytesParams struct {
+	TenantID    string
 	ThreadID    string
 	MessageHint string
 	Bytes       []byte
@@ -39,19 +40,20 @@ type SignedURLParams struct {
 }
 
 type PresignedUploadParams struct {
-ThreadID         string
-UploadID         string
-FileName         string
-MimeType         *string
-SizeBytes        int64
-ExpiresInSeconds int
+	TenantID         string
+	ThreadID         string
+	UploadID         string
+	FileName         string
+	MimeType         *string
+	SizeBytes        int64
+	ExpiresInSeconds int
 }
 
 type AssetStore interface {
 	UploadAssetBytes(ctx context.Context, params UploadBytesParams) (agenttypes.NewAsset, error)
-CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
+	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
-	UploadChatGPTFile(ctx context.Context, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
+	UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
 
 type ChatGPTFileInput struct {
@@ -107,7 +109,7 @@ func (s *R2Store) UploadAssetBytes(ctx context.Context, params UploadBytesParams
 
 	fileName := SanitizeFilename(params.FileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
-	storageKey := MakeStorageKey(params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
+	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
 		contentType = *mimeType
@@ -133,53 +135,53 @@ func (s *R2Store) UploadAssetBytes(ctx context.Context, params UploadBytesParams
 }
 
 func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error) {
-if s.cfg.R2Bucket == "" {
-return agenttypes.PresignedUpload{}, errors.New("R2_BUCKET is required for asset uploads.")
-}
-if params.SizeBytes > s.cfg.MaxFileSizeBytes {
-return agenttypes.PresignedUpload{}, fmt.Errorf("File is too large. Max size is %d bytes.", s.cfg.MaxFileSizeBytes)
-}
-expires := params.ExpiresInSeconds
-if expires == 0 {
-expires = 900
-}
-if expires < 60 {
-expires = 60
-}
-if expires > 3600 {
-expires = 3600
-}
-fileName := SanitizeFilename(params.FileName)
-mimeType := InferMimeType(fileName, params.MimeType)
-storageKey := MakeStorageKey(params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
-contentType := "application/octet-stream"
-if mimeType != nil {
-contentType = *mimeType
-}
-input := &s3.PutObjectInput{
-Bucket:      aws.String(s.cfg.R2Bucket),
-Key:         aws.String(storageKey),
-ContentType: aws.String(contentType),
-}
-out, err := s.presigner.PresignPutObject(ctx, input, func(opts *s3.PresignOptions) {
-opts.Expires = time.Duration(expires) * time.Second
-})
-if err != nil {
-return agenttypes.PresignedUpload{}, err
-}
-return agenttypes.PresignedUpload{
-UploadID:   params.UploadID,
-StorageKey: storageKey,
-FileName:   fileName,
-MimeType:   mimeType,
-SizeBytes:  params.SizeBytes,
-PublicURL:  PublicURLForKey(s.cfg.R2PublicBaseURL, storageKey),
-UploadURL:  out.URL,
-ExpiresIn:  expires,
-RequiredHeaders: map[string]string{
-"content-type": contentType,
-},
-}, nil
+	if s.cfg.R2Bucket == "" {
+		return agenttypes.PresignedUpload{}, errors.New("R2_BUCKET is required for asset uploads.")
+	}
+	if params.SizeBytes > s.cfg.MaxFileSizeBytes {
+		return agenttypes.PresignedUpload{}, fmt.Errorf("File is too large. Max size is %d bytes.", s.cfg.MaxFileSizeBytes)
+	}
+	expires := params.ExpiresInSeconds
+	if expires == 0 {
+		expires = 900
+	}
+	if expires < 60 {
+		expires = 60
+	}
+	if expires > 3600 {
+		expires = 3600
+	}
+	fileName := SanitizeFilename(params.FileName)
+	mimeType := InferMimeType(fileName, params.MimeType)
+	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+	contentType := "application/octet-stream"
+	if mimeType != nil {
+		contentType = *mimeType
+	}
+	input := &s3.PutObjectInput{
+		Bucket:      aws.String(s.cfg.R2Bucket),
+		Key:         aws.String(storageKey),
+		ContentType: aws.String(contentType),
+	}
+	out, err := s.presigner.PresignPutObject(ctx, input, func(opts *s3.PresignOptions) {
+		opts.Expires = time.Duration(expires) * time.Second
+	})
+	if err != nil {
+		return agenttypes.PresignedUpload{}, err
+	}
+	return agenttypes.PresignedUpload{
+		UploadID:   params.UploadID,
+		StorageKey: storageKey,
+		FileName:   fileName,
+		MimeType:   mimeType,
+		SizeBytes:  params.SizeBytes,
+		PublicURL:  PublicURLForKey(s.cfg.R2PublicBaseURL, storageKey),
+		UploadURL:  out.URL,
+		ExpiresIn:  expires,
+		RequiredHeaders: map[string]string{
+			"content-type": contentType,
+		},
+	}, nil
 }
 
 func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error) {
@@ -211,7 +213,7 @@ func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params Signe
 	return out.URL, nil
 }
 
-func (s *R2Store) UploadChatGPTFile(ctx context.Context, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error) {
+func (s *R2Store) UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error) {
 	file, err := NormalizeChatGPTFileInput(input)
 	if err != nil {
 		return agenttypes.NewAsset{}, err
@@ -245,6 +247,7 @@ func (s *R2Store) UploadChatGPTFile(ctx context.Context, threadID string, input 
 		fileName = *file.FileName
 	}
 	return s.UploadAssetBytes(ctx, UploadBytesParams{
+		TenantID:    tenantID,
 		ThreadID:    threadID,
 		MessageHint: file.FileID,
 		Bytes:       bytes,
@@ -276,9 +279,10 @@ func InferMimeType(fileName string, fallback *string) *string {
 	return &value
 }
 
-func MakeStorageKey(threadID string, messageHint string, fileName string) string {
+func MakeStorageKey(tenantID string, threadID string, messageHint string, fileName string) string {
 	return strings.Join([]string{
 		"agentbox",
+		tenantID,
 		threadID,
 		messageHint,
 		uuid.NewString() + "-" + SanitizeFilename(fileName),
