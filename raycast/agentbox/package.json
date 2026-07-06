@@ -1,14 +1,14 @@
 {
   "name": "agentbox",
   "version": "0.1.0",
-  "description": "Search, create, and update Agentbox threads from daily Raycast workflows.",
+  "description": "Search, create, and update Agentbox threads from Raycast.",
   "title": "Agentbox",
   "icon": "icon.png",
   "author": "amxv",
   "license": "MIT",
   "platforms": ["macOS"],
   "categories": ["Productivity", "Developer Tools"],
-  "keywords": ["agentbox", "agents", "mcp", "threads"],
+  "keywords": ["agentbox", "agents", "mcp", "threads", "messages"],
   "scripts": {
     "dev": "ray develop",
     "build": "ray build -e dist",
@@ -18,8 +18,8 @@
   "preferences": [
     {
       "name": "baseUrl",
-      "title": "Agentbox Base URL",
-      "description": "Base URL for the Agentbox dashboard or API proxy.",
+      "title": "Agentbox URL",
+      "description": "Dashboard or API proxy URL. The production dashboard proxies /api requests.",
       "type": "textfield",
       "required": true,
       "placeholder": "https://agentbox-black.vercel.app",
@@ -28,7 +28,7 @@
     {
       "name": "apiKey",
       "title": "Agentbox API Key",
-      "description": "Actor API key used to authenticate Agentbox requests.",
+      "description": "Actor API key for thread, message, attachment, and MCP requests.",
       "type": "password",
       "required": true,
       "placeholder": "Paste an Agentbox API key"
@@ -39,35 +39,35 @@
       "name": "search-threads",
       "title": "Search Threads",
       "subtitle": "Agentbox",
-      "description": "Search recent Agentbox threads and inspect their latest activity.",
+      "description": "Search recent Agentbox threads, inspect messages, and open thread actions.",
       "mode": "view"
     },
     {
       "name": "create-thread",
       "title": "Create Thread",
       "subtitle": "Agentbox",
-      "description": "Create a new Agentbox thread for a daily handoff or agent workflow.",
+      "description": "Create an Agentbox thread with an optional first message and attachments.",
       "mode": "view"
     },
     {
       "name": "post-message",
       "title": "Post Message",
       "subtitle": "Agentbox",
-      "description": "Post a message to an existing Agentbox thread.",
+      "description": "Post a message or local attachments to an existing Agentbox thread.",
       "mode": "view"
     },
     {
       "name": "copy-mcp-url",
       "title": "Copy MCP URL",
       "subtitle": "Agentbox",
-      "description": "Copy the Agentbox MCP endpoint URL for the configured profile.",
+      "description": "Copy the configured Agentbox MCP endpoint with a concealed API key.",
       "mode": "no-view"
     },
     {
       "name": "doctor",
-      "title": "Doctor",
+      "title": "Check Connection",
       "subtitle": "Agentbox",
-      "description": "Check the configured Agentbox connection and credentials.",
+      "description": "Check preferences, health, authenticated API access, and MCP URL setup.",
       "mode": "view"
     }
   ],

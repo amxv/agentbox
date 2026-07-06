@@ -8,9 +8,9 @@
 /* eslint-disable @typescript-eslint/ban-types */
 
 type ExtensionPreferences = {
-  /** Agentbox Base URL - Base URL for the Agentbox dashboard or API proxy. */
+  /** Agentbox URL - Dashboard or API proxy URL. The production dashboard proxies /api requests. */
   "baseUrl": string,
-  /** Agentbox API Key - Actor API key used to authenticate Agentbox requests. */
+  /** Agentbox API Key - Actor API key for thread, message, attachment, and MCP requests. */
   "apiKey": string
 }
 
