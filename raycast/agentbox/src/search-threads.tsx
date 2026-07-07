@@ -1,28 +1,30 @@
-import {
-  Action,
-  ActionPanel,
-  Detail,
-  Icon,
-  Keyboard,
-  List,
-  Toast,
-  openExtensionPreferences,
-  showToast,
-} from "@raycast/api";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Action, ActionPanel, Icon, Keyboard, List, Toast, openExtensionPreferences, showToast } from "@raycast/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentboxAPIError,
+  Asset,
+  Message,
   SearchThreadResult,
   Thread,
   ThreadWithMessages,
   dashboardThreadUrl,
+  getAssetDownloadUrl,
   getThread,
   listThreads,
   mcpUrl,
   searchThreads,
 } from "./api";
 import { AttachmentActions } from "./attachment-actions";
-import { escapeBlockquote, escapeMarkdown, formatDate, threadMessagesMarkdown } from "./markdown";
+import {
+  escapeBlockquote,
+  escapeMarkdown,
+  formatBytes,
+  formatDate,
+  isImageAttachment,
+  messageBodyMarkdown,
+  messageMarkdown,
+  threadMessagesMarkdown,
+} from "./markdown";
 import PostMessage from "./post-message";
 import { AgentboxUtilityActions } from "./utility-actions";
 
@@ -43,9 +45,16 @@ type LoadState = {
   hasLoaded: boolean;
 };
 
+type ThreadMessage = Message & {
+  threadTitle: string;
+  threadCreatedBy: string;
+  threadUpdatedAt: string;
+};
+
 const RECENT_LIMIT = 50;
 const SEARCH_LIMIT = 25;
 const SEARCH_DEBOUNCE_MS = 300;
+const IMAGE_PREVIEW_URL_EXPIRY_SECONDS = 60 * 60;
 
 export default function SearchThreads() {
   const [searchText, setSearchText] = useState("");
@@ -140,10 +149,11 @@ function ThreadListItem({ thread, onRefresh }: { thread: ListedThread; onRefresh
   );
 }
 
-function ThreadDetailView({ threadId, seedTitle }: { threadId: string; seedTitle?: string }) {
+function ThreadMessageBrowser({ threadId, seedTitle }: { threadId: string; seedTitle?: string }) {
   const [thread, setThread] = useState<ThreadWithMessages | null>(null);
   const [loadState, setLoadState] = useState<LoadState>({ isLoading: true, error: null, hasLoaded: false });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
 
   useEffect(() => {
     let cancelled = false;
@@ -177,65 +187,159 @@ function ThreadDetailView({ threadId, seedTitle }: { threadId: string; seedTitle
   }, [refreshKey, threadId]);
 
   const title = thread?.title ?? seedTitle ?? threadId;
+  const messages = useMemo(() => (thread ? chronologicalThreadMessages(thread) : []), [thread]);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      setSelectedMessageId(undefined);
+      return;
+    }
+    if (!selectedMessageId || !messages.some((message) => message.id === selectedMessageId)) {
+      setSelectedMessageId(messages[0].id);
+    }
+  }, [messages, selectedMessageId]);
 
   return (
-    <Detail
+    <List
+      filtering={false}
       isLoading={loadState.isLoading}
-      markdown={thread ? threadMessagesMarkdown(thread) : detailPlaceholderMarkdown(loadState.error, threadId)}
-      metadata={thread ? <ThreadDetailMetadata thread={thread} /> : undefined}
-      actions={
-        <ThreadActions
-          thread={
-            thread
-              ? threadFromDetailed(thread)
-              : { id: threadId, title, updatedAt: "", createdBy: "", matchedSnippets: [] }
-          }
-          onRefresh={() => setRefreshKey((value) => value + 1)}
-          detailedThread={thread}
+      isShowingDetail
+      navigationTitle={title}
+      onSelectionChange={(id) => setSelectedMessageId(id ?? undefined)}
+      searchBarPlaceholder="Browse messages"
+    >
+      {thread && messages.length > 0 ? (
+        <List.Section title={title} subtitle={`${messages.length} messages`}>
+          {messages.map((message, index) => (
+            <ThreadMessageListItem
+              key={message.id}
+              index={index}
+              isSelected={message.id === selectedMessageId}
+              message={message}
+              onRefresh={() => setRefreshKey((value) => value + 1)}
+              thread={thread}
+            />
+          ))}
+        </List.Section>
+      ) : (
+        <ThreadMessageEmptyView
           error={loadState.error}
+          hasLoaded={loadState.hasLoaded}
+          onRefresh={() => setRefreshKey((value) => value + 1)}
+          threadId={threadId}
+          title={title}
         />
-      }
+      )}
+    </List>
+  );
+}
+
+function ThreadMessageListItem({
+  index,
+  isSelected,
+  message,
+  onRefresh,
+  thread,
+}: {
+  index: number;
+  isSelected: boolean;
+  message: ThreadMessage;
+  onRefresh: () => void;
+  thread: ThreadWithMessages;
+}) {
+  return (
+    <List.Item
+      id={message.id}
+      title={messageTitle(message)}
+      subtitle={`#${index + 1}`}
+      accessories={messageAccessories(message)}
+      detail={<MessagePreviewDetail isSelected={isSelected} message={message} />}
+      actions={<MessageActions message={message} onRefresh={onRefresh} thread={thread} />}
     />
   );
 }
 
-function ThreadActions({
-  thread,
-  onRefresh,
-  detailedThread,
-  error,
-}: {
-  thread: ListedThread;
-  onRefresh: () => void;
-  detailedThread?: ThreadWithMessages | null;
-  error?: Error | null;
-}) {
+function MessagePreviewDetail({ isSelected, message }: { isSelected: boolean; message: ThreadMessage }) {
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<Record<string, string>>({});
+  const [imagePreviewError, setImagePreviewError] = useState<string | null>(null);
+  const imageAssets = useMemo(() => message.assets.filter(isImageAttachment), [message.assets]);
+  const imageAssetIds = useMemo(() => imageAssets.map((asset) => asset.id).join(","), [imageAssets]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setImagePreviewError(null);
+    setImagePreviewUrls({});
+
+    if (!isSelected || imageAssets.length === 0) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const assetsNeedingSignedUrls = imageAssets.filter((asset) => !asset.download_url && !asset.public_url);
+    if (assetsNeedingSignedUrls.length === 0) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    async function loadPreviewUrls(assets: Asset[]) {
+      try {
+        const signedUrls = await Promise.all(
+          assets.map(async (asset) => {
+            const signed = await getAssetDownloadUrl(asset.id, IMAGE_PREVIEW_URL_EXPIRY_SECONDS);
+            return [asset.id, signed.download_url] as const;
+          }),
+        );
+        if (isMounted) {
+          setImagePreviewUrls(Object.fromEntries(signedUrls));
+        }
+      } catch (error) {
+        if (isMounted) {
+          setImagePreviewError(normalizeError(error).message);
+        }
+      }
+    }
+
+    void loadPreviewUrls(assetsNeedingSignedUrls);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [imageAssetIds, imageAssets, isSelected, message.id]);
+
+  return (
+    <List.Item.Detail
+      markdown={messageBodyMarkdown(message, { imagePreviewUrls, imagePreviewError })}
+      metadata={<MessageMetadata message={message} />}
+    />
+  );
+}
+
+function ThreadActions({ thread, onRefresh }: { thread: ListedThread; onRefresh: () => void }) {
   const threadUrl = safeDashboardThreadUrl(thread.id);
   const mcpEndpoint = safeMcpUrl();
-  const isConfigError = isConfigurationError(error);
-  const copyContent = detailedThread ? threadMessagesMarkdown(detailedThread) : threadListMarkdown(thread);
-  const copyTitle = detailedThread ? "Copy Thread Messages" : "Copy Thread Preview";
-  const assets =
-    detailedThread?.messages.flatMap((message) =>
-      message.assets.map((asset) => ({ ...asset, messageId: message.id })),
-    ) ?? [];
 
   return (
     <ActionPanel>
       <ActionPanel.Section>
-        <Action.CopyToClipboard title={copyTitle} icon={Icon.Clipboard} content={copyContent} />
         <Action.Push
-          title="Inspect Thread"
+          title="Browse Messages"
           icon={Icon.Sidebar}
-          target={<ThreadDetailView threadId={thread.id} seedTitle={thread.title} />}
+          target={<ThreadMessageBrowser threadId={thread.id} seedTitle={thread.title} />}
         />
-        <Action.OpenInBrowser title="Open in Dashboard" icon={Icon.Globe} url={threadUrl} />
+        <Action.CopyToClipboard
+          title="Copy Thread Preview"
+          icon={Icon.Clipboard}
+          content={threadListMarkdown(thread)}
+        />
         <Action.Push
           title="Post Message"
           icon={Icon.Message}
           target={<PostMessage initialThreadId={thread.id} />}
           shortcut={{ modifiers: ["cmd"], key: "return" }}
         />
+        <Action.OpenInBrowser title="Open in Dashboard" icon={Icon.Globe} url={threadUrl} />
         <Action
           title="Refresh"
           icon={Icon.ArrowClockwise}
@@ -248,17 +352,60 @@ function ThreadActions({
         <Action.CopyToClipboard title="Copy Thread URL" content={threadUrl} />
         <Action.CopyToClipboard title="Copy MCP URL" content={mcpEndpoint} concealed />
       </ActionPanel.Section>
-      <AttachmentActions assets={assets} />
       <AgentboxUtilityActions />
-      {isConfigError && (
-        <ActionPanel.Section>
-          <Action
-            title="Open Extension Preferences"
-            icon={Icon.Gear}
-            onAction={() => void openExtensionPreferences()}
-          />
-        </ActionPanel.Section>
-      )}
+    </ActionPanel>
+  );
+}
+
+function MessageActions({
+  message,
+  onRefresh,
+  thread,
+}: {
+  message: ThreadMessage;
+  onRefresh: () => void;
+  thread: ThreadWithMessages;
+}) {
+  const threadUrl = safeDashboardThreadUrl(message.thread_id);
+
+  return (
+    <ActionPanel>
+      <ActionPanel.Section>
+        <Action.CopyToClipboard title="Copy Message" icon={Icon.Clipboard} content={message.body} />
+        <Action.CopyToClipboard
+          title="Copy Message as Markdown"
+          icon={Icon.Document}
+          content={messageMarkdown(message)}
+        />
+        <Action.CopyToClipboard
+          title="Copy Thread Transcript"
+          icon={Icon.TextDocument}
+          content={threadMessagesMarkdown(thread)}
+        />
+        <Action.OpenInBrowser title="Open in Dashboard" icon={Icon.Globe} url={threadUrl} />
+        <Action.Push
+          title="Post Reply"
+          icon={Icon.Message}
+          target={<PostMessage initialThreadId={message.thread_id} />}
+          shortcut={{ modifiers: ["cmd"], key: "return" }}
+        />
+        <Action
+          title="Refresh"
+          icon={Icon.ArrowClockwise}
+          onAction={onRefresh}
+          shortcut={Keyboard.Shortcut.Common.Refresh}
+        />
+      </ActionPanel.Section>
+      <ActionPanel.Section title="Copy">
+        <Action.CopyToClipboard title="Copy Message ID" content={message.id} shortcut={Keyboard.Shortcut.Common.Copy} />
+        <Action.CopyToClipboard title="Copy Thread ID" content={message.thread_id} />
+        <Action.CopyToClipboard title="Copy Thread URL" content={threadUrl} />
+      </ActionPanel.Section>
+      <AttachmentActions
+        assets={message.assets.map((asset) => ({ ...asset, messageId: message.id }))}
+        title="Message Attachments"
+      />
+      <AgentboxUtilityActions />
     </ActionPanel>
   );
 }
@@ -331,22 +478,6 @@ function ThreadListMetadata({ thread }: { thread: ListedThread }) {
   );
 }
 
-function ThreadDetailMetadata({ thread }: { thread: ThreadWithMessages }) {
-  const assetCount = thread.messages.reduce((total, message) => total + message.assets.length, 0);
-  return (
-    <Detail.Metadata>
-      <Detail.Metadata.Label title="Thread ID" text={thread.id} />
-      <Detail.Metadata.Label title="Creator" text={thread.created_by || "Unknown"} />
-      <Detail.Metadata.Label title="Messages" text={String(thread.messages.length)} />
-      <Detail.Metadata.Label title="Attachments" text={String(assetCount)} />
-      <Detail.Metadata.Label title="Created" text={formatDate(thread.created_at)} />
-      <Detail.Metadata.Label title="Updated" text={formatDate(thread.updated_at)} />
-      <Detail.Metadata.Separator />
-      <Detail.Metadata.Link title="Dashboard" text="Open thread" target={safeDashboardThreadUrl(thread.id)} />
-    </Detail.Metadata>
-  );
-}
-
 function threadFromRecent(thread: Thread): ListedThread {
   return {
     id: thread.id,
@@ -368,18 +499,6 @@ function threadFromSearchResult(thread: SearchThreadResult): ListedThread {
     messageCount: thread.message_count,
     lastMessagePreview: thread.last_message_preview,
     matchedSnippets: thread.matched_snippets ?? [],
-  };
-}
-
-function threadFromDetailed(thread: ThreadWithMessages): ListedThread {
-  return {
-    id: thread.id,
-    title: thread.title,
-    createdAt: thread.created_at,
-    updatedAt: thread.updated_at,
-    createdBy: thread.created_by,
-    messageCount: thread.messages.length,
-    matchedSnippets: [],
   };
 }
 
@@ -416,11 +535,134 @@ function threadListMarkdown(thread: ListedThread): string {
   return lines.join("\n");
 }
 
-function detailPlaceholderMarkdown(error: Error | null, threadId: string): string {
+function ThreadMessageEmptyView({
+  error,
+  hasLoaded,
+  onRefresh,
+  threadId,
+  title,
+}: {
+  error: Error | null;
+  hasLoaded: boolean;
+  onRefresh: () => void;
+  threadId: string;
+  title: string;
+}) {
   if (error) {
-    return `# Could Not Load Thread\n\n\`${threadId}\`\n\n${escapeMarkdown(error.message)}`;
+    const configError = isConfigurationError(error);
+    return (
+      <List.EmptyView
+        icon={configError ? Icon.Gear : Icon.Warning}
+        title={configError ? "Configure Agentbox" : "Could Not Load Thread"}
+        description={error.message}
+        actions={
+          <ActionPanel>
+            <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={onRefresh} />
+            {configError && (
+              <Action
+                title="Open Extension Preferences"
+                icon={Icon.Gear}
+                onAction={() => void openExtensionPreferences()}
+              />
+            )}
+          </ActionPanel>
+        }
+      />
+    );
   }
-  return `# Loading Thread\n\n\`${threadId}\``;
+
+  if (!hasLoaded) {
+    return <List.EmptyView icon={Icon.Sidebar} title="Loading Thread Messages" description={threadId} />;
+  }
+
+  return (
+    <List.EmptyView
+      icon={Icon.Tray}
+      title="No Messages Yet"
+      description={title}
+      actions={
+        <ActionPanel>
+          <Action.Push title="Post Message" icon={Icon.Message} target={<PostMessage initialThreadId={threadId} />} />
+          <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={onRefresh} />
+          <Action.OpenInBrowser title="Open in Dashboard" icon={Icon.Globe} url={safeDashboardThreadUrl(threadId)} />
+        </ActionPanel>
+      }
+    />
+  );
+}
+
+function MessageMetadata({ message }: { message: ThreadMessage }) {
+  return (
+    <List.Item.Detail.Metadata>
+      <List.Item.Detail.Metadata.Label title="Author" text={message.author || "Unknown"} />
+      <List.Item.Detail.Metadata.Label title="Attachments" text={String(message.assets.length)} />
+      <List.Item.Detail.Metadata.Label title="Created" text={formatDate(message.created_at)} />
+      <List.Item.Detail.Metadata.Separator />
+      <List.Item.Detail.Metadata.Label title="Thread" text={message.threadTitle || message.thread_id} />
+      <List.Item.Detail.Metadata.Label title="Thread ID" text={message.thread_id} />
+      <List.Item.Detail.Metadata.Label title="Message ID" text={message.id} />
+      <List.Item.Detail.Metadata.Label title="Format" text={message.body_content_type || "auto"} />
+      {message.assets.length > 0 && (
+        <>
+          <List.Item.Detail.Metadata.Separator />
+          {message.assets.map((asset) => (
+            <List.Item.Detail.Metadata.Label
+              key={asset.id}
+              title={asset.file_name || asset.filename || asset.id}
+              text={`${asset.mime_type || "unknown type"} - ${formatBytes(asset.size_bytes)}`}
+            />
+          ))}
+        </>
+      )}
+      <List.Item.Detail.Metadata.Separator />
+      <List.Item.Detail.Metadata.Link
+        title="Dashboard"
+        text="Open thread"
+        target={safeDashboardThreadUrl(message.thread_id)}
+      />
+    </List.Item.Detail.Metadata>
+  );
+}
+
+function chronologicalThreadMessages(thread: ThreadWithMessages): ThreadMessage[] {
+  return thread.messages
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      const leftTime = new Date(left.message.created_at).getTime();
+      const rightTime = new Date(right.message.created_at).getTime();
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.index - right.index;
+    })
+    .map(({ message }) => ({
+      ...message,
+      threadTitle: thread.title,
+      threadCreatedBy: thread.created_by,
+      threadUpdatedAt: thread.updated_at,
+    }));
+}
+
+function messageTitle(message: ThreadMessage): string {
+  const preview = message.body.replace(/\s+/g, " ").trim();
+  if (preview.length > 120) {
+    return `${preview.slice(0, 117)}...`;
+  }
+  return preview || (message.assets.length > 0 ? `${message.assets.length} attachment message` : "Empty message");
+}
+
+function messageAccessories(message: ThreadMessage): List.Item.Accessory[] {
+  const accessories: List.Item.Accessory[] = [];
+  if (message.assets.length > 0) {
+    accessories.push({ text: `${message.assets.length} file`, icon: Icon.Paperclip });
+  }
+  if (message.author) {
+    accessories.push({ text: message.author, icon: Icon.Person });
+  }
+  if (message.created_at) {
+    accessories.push({ date: new Date(message.created_at), tooltip: `Sent ${formatDate(message.created_at)}` });
+  }
+  return accessories;
 }
 
 function safeDashboardThreadUrl(threadId: string): string {
