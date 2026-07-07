@@ -1,7 +1,12 @@
-import { Message, ThreadWithMessages } from "./api";
+import { Asset, Message, ThreadWithMessages } from "./api";
 
 export type MessageWithThread = Message & {
   threadTitle: string;
+};
+
+export type MessageBodyMarkdownOptions = {
+  imagePreviewUrls?: Record<string, string>;
+  imagePreviewError?: string | null;
 };
 
 export function messageMarkdown(message: MessageWithThread): string {
@@ -30,7 +35,7 @@ export function messageMarkdown(message: MessageWithThread): string {
   return lines.join("\n");
 }
 
-export function messageBodyMarkdown(message: MessageWithThread): string {
+export function messageBodyMarkdown(message: MessageWithThread, options: MessageBodyMarkdownOptions = {}): string {
   const lines = [
     `# ${escapeMarkdown(message.threadTitle || message.thread_id)}`,
     "",
@@ -40,12 +45,7 @@ export function messageBodyMarkdown(message: MessageWithThread): string {
   ];
 
   if (message.assets.length > 0) {
-    lines.push("", "## Attachments");
-    for (const asset of message.assets) {
-      lines.push(
-        `- ${escapeMarkdown(asset.file_name || asset.filename || asset.id)} (${escapeMarkdown(asset.mime_type || "unknown type")}, ${formatBytes(asset.size_bytes)}) - \`${asset.id}\``,
-      );
-    }
+    lines.push("", ...attachmentPreviewMarkdown(message.assets, options));
   }
 
   return lines.join("\n");
@@ -106,6 +106,75 @@ export function formatBytes(bytes: number): string {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** index;
   return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+export function isImageAttachment(asset: Asset): boolean {
+  const mimeType = asset.mime_type?.toLowerCase() ?? "";
+  const fileName = assetName(asset).toLowerCase();
+  return (
+    mimeType.startsWith("image/") ||
+    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".tiff", ".bmp"].some((extension) =>
+      fileName.endsWith(extension),
+    )
+  );
+}
+
+function attachmentPreviewMarkdown(assets: Asset[], options: MessageBodyMarkdownOptions): string[] {
+  const imageAssets = assets.filter(isImageAttachment);
+  const otherAssets = assets.filter((asset) => !isImageAttachment(asset));
+  const lines: string[] = [];
+
+  if (imageAssets.length === 1) {
+    const asset = imageAssets[0];
+    lines.push("## Image Attachment", "", ...imageAttachmentMarkdown(asset, options));
+  } else if (imageAssets.length > 1) {
+    lines.push("## Image Attachments");
+    for (const asset of imageAssets) {
+      lines.push("", ...imageAttachmentMarkdown(asset, options));
+    }
+  }
+
+  if (otherAssets.length > 0) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push("## Attachments");
+    for (const asset of otherAssets) {
+      lines.push(attachmentMetadataLine(asset));
+    }
+  }
+
+  return lines;
+}
+
+function imageAttachmentMarkdown(asset: Asset, options: MessageBodyMarkdownOptions): string[] {
+  const imageUrl = assetPreviewUrl(asset, options.imagePreviewUrls);
+  const lines: string[] = [];
+
+  if (imageUrl) {
+    lines.push(`![${escapeMarkdown(assetName(asset))}](<${imageUrl}>)`, "");
+  } else if (options.imagePreviewError) {
+    lines.push(`_Image preview unavailable: ${escapeMarkdown(options.imagePreviewError)}_`, "");
+  } else {
+    lines.push("_Loading image preview..._", "");
+  }
+
+  lines.push(attachmentMetadataLine(asset, imageUrl));
+  return lines;
+}
+
+function attachmentMetadataLine(asset: Asset, linkUrl?: string): string {
+  const name = escapeMarkdown(assetName(asset));
+  const label = linkUrl ? `[${name}](<${linkUrl}>)` : name;
+  return `- ${label} (${escapeMarkdown(asset.mime_type || "unknown type")}, ${formatBytes(asset.size_bytes)}) - \`${asset.id}\``;
+}
+
+function assetPreviewUrl(asset: Asset, imagePreviewUrls?: Record<string, string>): string | undefined {
+  return imagePreviewUrls?.[asset.id] || asset.download_url || asset.public_url || undefined;
+}
+
+function assetName(asset: Asset): string {
+  return asset.file_name || asset.filename || asset.id;
 }
 
 export function escapeMarkdown(value: string): string {

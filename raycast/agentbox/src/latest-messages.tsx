@@ -1,8 +1,17 @@
 import { Action, ActionPanel, Icon, Keyboard, List, Toast, openExtensionPreferences, showToast } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AgentboxAPIError, Message, ThreadWithMessages, dashboardThreadUrl, getThread, listThreads } from "./api";
+import {
+  AgentboxAPIError,
+  Asset,
+  Message,
+  ThreadWithMessages,
+  dashboardThreadUrl,
+  getAssetDownloadUrl,
+  getThread,
+  listThreads,
+} from "./api";
 import { AttachmentActions } from "./attachment-actions";
-import { formatDate, messageBodyMarkdown, messageMarkdown } from "./markdown";
+import { formatDate, isImageAttachment, messageBodyMarkdown, messageMarkdown } from "./markdown";
 import PostMessage from "./post-message";
 import { AgentboxUtilityActions } from "./utility-actions";
 
@@ -19,12 +28,14 @@ type LoadState = {
 
 const THREAD_LIMIT = 30;
 const MESSAGE_LIMIT = 100;
+const IMAGE_PREVIEW_URL_EXPIRY_SECONDS = 60 * 60;
 
 export default function LatestMessages() {
   const [searchText, setSearchText] = useState("");
   const [messages, setMessages] = useState<InboxMessage[]>([]);
   const [loadState, setLoadState] = useState<LoadState>({ isLoading: true, error: null, hasLoaded: false });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>();
   const requestId = useRef(0);
 
   const loadMessages = useCallback(async (runId: number) => {
@@ -60,6 +71,17 @@ export default function LatestMessages() {
   }, [loadMessages, refreshKey]);
 
   const filteredMessages = useMemo(() => filterMessages(messages, searchText), [messages, searchText]);
+
+  useEffect(() => {
+    if (filteredMessages.length === 0) {
+      setSelectedMessageId(undefined);
+      return;
+    }
+    if (!selectedMessageId || !filteredMessages.some((message) => message.id === selectedMessageId)) {
+      setSelectedMessageId(filteredMessages[0].id);
+    }
+  }, [filteredMessages, selectedMessageId]);
+
   const emptyView = (
     <InboxEmptyView
       error={loadState.error}
@@ -74,6 +96,7 @@ export default function LatestMessages() {
       filtering={false}
       isLoading={loadState.isLoading}
       isShowingDetail
+      onSelectionChange={(id) => setSelectedMessageId(id ?? undefined)}
       onSearchTextChange={setSearchText}
       searchBarPlaceholder="Search recent Agentbox messages"
       searchText={searchText}
@@ -83,7 +106,12 @@ export default function LatestMessages() {
       ) : (
         <List.Section title="Latest Messages" subtitle={`${filteredMessages.length}`}>
           {filteredMessages.map((message) => (
-            <MessageListItem key={message.id} message={message} onRefresh={() => setRefreshKey((value) => value + 1)} />
+            <MessageListItem
+              key={message.id}
+              isSelected={message.id === selectedMessageId}
+              message={message}
+              onRefresh={() => setRefreshKey((value) => value + 1)}
+            />
           ))}
         </List.Section>
       )}
@@ -91,17 +119,80 @@ export default function LatestMessages() {
   );
 }
 
-function MessageListItem({ message, onRefresh }: { message: InboxMessage; onRefresh: () => void }) {
+function MessageListItem({
+  isSelected,
+  message,
+  onRefresh,
+}: {
+  isSelected: boolean;
+  message: InboxMessage;
+  onRefresh: () => void;
+}) {
   return (
     <List.Item
       id={message.id}
       title={messageTitle(message)}
       subtitle={message.threadTitle || message.thread_id}
       accessories={messageAccessories(message)}
-      detail={
-        <List.Item.Detail markdown={messageBodyMarkdown(message)} metadata={<MessageMetadata message={message} />} />
-      }
+      detail={<MessagePreviewDetail isSelected={isSelected} message={message} />}
       actions={<MessageActions message={message} onRefresh={onRefresh} />}
+    />
+  );
+}
+
+function MessagePreviewDetail({ isSelected, message }: { isSelected: boolean; message: InboxMessage }) {
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<Record<string, string>>({});
+  const [imagePreviewError, setImagePreviewError] = useState<string | null>(null);
+  const imageAssets = useMemo(() => message.assets.filter(isImageAttachment), [message.assets]);
+  const imageAssetIds = useMemo(() => imageAssets.map((asset) => asset.id).join(","), [imageAssets]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setImagePreviewError(null);
+    setImagePreviewUrls({});
+
+    if (!isSelected || imageAssets.length === 0) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const assetsNeedingSignedUrls = imageAssets.filter((asset) => !asset.download_url && !asset.public_url);
+    if (assetsNeedingSignedUrls.length === 0) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    async function loadPreviewUrls(assets: Asset[]) {
+      try {
+        const signedUrls = await Promise.all(
+          assets.map(async (asset) => {
+            const signed = await getAssetDownloadUrl(asset.id, IMAGE_PREVIEW_URL_EXPIRY_SECONDS);
+            return [asset.id, signed.download_url] as const;
+          }),
+        );
+        if (isMounted) {
+          setImagePreviewUrls(Object.fromEntries(signedUrls));
+        }
+      } catch (error) {
+        if (isMounted) {
+          setImagePreviewError(normalizeError(error).message);
+        }
+      }
+    }
+
+    void loadPreviewUrls(assetsNeedingSignedUrls);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [imageAssetIds, imageAssets, isSelected, message.id]);
+
+  return (
+    <List.Item.Detail
+      markdown={messageBodyMarkdown(message, { imagePreviewUrls, imagePreviewError })}
+      metadata={<MessageMetadata message={message} />}
     />
   );
 }
