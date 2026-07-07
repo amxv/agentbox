@@ -30,6 +30,9 @@ export default function PostMessage(props: PostMessageProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [postedThreadId, setPostedThreadId] = useState<string | null>(initialThreadId || null);
   const [target, setTarget] = useState<PostTarget>("existing");
+  const [threadIdValue, setThreadIdValue] = useState(initialThreadId);
+  const [titleValue, setTitleValue] = useState("");
+  const [bodyValue, setBodyValue] = useState("");
   const [threadIdError, setThreadIdError] = useState<string | undefined>();
   const [titleError, setTitleError] = useState<string | undefined>();
   const [bodyError, setBodyError] = useState<string | undefined>();
@@ -39,10 +42,10 @@ export default function PostMessage(props: PostMessageProps) {
       return false;
     }
 
-    const selectedTarget = values.target;
-    const threadId = (values.threadId ?? "").trim();
-    const title = (values.title ?? "").trim();
-    const body = values.body ?? "";
+    const selectedTarget = target;
+    const threadId = threadIdValue.trim();
+    const title = titleValue.trim();
+    const body = bodyValue;
     const files = values.files ?? [];
     if (selectedTarget === "existing" && !threadId) {
       setThreadIdError("Thread ID is required.");
@@ -165,11 +168,25 @@ export default function PostMessage(props: PostMessageProps) {
           id="threadId"
           title="Thread ID"
           placeholder="thr_..."
-          defaultValue={initialThreadId}
+          value={threadIdValue}
+          onChange={(value) => {
+            setThreadIdValue(value);
+            setThreadIdError(undefined);
+          }}
           error={threadIdError}
         />
       ) : (
-        <Form.TextField id="title" title="Title" placeholder="Daily agent handoff" error={titleError} />
+        <Form.TextField
+          id="title"
+          title="Title"
+          placeholder="Daily agent handoff"
+          value={titleValue}
+          onChange={(value) => {
+            setTitleValue(value);
+            setTitleError(undefined);
+          }}
+          error={titleError}
+        />
       )}
       <Form.TextArea
         id="body"
@@ -180,6 +197,11 @@ export default function PostMessage(props: PostMessageProps) {
             : "Write a message for the thread. Attachments can be posted with an empty body."
         }
         enableMarkdown
+        value={bodyValue}
+        onChange={(value) => {
+          setBodyValue(value);
+          setBodyError(undefined);
+        }}
         error={bodyError}
       />
       <Form.Dropdown id="bodyFormat" title="Body Format" defaultValue="auto">
