@@ -1,11 +1,15 @@
 import { Action, ActionPanel, Clipboard, Form, Icon, Toast, open, showToast } from "@raycast/api";
 import { useMemo, useState } from "react";
-import { dashboardThreadUrl, postMessage } from "./api";
+import { Thread, createThread, dashboardThreadUrl, postMessage } from "./api";
 import { BODY_FORMATS, FormValuesBase, normalizeFormError, uploadFilesForThread } from "./form-helpers";
 import { AgentboxUtilityActions } from "./utility-actions";
 
+type PostTarget = "existing" | "new";
+
 type PostMessageValues = FormValuesBase & {
+  target: PostTarget;
   threadId: string;
+  title: string;
   body: string;
 };
 
@@ -25,7 +29,9 @@ export default function PostMessage(props: PostMessageProps) {
   }, [props.arguments?.threadId, props.initialThreadId, props.launchContext?.threadId]);
   const [isLoading, setIsLoading] = useState(false);
   const [postedThreadId, setPostedThreadId] = useState<string | null>(initialThreadId || null);
+  const [target, setTarget] = useState<PostTarget>("existing");
   const [threadIdError, setThreadIdError] = useState<string | undefined>();
+  const [titleError, setTitleError] = useState<string | undefined>();
   const [bodyError, setBodyError] = useState<string | undefined>();
 
   async function handleSubmit(values: PostMessageValues) {
@@ -33,30 +39,61 @@ export default function PostMessage(props: PostMessageProps) {
       return false;
     }
 
-    const threadId = values.threadId.trim();
+    const selectedTarget = values.target;
+    const threadId = (values.threadId ?? "").trim();
+    const title = (values.title ?? "").trim();
     const body = values.body ?? "";
     const files = values.files ?? [];
-    if (!threadId) {
+    if (selectedTarget === "existing" && !threadId) {
       setThreadIdError("Thread ID is required.");
       return false;
     }
-    if (!body.trim() && files.length === 0) {
+    if (selectedTarget === "new" && !title) {
+      setTitleError("Title is required.");
+      return false;
+    }
+    if (selectedTarget === "existing" && !body.trim() && files.length === 0) {
       setBodyError("Add a message or at least one attachment.");
       return false;
     }
 
     setIsLoading(true);
     setThreadIdError(undefined);
+    setTitleError(undefined);
     setBodyError(undefined);
-    const toast = await showToast({ style: Toast.Style.Animated, title: "Posting message", message: threadId });
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: selectedTarget === "new" ? "Creating thread" : "Posting message",
+      message: selectedTarget === "new" ? title : threadId,
+    });
     try {
-      const uploadedAssets = await uploadFilesForThread(threadId, files);
-      const message = await postMessage({
-        threadId,
-        body,
-        bodyContentType: values.bodyFormat,
-        uploadedAssets,
-      });
+      if (selectedTarget === "new") {
+        const createdThread = await createThreadWithOptionalMessage({
+          title,
+          body,
+          files,
+          bodyFormat: values.bodyFormat,
+        });
+        setPostedThreadId(createdThread.id);
+        toast.style = Toast.Style.Success;
+        toast.title = "Created thread";
+        toast.message = createdThread.title;
+        toast.primaryAction = {
+          title: "Open Thread",
+          onAction: () => {
+            void open(dashboardThreadUrl(createdThread.id));
+          },
+        };
+        toast.secondaryAction = {
+          title: "Copy Thread ID",
+          onAction: () => {
+            void Clipboard.copy(createdThread.id);
+          },
+        };
+        return true;
+      }
+
+      const message = await postToExistingThread({ threadId, body, files, bodyFormat: values.bodyFormat });
 
       setPostedThreadId(threadId);
       toast.style = Toast.Style.Success;
@@ -79,7 +116,7 @@ export default function PostMessage(props: PostMessageProps) {
       const normalized = normalizeFormError(submissionError);
       setBodyError(normalized.message);
       toast.style = Toast.Style.Failure;
-      toast.title = "Could not post message";
+      toast.title = selectedTarget === "new" ? "Could not create thread" : "Could not post message";
       toast.message = normalized.message;
       return false;
     } finally {
@@ -93,7 +130,11 @@ export default function PostMessage(props: PostMessageProps) {
       isLoading={isLoading}
       actions={
         <ActionPanel>
-          <Action.SubmitForm title="Post Message" icon={Icon.Message} onSubmit={handleSubmit} />
+          <Action.SubmitForm
+            title={target === "new" ? "Create Thread" : "Post Message"}
+            icon={target === "new" ? Icon.Plus : Icon.Message}
+            onSubmit={handleSubmit}
+          />
           {postedThreadId && (
             <ActionPanel.Section title="Thread">
               <Action.OpenInBrowser title="Open Thread" url={dashboardThreadUrl(postedThreadId)} icon={Icon.Globe} />
@@ -105,17 +146,39 @@ export default function PostMessage(props: PostMessageProps) {
         </ActionPanel>
       }
     >
-      <Form.TextField
-        id="threadId"
-        title="Thread ID"
-        placeholder="thr_..."
-        defaultValue={initialThreadId}
-        error={threadIdError}
-      />
+      <Form.Dropdown
+        id="target"
+        title="Target"
+        value={target}
+        onChange={(value) => {
+          setTarget(value as PostTarget);
+          setThreadIdError(undefined);
+          setTitleError(undefined);
+          setBodyError(undefined);
+        }}
+      >
+        <Form.Dropdown.Item value="existing" title="Existing Thread" />
+        <Form.Dropdown.Item value="new" title="New Thread" />
+      </Form.Dropdown>
+      {target === "existing" ? (
+        <Form.TextField
+          id="threadId"
+          title="Thread ID"
+          placeholder="thr_..."
+          defaultValue={initialThreadId}
+          error={threadIdError}
+        />
+      ) : (
+        <Form.TextField id="title" title="Title" placeholder="Daily agent handoff" error={titleError} />
+      )}
       <Form.TextArea
         id="body"
-        title="Message"
-        placeholder="Write a message for the thread. Attachments can be posted with an empty body."
+        title={target === "new" ? "Initial Message" : "Message"}
+        placeholder={
+          target === "new"
+            ? "Write the first message. Attachments can be posted with an empty body."
+            : "Write a message for the thread. Attachments can be posted with an empty body."
+        }
         enableMarkdown
         error={bodyError}
       />
@@ -133,4 +196,49 @@ export default function PostMessage(props: PostMessageProps) {
       />
     </Form>
   );
+}
+
+async function createThreadWithOptionalMessage({
+  title,
+  body,
+  files,
+  bodyFormat,
+}: {
+  title: string;
+  body: string;
+  files: string[];
+  bodyFormat: PostMessageValues["bodyFormat"];
+}): Promise<Thread> {
+  const hasAttachments = files.length > 0;
+  const created = await createThread({
+    title,
+    initialMessage: hasAttachments ? undefined : body || undefined,
+    bodyContentType: hasAttachments || body ? bodyFormat : undefined,
+  });
+
+  if (hasAttachments) {
+    await postToExistingThread({ threadId: created.thread.id, body, files, bodyFormat });
+  }
+
+  return created.thread;
+}
+
+async function postToExistingThread({
+  threadId,
+  body,
+  files,
+  bodyFormat,
+}: {
+  threadId: string;
+  body: string;
+  files: string[];
+  bodyFormat: PostMessageValues["bodyFormat"];
+}) {
+  const uploadedAssets = await uploadFilesForThread(threadId, files);
+  return postMessage({
+    threadId,
+    body,
+    bodyContentType: bodyFormat,
+    uploadedAssets,
+  });
 }

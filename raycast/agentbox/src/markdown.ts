@@ -30,6 +30,27 @@ export function messageMarkdown(message: MessageWithThread): string {
   return lines.join("\n");
 }
 
+export function messageBodyMarkdown(message: MessageWithThread): string {
+  const lines = [
+    `# ${escapeMarkdown(message.threadTitle || message.thread_id)}`,
+    "",
+    `## ${escapeMarkdown(message.author || "Unknown")}`,
+    "",
+    message.body.trim() ? message.body : "_Empty message_",
+  ];
+
+  if (message.assets.length > 0) {
+    lines.push("", "## Attachments");
+    for (const asset of message.assets) {
+      lines.push(
+        `- ${escapeMarkdown(asset.file_name || asset.filename || asset.id)} (${escapeMarkdown(asset.mime_type || "unknown type")}, ${formatBytes(asset.size_bytes)}) - \`${asset.id}\``,
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
 export function threadMessagesMarkdown(thread: ThreadWithMessages): string {
   const lines = [`# ${escapeMarkdown(thread.title || thread.id)}`, "", `\`${thread.id}\``];
   if (thread.messages.length === 0) {

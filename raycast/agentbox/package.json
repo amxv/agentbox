@@ -58,10 +58,10 @@
       "mode": "view"
     },
     {
-      "name": "create-thread",
-      "title": "Create Thread",
+      "name": "list-threads",
+      "title": "List Threads",
       "subtitle": "Agentbox",
-      "description": "Create an Agentbox thread with an optional first message and attachments.",
+      "description": "Browse recent Agentbox threads, inspect messages, and open thread actions.",
       "mode": "view"
     },
     {

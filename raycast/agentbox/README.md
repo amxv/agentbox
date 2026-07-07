@@ -1,6 +1,6 @@
 # Agentbox Raycast Extension
 
-Raycast commands for daily Agentbox workflows: browse latest messages, search threads, inspect messages, create threads, post replies with attachments, copy content to the clipboard, and check the configured connection.
+Raycast commands for daily Agentbox workflows: browse latest messages, list and search threads, inspect messages, create threads from the post-message flow, post replies with attachments, copy content to the clipboard, and check the configured connection.
 
 This package is intentionally self-contained under `raycast/agentbox`. It uses npm and the Raycast extension CLI, talks to Agentbox through the existing HTTP API, and does not require the Go CLI or any bundled native binary at runtime.
 
@@ -57,8 +57,8 @@ Public Raycast Store distribution can happen later through Raycast's public publ
 
 - `Latest Messages`: browse recent messages across threads, press Enter to copy message content, inspect context, open the source thread, and work with attachments.
 - `Search Threads`: search recent threads, press Enter to copy the visible thread/message content, inspect messages, open dashboard links, copy thread details, post replies, and work with attachments.
-- `Create Thread`: create a thread with an optional first message and optional local attachments.
-- `Post Message`: post a message or local attachments to an existing thread.
+- `List Threads`: browse recent threads, press Enter to copy the visible thread/message content, inspect messages, open dashboard links, copy thread details, post replies, and work with attachments.
+- `Post Message`: post a message or local attachments to an existing thread, or create a new thread with an optional first message and attachments.
 - `Check Connection`: verify preferences, `/api/health`, authenticated `/api/threads?limit=1`, and MCP URL construction.
 
 ## Local Checks

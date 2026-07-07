@@ -2,7 +2,7 @@ import { Action, ActionPanel, Icon, Keyboard, List, Toast, openExtensionPreferen
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentboxAPIError, Message, ThreadWithMessages, dashboardThreadUrl, getThread, listThreads } from "./api";
 import { AttachmentActions } from "./attachment-actions";
-import { formatDate, messageMarkdown } from "./markdown";
+import { formatDate, messageBodyMarkdown, messageMarkdown } from "./markdown";
 import PostMessage from "./post-message";
 import { AgentboxUtilityActions } from "./utility-actions";
 
@@ -98,7 +98,9 @@ function MessageListItem({ message, onRefresh }: { message: InboxMessage; onRefr
       title={messageTitle(message)}
       subtitle={message.threadTitle || message.thread_id}
       accessories={messageAccessories(message)}
-      detail={<List.Item.Detail markdown={messageMarkdown(message)} metadata={<MessageMetadata message={message} />} />}
+      detail={
+        <List.Item.Detail markdown={messageBodyMarkdown(message)} metadata={<MessageMetadata message={message} />} />
+      }
       actions={<MessageActions message={message} onRefresh={onRefresh} />}
     />
   );
