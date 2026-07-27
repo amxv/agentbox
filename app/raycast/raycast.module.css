@@ -1,41 +1,41 @@
 .page {
-  --paper: #f4efe7;
-  --panel: #fffaf4;
-  --ink: #11120f;
-  --muted: #66625c;
+  --paper: #f1eee7;
+  --panel: #f8f6f0;
+  --ink: #1c1b18;
+  --muted: #68655e;
   --line: rgba(17,18,15,.2);
-  --pink: #ff53cf;
-  --cyan: #35d8ff;
-  --orange: #ff8b38;
-  --lime: #caff37;
-  --blue: #5670ff;
+  --pink: #9b7484;
+  --cyan: #718f9a;
+  --orange: #ad7656;
+  --lime: #8b9868;
+  --blue: #6d7894;
   min-height: 100vh;
   overflow: hidden;
   color: var(--ink);
   background:
-    radial-gradient(circle at 12% 4%, color-mix(in srgb, var(--pink) 25%, transparent), transparent 23rem),
-    radial-gradient(circle at 88% 8%, color-mix(in srgb, var(--blue) 23%, transparent), transparent 26rem),
+    radial-gradient(circle at 12% 4%, color-mix(in srgb, var(--pink) 11%, transparent), transparent 23rem),
+    radial-gradient(circle at 88% 8%, color-mix(in srgb, var(--blue) 11%, transparent), transparent 26rem),
     linear-gradient(var(--line) 1px, transparent 1px),
     linear-gradient(90deg, var(--line) 1px, transparent 1px),
     var(--paper);
   background-size: auto, auto, 48px 48px, 48px 48px, auto;
-  font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+  font-family: "Gill Sans", "Gill Sans MT", Calibri, sans-serif;
 }
 
 :global(:root[data-theme="dark"]) .page {
-  --paper: #12130f;
-  --panel: #191a14;
-  --ink: #f5f1e7;
-  --muted: #aaa89d;
+  --paper: #171713;
+  --panel: #1e1e19;
+  --ink: #ece8df;
+  --muted: #aaa69c;
   --line: rgba(245,241,231,.17);
 }
 
 @media (prefers-color-scheme: dark) {
   :global(:root:not([data-theme="light"])) .page {
-    --paper: #12130f;
-    --panel: #191a14;
-    --ink: #f5f1e7;
-    --muted: #aaa89d;
+    --paper: #171713;
+    --panel: #1e1e19;
+    --ink: #ece8df;
+    --muted: #aaa69c;
     --line: rgba(245,241,231,.17);
   }
 }
@@ -52,7 +52,7 @@
 .headerInner, .hero, .commandSection, .installSection, .preferencesSection, .workflowSection, .cta, .footer { width: min(1380px, calc(100% - 64px)); margin: 0 auto; }
 .headerInner { min-height: 74px; display: flex; align-items: center; justify-content: space-between; gap: 30px; }
 .brand { display: inline-flex; align-items: center; gap: 11px; font-size: 12px; font-weight: 900; letter-spacing: .15em; }
-.brand small { padding: 4px 6px; border: 1px solid var(--ink); background: var(--pink); color: #11120f; font-family: "SFMono-Regular", Consolas, monospace; font-size: 7px; }
+.brand small { padding: 4px 6px; border: 1px solid var(--ink); background: var(--pink); color: #1c1b18; font-family: "SFMono-Regular", Consolas, monospace; font-size: 7px; }
 .mark { width: 25px; height: 25px; padding: 3px; display: grid; grid-template-columns: repeat(2,1fr); gap: 2px; border: 1px solid currentColor; transform: rotate(3deg); }
 .mark i:nth-child(1) { background: var(--pink); }
 .mark i:nth-child(2) { background: var(--cyan); }
@@ -66,24 +66,24 @@
 .kicker, .sectionNumber { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
 .kicker { display: flex; align-items: center; gap: 10px; }
 .kicker span { width: 10px; height: 10px; border: 1px solid var(--ink); border-radius: 50%; background: var(--pink); box-shadow: 0 0 0 5px color-mix(in srgb, var(--pink) 20%, transparent); }
-.hero h1, .commandHeading h2, .installIntro h2, .preferencesHeading h2, .workflowSection h2, .cta h2 { font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-weight: 400; letter-spacing: -.055em; }
+.hero h1, .commandHeading h2, .installIntro h2, .preferencesHeading h2, .workflowSection h2, .cta h2 { font-family: Charter, "Bitstream Charter", "Sitka Text", Georgia, serif; font-weight: 400; letter-spacing: -.055em; }
 .hero h1 { margin: 28px 0 24px; font-size: clamp(64px, 6.8vw, 104px); line-height: .87; }
 .heroCopy > p { max-width: 670px; color: var(--muted); font-size: 18px; line-height: 1.62; }
 .heroActions { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; margin-top: 34px; }
 .primaryButton, .secondaryButton { min-height: 52px; display: inline-flex; align-items: center; justify-content: center; padding: 0 20px; border: 1px solid var(--ink); font-size: 10px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
 .primaryButton { background: var(--ink); color: var(--paper)!important; box-shadow: 6px 6px 0 var(--pink); }
 .primaryButton:hover { transform: translate(3px,3px); box-shadow: 3px 3px 0 var(--cyan); }
-.secondaryButton { background: var(--orange); color: #11120f; box-shadow: 5px 5px 0 var(--ink); }
+.secondaryButton { background: var(--orange); color: #1c1b18; box-shadow: 5px 5px 0 var(--ink); }
 .textButton { padding-bottom: 6px; border-bottom: 2px solid var(--ink); font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
 
 .heroVisual { position: relative; min-height: 570px; display: grid; place-items: center; }
-.heroVisual::before { content: ""; position: absolute; width: 470px; height: 470px; border-radius: 50%; background: conic-gradient(var(--pink), var(--orange), var(--lime), var(--cyan), var(--blue), var(--pink)); }
+.heroVisual::before { content: ""; position: absolute; width: 470px; height: 470px; border-radius: 50%; background: linear-gradient(145deg, color-mix(in srgb, var(--pink) 70%, var(--paper)), color-mix(in srgb, var(--blue) 72%, var(--paper))); }
 .orbit { position: absolute; inset: 0; animation: orbit 22s linear infinite; }
 .orbit span { position: absolute; padding: 6px 8px; border: 1px solid var(--ink); background: var(--panel); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 900; }
-.orbit span:nth-child(1) { top: 9%; left: 18%; background: var(--orange); color: #11120f; }
-.orbit span:nth-child(2) { top: 12%; right: 14%; background: var(--lime); color: #11120f; }
-.orbit span:nth-child(3) { bottom: 9%; left: 13%; background: var(--cyan); color: #11120f; }
-.orbit span:nth-child(4) { right: 11%; bottom: 10%; background: var(--pink); color: #11120f; }
+.orbit span:nth-child(1) { top: 9%; left: 18%; background: var(--orange); color: #1c1b18; }
+.orbit span:nth-child(2) { top: 12%; right: 14%; background: var(--lime); color: #1c1b18; }
+.orbit span:nth-child(3) { bottom: 9%; left: 13%; background: var(--cyan); color: #1c1b18; }
+.orbit span:nth-child(4) { right: 11%; bottom: 10%; background: var(--pink); color: #1c1b18; }
 @keyframes orbit { to { transform: rotate(360deg); } }
 .orbit span { animation: orbitReverse 22s linear infinite; }
 @keyframes orbitReverse { to { transform: rotate(-360deg); } }
@@ -96,10 +96,10 @@
 .raycastWindow kbd { color: rgba(255,255,255,.58); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
 .commandActive { background: linear-gradient(90deg, rgba(255,83,207,.6), rgba(86,112,255,.48)); }
 .raycastWindow footer { display: flex; justify-content: space-between; padding: 13px 18px; color: rgba(255,255,255,.55); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
-.heroBadge { position: absolute; right: 1%; bottom: 3%; z-index: 4; width: 140px; height: 140px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; background: var(--orange); color: #11120f; box-shadow: 8px 8px 0 var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 21px; font-weight: 900; line-height: .86; text-align: center; transform: rotate(10deg); }
+.heroBadge { position: absolute; right: 1%; bottom: 3%; z-index: 4; width: 140px; height: 140px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; background: var(--orange); color: #1c1b18; box-shadow: 8px 8px 0 var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 21px; font-weight: 900; line-height: .86; text-align: center; transform: rotate(10deg); }
 
-.marquee { min-height: 58px; display: flex; align-items: center; justify-content: center; gap: 20px; overflow: hidden; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); background: linear-gradient(90deg,var(--pink),var(--orange),var(--lime),var(--cyan),var(--blue)); color: #11120f; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 900; letter-spacing: .08em; white-space: nowrap; }
-.marquee b { padding: 6px 8px; background: #11120f; color: #fffaf4; }
+.marquee { min-height: 58px; display: flex; align-items: center; justify-content: center; gap: 20px; overflow: hidden; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); background: color-mix(in srgb,var(--blue) 18%,var(--paper)); color: #1c1b18; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 900; letter-spacing: .08em; white-space: nowrap; }
+.marquee b { padding: 6px 8px; background: #1c1b18; color: #f8f6f0; }
 .marquee i { font-style: normal; opacity: .6; }
 
 .commandSection, .installSection, .preferencesSection { padding: 108px 0 118px; border-bottom: 1px solid var(--ink); }
@@ -111,8 +111,8 @@
 .commandGrid article { --tone: var(--pink); min-height: 350px; grid-column: span 2; display: flex; flex-direction: column; padding: 22px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); background: color-mix(in srgb, var(--tone) 12%, var(--panel)); }
 .commandGrid article:nth-child(4), .commandGrid article:nth-child(5) { grid-column: span 3; }
 .commandGrid article > div { display: flex; justify-content: space-between; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 900; }
-.commandGrid article > div span { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--ink); background: var(--tone); color: #11120f; }
-.commandGrid h3 { margin-top: auto; font-family: "Iowan Old Style", Baskerville, serif; font-size: 43px; font-weight: 400; line-height: .98; letter-spacing: -.04em; }
+.commandGrid article > div span { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--ink); background: var(--tone); color: #1c1b18; }
+.commandGrid h3 { margin-top: auto; font-family: Charter, "Bitstream Charter", "Sitka Text", Georgia, serif; font-size: 43px; font-weight: 400; line-height: .98; letter-spacing: -.04em; }
 .commandGrid p { margin-top: 13px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .pink { --tone: var(--pink); }
 .cyan { --tone: var(--cyan); }
@@ -128,7 +128,7 @@
 .installIntro .primaryButton { margin-top: 30px; }
 .installSteps { display: grid; gap: 18px; }
 .installSteps > article { display: grid; grid-template-columns: .75fr 1.25fr; gap: 28px; padding: 24px; border: 1px solid var(--ink); background: var(--panel); }
-.stepCopy span { display: inline-flex; padding: 5px 7px; border: 1px solid var(--ink); background: var(--pink); color: #11120f; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 900; }
+.stepCopy span { display: inline-flex; padding: 5px 7px; border: 1px solid var(--ink); background: var(--pink); color: #1c1b18; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 900; }
 .stepCopy h3 { margin-top: 26px; font-size: 21px; letter-spacing: -.03em; }
 .stepCopy p { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .codeBlock { min-width: 0; overflow: hidden; border: 1px solid var(--ink); background: #0c0d09; color: #f3f3ea; }
@@ -138,12 +138,12 @@
 
 .preferenceGrid { display: grid; grid-template-columns: repeat(3,1fr); border-top: 1px solid var(--ink); border-left: 1px solid var(--ink); }
 .preferenceGrid article { --tone: var(--pink); min-height: 300px; display: flex; flex-direction: column; padding: 24px; border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink); background: color-mix(in srgb,var(--tone) 12%,var(--panel)); }
-.preferenceGrid span { width: fit-content; padding: 5px 7px; border: 1px solid var(--ink); background: var(--tone); color: #11120f; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 900; }
+.preferenceGrid span { width: fit-content; padding: 5px 7px; border: 1px solid var(--ink); background: var(--tone); color: #1c1b18; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 900; }
 .preferenceGrid small { margin-top: auto; font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; font-weight: 900; letter-spacing: .08em; }
-.preferenceGrid strong { margin-top: 13px; font-family: "Iowan Old Style", Baskerville, serif; font-size: 32px; font-weight: 400; line-height: 1; }
+.preferenceGrid strong { margin-top: 13px; font-family: Charter, "Bitstream Charter", "Sitka Text", Georgia, serif; font-size: 32px; font-weight: 400; line-height: 1; }
 
 .workflowSection { min-height: 650px; display: grid; grid-template-columns: .62fr 1.38fr; gap: 86px; align-items: center; padding: 100px 0; border-bottom: 1px solid var(--ink); }
-.workflowStamp { width: 320px; height: 320px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; background: conic-gradient(var(--pink),var(--orange),var(--lime),var(--cyan),var(--blue),var(--pink)); color: #11120f; box-shadow: 14px 14px 0 var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 45px; font-weight: 900; line-height: .87; text-align: center; transform: rotate(-8deg); }
+.workflowStamp { width: 320px; height: 320px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; background: linear-gradient(145deg,color-mix(in srgb,var(--orange) 72%,var(--paper)),color-mix(in srgb,var(--blue) 68%,var(--paper))); color: #1c1b18; box-shadow: 14px 14px 0 var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 45px; font-weight: 900; line-height: .87; text-align: center; transform: rotate(-8deg); }
 .workflowSection .sectionNumber { border: 0; }
 .workflowSection h2 { margin-top: 30px; font-size: clamp(54px,5.6vw,88px); line-height: .91; }
 .workflowGrid { display: grid; grid-template-columns: repeat(3,1fr); margin-top: 42px; border-top: 1px solid var(--ink); border-left: 1px solid var(--ink); }
@@ -157,7 +157,7 @@
 .cta h2 { max-width: 780px; margin-top: 20px; font-size: clamp(50px,5.2vw,82px); line-height: .93; }
 .cta .heroActions { justify-content: flex-end; max-width: 470px; }
 .footer { min-height: 110px; display: flex; align-items: center; justify-content: space-between; gap: 25px; border-top: 1px solid var(--ink); font-size: 10px; }
-.footer > p { font-family: "Iowan Old Style", Baskerville, serif; font-size: 18px; font-style: italic; }
+.footer > p { font-family: Charter, "Bitstream Charter", "Sitka Text", Georgia, serif; font-size: 18px; font-style: italic; }
 .footer > div:last-child { display: flex; gap: 20px; color: var(--muted); }
 .footer a:hover { color: var(--ink); text-decoration: underline; }
 
