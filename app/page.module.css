@@ -531,12 +531,12 @@
 .raycastSection { min-height: 690px; display: grid; grid-template-columns: 1fr 1fr; gap: 90px; align-items: center; padding-top: 105px; padding-bottom: 105px; border-top: 1px solid var(--ink); }
 .raycastVisual { position: relative; min-height: 520px; display: grid; place-items: center; }
 .raycastVisual::before { content: ""; position: absolute; width: 430px; height: 430px; border-radius: 50%; background: linear-gradient(145deg, var(--pink), var(--orange), var(--blue)); filter: saturate(1.15); }
-.raycastWindow { position: relative; z-index: 2; width: min(540px, 92%); overflow: hidden; border: 1px solid #fff; border-radius: 14px; background: rgba(28, 20, 38, 0.92); color: #fff; box-shadow: 0 30px 90px rgba(0,0,0,0.3), 12px 12px 0 var(--lime); backdrop-filter: blur(18px); transform: rotate(-3deg); }
+.raycastWindow { position: relative; z-index: 2; width: min(540px, 92%); overflow: hidden; border: 1px solid #fff; border-radius: 14px; background: rgba(28, 29, 27, 0.94); color: #fff; box-shadow: 0 30px 90px rgba(0,0,0,0.3), 12px 12px 0 var(--lime); backdrop-filter: blur(18px); transform: rotate(-3deg); }
 .raycastSearch { padding: 17px 19px; border-bottom: 1px solid rgba(255,255,255,0.18); color: rgba(255,255,255,0.74); font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
 .raycastWindow > div:not(.raycastSearch) { display: grid; grid-template-columns: 20px 1fr 20px; align-items: center; gap: 10px; padding: 13px 18px; border-bottom: 1px solid rgba(255,255,255,0.09); font-size: 13px; }
 .raycastWindow > div:not(.raycastSearch) > span { color: var(--pink); font-size: 9px; }
 .raycastWindow > div:not(.raycastSearch) > small { color: rgba(255,255,255,0.62); font-family: "SFMono-Regular", Consolas, monospace; }
-.raycastActive { background: linear-gradient(90deg, rgba(255,83,207,0.55), rgba(86,112,255,0.45)); }
+.raycastActive { background: linear-gradient(90deg, rgba(155,116,132,0.5), rgba(109,120,148,0.46)); }
 .raycastBadge { position: absolute; right: 1%; bottom: 2%; z-index: 3; width: 145px; height: 145px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; background: var(--orange); color: #1c1b18; box-shadow: 8px 8px 0 var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 19px; font-weight: 900; line-height: 0.9; text-align: center; transform: rotate(11deg); }
 .raycastCopy .sectionNumber { border: 0; }
 .raycastCopy h2 { margin-top: 38px; font-size: clamp(55px, 6vw, 92px); line-height: 0.9; }

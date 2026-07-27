@@ -87,14 +87,14 @@
 @keyframes orbit { to { transform: rotate(360deg); } }
 .orbit span { animation: orbitReverse 22s linear infinite; }
 @keyframes orbitReverse { to { transform: rotate(-360deg); } }
-.raycastWindow { position: relative; z-index: 3; width: min(560px, 92%); overflow: hidden; border: 1px solid #fff; border-radius: 16px; background: rgba(27,18,38,.94); color: #fff; box-shadow: 0 30px 90px rgba(0,0,0,.34), 13px 13px 0 var(--lime); backdrop-filter: blur(20px); transform: rotate(-2deg); }
+.raycastWindow { position: relative; z-index: 3; width: min(560px, 92%); overflow: hidden; border: 1px solid #fff; border-radius: 16px; background: rgba(28,29,27,.95); color: #fff; box-shadow: 0 30px 90px rgba(0,0,0,.34), 13px 13px 0 var(--lime); backdrop-filter: blur(20px); transform: rotate(-2deg); }
 .searchBar { display: grid!important; grid-template-columns: auto 1fr auto!important; padding: 17px 19px!important; border-bottom: 1px solid rgba(255,255,255,.18)!important; color: rgba(255,255,255,.75); font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
 .searchBar b { color: #fff; }
 .raycastWindow > div:not(.searchBar) { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.09); }
 .raycastWindow i { color: var(--pink); font-style: normal; font-size: 8px; }
 .raycastWindow strong { font-size: 13px; }
 .raycastWindow kbd { color: rgba(255,255,255,.58); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
-.commandActive { background: linear-gradient(90deg, rgba(255,83,207,.6), rgba(86,112,255,.48)); }
+.commandActive { background: linear-gradient(90deg, rgba(155,116,132,.52), rgba(109,120,148,.46)); }
 .raycastWindow footer { display: flex; justify-content: space-between; padding: 13px 18px; color: rgba(255,255,255,.55); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; }
 .heroBadge { position: absolute; right: 1%; bottom: 3%; z-index: 4; width: 140px; height: 140px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 50%; background: var(--orange); color: #1c1b18; box-shadow: 8px 8px 0 var(--ink); font-family: "SFMono-Regular", Consolas, monospace; font-size: 21px; font-weight: 900; line-height: .86; text-align: center; transform: rotate(10deg); }
 
