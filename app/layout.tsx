@@ -1,5 +1,29 @@
 import type { Metadata } from "next";
+import { Bodoni_Moda, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
+
+const displayFont = Bodoni_Moda({
+  variable: "--font-agentbox-display",
+  subsets: ["latin"],
+  weight: "variable",
+  style: ["normal", "italic"],
+  display: "swap"
+});
+
+const bodyFont = IBM_Plex_Sans({
+  variable: "--font-agentbox-body",
+  subsets: ["latin"],
+  weight: "variable",
+  style: ["normal", "italic"],
+  display: "swap"
+});
+
+const monoFont = IBM_Plex_Mono({
+  variable: "--font-agentbox-mono",
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  display: "swap"
+});
 
 export const metadata: Metadata = {
   title: "Agentbox",
@@ -29,7 +53,7 @@ function ThemeInitScript() {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>
+      <body className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}>
         <ThemeInitScript />
         {children}
       </body>

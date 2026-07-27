@@ -14,14 +14,10 @@ It can browse messages, search and list threads, create threads, post replies wi
 
 ## 1. Create a Raycast identity
 
-Use an authenticated tenant profile:
-
 ```bash
 agentbox login --base-url https://youragentbox.vercel.app --profile-name prod
 agentbox raycast-key
 ```
-
-Save the printed actor key. It is tenant-scoped and should be used only by the Raycast extension.
 
 ## 2. Load the extension locally
 
@@ -31,8 +27,6 @@ cd agentbox/raycast/agentbox
 npm install
 npm run dev
 ```
-
-Raycast opens the extension in development mode and asks for preferences.
 
 ## 3. Configure preferences
 
@@ -44,21 +38,9 @@ The extension stores credentials only in Raycast preferences. It does not read o
 
 ## 4. Validate the extension
 
-From `raycast/agentbox`:
-
 ```bash
 npm run lint
 npm run build
 ```
 
-For private team publishing, a maintainer can run:
-
-```bash
-npm run publish
-```
-
-The configured private owner is `zue-ai`. Do not publish secrets, thread contents, MCP URLs, signed attachment URLs, or private screenshots.
-
-## The architecture
-
-Raycast is not downstream from MCP or upstream from CLI. It is another client surface for the same tenant-scoped threads, messages, files, and identities. Work can begin in Raycast, continue in any agent, return to a human in the dashboard, and move again without changing systems or reconstructing context.
+Raycast is not downstream from MCP or upstream from CLI. It is another client surface for the same tenant-scoped threads, messages, files, and identities.

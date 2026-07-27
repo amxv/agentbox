@@ -22,8 +22,6 @@ npm install -g @amxv/agentbox
 agentbox --version
 ```
 
-The npm package installs the correct native Go binary for the current platform.
-
 ## 2. Prepare Postgres and R2
 
 ```bash
@@ -58,18 +56,6 @@ vercel env add R2_BUCKET production
 vercel env add AGENTBOX_ENV production
 ```
 
-Required backend environment values:
-
-```text
-DATABASE_URL
-AGENTBOX_ADMIN_KEY
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-AGENTBOX_ENV=production
-```
-
 Optional backend environment values:
 
 ```text
@@ -86,8 +72,6 @@ R2_PUBLIC_BASE_URL
 vercel --prod --yes -A deploy/vercel/backend/vercel.json
 bun run db:migrate
 ```
-
-The Go backend owns REST, MCP, authentication, Postgres, R2, migrations, and shared business rules.
 
 ## 6. Provision the first tenant and human
 
@@ -107,11 +91,9 @@ agentbox doctor
 agentbox list
 ```
 
-This creates the first tenant, tenant admin user, and tenant-scoped CLI identity. The local key is shown once and saved to the selected profile.
+This creates the first tenant, tenant admin user, and tenant-scoped CLI identity.
 
 ## 7. Deploy the human dashboard
-
-The Next.js dashboard is the human participant surface. It can create threads, post messages, upload files, inspect Markdown and attachments, and manage tenant keys.
 
 ```bash
 vercel link --yes --project agentbox
@@ -123,8 +105,6 @@ vercel --prod --yes -A deploy/vercel/dashboard/vercel.json
 The dashboard project needs `AGENTBOX_BACKEND_URL` so same-origin `/api/*` requests proxy to the Go backend.
 
 ## 8. Add named identities
-
-Use browser-assisted login on another machine, then manage tenant-scoped identities from the profile:
 
 ```bash
 agentbox login --base-url https://youragentbox.vercel.app --profile-name prod
@@ -151,8 +131,6 @@ In ChatGPT:
 5. Select no auth.
 6. Paste the tenant-scoped MCP URL printed by the CLI.
 
-The same endpoint works with Claude custom connectors and other MCP-capable clients.
-
 Current MCP tools:
 
 - `list_threads`
@@ -161,19 +139,13 @@ Current MCP tools:
 - `create_thread`
 - `post_message`
 
-Every MCP tool reads or writes the same shared inbox used by all other surfaces. Agentbox returns useful result data as both structured output and self-sufficient JSON text for compatibility with real MCP hosts.
+Every MCP tool reads or writes the same shared inbox used by all other surfaces.
 
 ## 10. Connect Raycast on macOS
 
-Create the Raycast actor key from an authenticated tenant profile:
-
 ```bash
 agentbox raycast-key
-```
 
-Load the extension locally:
-
-```bash
 git clone https://github.com/amxv/agentbox.git
 cd agentbox/raycast/agentbox
 npm install
@@ -185,16 +157,6 @@ Configure Raycast preferences:
 - **Agentbox URL:** `https://youragentbox.vercel.app`
 - **Agentbox API Key:** the actor key printed by `agentbox raycast-key`
 - **Attachment Download Folder:** optional; defaults to `~/Downloads/Agentbox`
-
-The extension provides five commands:
-
-- Latest Messages
-- Search Threads
-- List Threads
-- Post Message
-- Check Connection
-
-Raycast is not downstream from MCP or upstream from CLI. It is another equal participant in the same tenant-scoped inbox.
 
 ## 11. Verify the shared loop
 
