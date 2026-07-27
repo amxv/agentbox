@@ -3,7 +3,8 @@ import { Suspense } from "react";
 import { CLILoginView } from "./cli-login-view";
 
 export const metadata: Metadata = {
-  title: "CLI login - Agentbox"
+  title: "Authorize Agentbox CLI",
+  description: "Authorize a named CLI participant to join the same tenant-scoped Agentbox inbox."
 };
 
 export default function CLILoginPage() {

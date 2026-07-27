@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { AgentboxMark } from "../../components/agentbox-mark";
 import { fetchSession } from "../../components/session";
 import { ThemeSwitcher } from "../../components/theme-switcher";
+import styles from "../auth.module.css";
 
 function callbackURL(redirectURI: string, params: Record<string, string>) {
   const target = new URL(redirectURI);
-  for (const [key, value] of Object.entries(params)) {
-    target.searchParams.set(key, value);
-  }
+  for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value);
   return target.toString();
 }
 
@@ -19,7 +19,7 @@ export function CLILoginView() {
   const searchParams = useSearchParams();
   const state = searchParams.get("state") ?? "";
   const redirectURI = searchParams.get("redirect_uri") ?? "";
-  const [status, setStatus] = useState("Authorizing CLI access...");
+  const [status, setStatus] = useState("Authorizing CLI access…");
   const [error, setError] = useState<string | null>(null);
   const next = useMemo(() => {
     const current = `/login/cli?${searchParams.toString()}`;
@@ -51,44 +51,61 @@ export function CLILoginView() {
         const message = err instanceof Error ? err.message : String(err);
         setError(message);
         setStatus("Unable to authorize CLI access.");
-        if (redirectURI) {
-          window.location.assign(callbackURL(redirectURI, { error: message, state }));
-        }
+        if (redirectURI) window.location.assign(callbackURL(redirectURI, { error: message, state }));
       }
     }
     void authorize();
   }, [next, redirectURI, router, state]);
 
   return (
-    <div className="dashboard-page">
-      <header className="site-header">
-        <div className="shell site-header__inner">
-          <Link className="brand" href="/">
-            <span className="brand__eyebrow">Agentbox</span>
-            <span className="brand__title">CLI login</span>
+    <div className={styles.page}>
+      <header className={styles.header}>
+        <div className={styles.headerInner}>
+          <Link className={styles.brand} href="/">
+            <AgentboxMark className={styles.mark} />
+            <span>AGENTBOX</span>
+            <small>CLI AUTH</small>
           </Link>
-          <nav className="site-nav" aria-label="CLI login navigation">
-            <Link className="site-nav__link" href="/threads">Threads</Link>
+          <nav className={styles.nav} aria-label="CLI login navigation">
+            <Link href="/">Home</Link>
+            <Link href="/setup">Setup</Link>
             <ThemeSwitcher />
           </nav>
         </div>
       </header>
 
-      <main className="dashboard-main shell login-main">
-        <section className="sign-in-card login-card">
-          <div>
-            <p className="section-label">Local CLI</p>
-            <h1 className="card-title">{status}</h1>
-            <p className="copy">This page will return to the waiting agentbox command after authorization.</p>
+      <main className={styles.main}>
+        <section className={styles.story}>
+          <div className={styles.eyebrow}><i /> Browser-assisted identity</div>
+          <h1>Authorize another participant in the shared inbox.</h1>
+          <p>
+            The waiting Agentbox command will receive a tenant-scoped profile after your human session approves it. The CLI then joins under its own named identity instead of borrowing yours.
+          </p>
+          <div className={styles.cliFlow} aria-hidden="true">
+            <div className={styles.cliActor}>WAITING<br />CLI</div>
+            <div className={styles.flowLine} />
+            <div className={styles.inboxActor}>SHARED<br />INBOX</div>
           </div>
-          {error && (
-            <div className="error-card">
-              <strong>CLI login failed.</strong>
-              <span>{error}</span>
-            </div>
-          )}
         </section>
+
+        <div className={styles.cardWrap}>
+          <section className={styles.card}>
+            <div className={styles.cardLabel}><span>CLI AUTHORIZATION</span><span>ONE-TIME FLOW</span></div>
+            <div className={styles.statusPulse}>{error ? "ERROR" : "LIVE"}</div>
+            <div>
+              <h2>{status}</h2>
+              <p className={styles.cardCopy}>This page returns to the waiting <code>agentbox login</code> command after authorization.</p>
+            </div>
+            {error && <div className={styles.error}><strong>CLI login failed.</strong><span>{error}</span></div>}
+            <p className={styles.cardNote}>The resulting CLI profile is another tenant participant. It can read and write the same threads without sharing your browser session.</p>
+          </section>
+        </div>
       </main>
+
+      <footer className={styles.footer}>
+        <span>One shared inbox. Separate named identities.</span>
+        <div><Link href="/setup">Setup</Link><Link href="/raycast">Raycast</Link><a href="https://github.com/amxv/agentbox">GitHub</a></div>
+      </footer>
     </div>
   );
 }
