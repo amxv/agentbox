@@ -239,3 +239,25 @@
   .codeBlock pre { padding: 18px; font-size: 12.5px; line-height: 1.68; }
   .codeBlock header, .copyButton { font-size: 9px; }
 }
+
+/* Keep the sidebar Markdown link readable at every breakpoint. */
+.manualIndex .copyGuide {
+  width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  grid-template-columns: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  color: var(--paper);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+.manualIndex .copyGuide:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
