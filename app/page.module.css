@@ -600,3 +600,62 @@
 @media (prefers-reduced-motion: reduce) {
   .page *, .page *::before, .page *::after { transition: none !important; }
 }
+
+/* 2026 minimal redesign */
+.page {
+  --paper: #f7f7f4;
+  --paper-2: #efefeb;
+  --card: #ffffff;
+  --ink: #151515;
+  --muted: #6f706b;
+  --hairline: rgba(21,21,21,.14);
+  --red: #d64b2a;
+  --blue: #3159c7;
+  background: var(--paper);
+}
+:global(:root[data-theme="dark"]) .page { --paper:#10110f; --paper-2:#171815; --card:#1c1d1a; --ink:#f2f1eb; --muted:#a7a89f; --hairline:rgba(242,241,235,.14); --red:#ff7655; }
+@media (prefers-color-scheme:dark){:global(:root:not([data-theme="light"])) .page { --paper:#10110f; --paper-2:#171815; --card:#1c1d1a; --ink:#f2f1eb; --muted:#a7a89f; --hairline:rgba(242,241,235,.14); --red:#ff7655; }}
+.header,.hero,.principle,.surfaces,.routing,.raycastFeature,.engineering,.closing,.footer { width:min(1280px,calc(100% - 48px)); }
+.header { min-height:72px; border-bottom-color:var(--hairline); }
+.brand { font-weight:650; letter-spacing:-.025em; }
+.mark { border-radius:7px; }
+.nav { gap:22px; font-size:8px; letter-spacing:.04em; }
+.hero { min-height:auto; grid-template-columns:minmax(0,1fr) minmax(460px,.82fr); gap:84px; padding:112px 0 128px; }
+.heroRail { display:none; }
+.hero h1 { max-width:760px; margin:22px 0 28px; font-size:clamp(68px,7vw,112px); line-height:.88; letter-spacing:-.055em; }
+.lede { max-width:650px; font-size:16px; line-height:1.75; }
+.primaryAction,.closingPrimary { min-height:48px; border-radius:999px; padding:0 22px; letter-spacing:.04em; }
+.secondaryAction,.closingSecondary { border:0; padding:10px 0; }
+.dispatchDesk { padding:12px; border-color:var(--hairline); border-radius:20px; background:var(--card); box-shadow:0 24px 80px rgba(0,0,0,.12); }
+.dispatchDesk::before { display:none; }
+.deskHeader { border-bottom-color:var(--hairline); }
+.dispatch { width:94%; border-color:var(--hairline); border-radius:12px; background:var(--paper); }
+.dispatch::after { top:12px; bottom:12px; left:8px; width:2px; border-radius:2px; }
+.dispatch p { padding-left:6px; font-size:12px; }
+.replyLine { border-color:var(--hairline); border-radius:10px; }
+.replyLine b { border-radius:999px; }
+.manifest { min-height:46px; border-color:transparent; background:var(--ink); }
+.principle { grid-template-columns:.35fr 1.3fr .65fr; gap:54px; padding:128px 0; border-bottom-color:var(--hairline); }
+.principle blockquote { font-size:clamp(44px,5vw,72px); line-height:1; }
+.principleNote { border-color:var(--hairline); }
+.principleNote span { border-color:var(--hairline); }
+.surfaces,.routing,.raycastFeature,.engineering { padding:128px 0; border-bottom-color:var(--hairline); }
+.sectionIntro { grid-template-columns:.34fr 1.66fr; gap:54px; }
+.sectionIntro h2 { font-size:clamp(50px,5.5vw,82px); line-height:.96; }
+.surfaceList { border-top-color:var(--hairline); }
+.surfaceList article { min-height:134px; border-bottom-color:var(--hairline); }
+.surfaceList article:hover { padding:0 14px; border-radius:14px; }
+.surfaceList h3 { font-size:38px; }
+.routingTable { overflow:hidden; border-color:var(--hairline); border-radius:18px; }
+.routingHead span,.routingTable article,.routingTable article>div { border-color:var(--hairline); }
+.routingTable h3 { font-size:32px; }
+.raycastFeature { gap:90px; }
+.raycastPanel { border-color:rgba(255,255,255,.12); border-radius:18px; box-shadow:0 28px 80px rgba(0,0,0,.25); }
+.engineeringGrid { border-color:var(--hairline); gap:1px; background:var(--hairline); }
+.engineeringGrid article { min-height:260px; border:0; }
+.closing { width:100%; min-height:620px; padding:110px max(24px,calc((100vw - 1280px)/2)); }
+.closing h2 { max-width:900px; font-size:clamp(64px,7vw,108px); }
+.footer { border-top-color:var(--hairline); }
+@media(max-width:1180px){.hero{grid-template-columns:1fr}.dispatchDesk{grid-column:auto;width:min(760px,100%);margin:8px 0 0}.principle{grid-template-columns:.35fr 1.65fr}.principleNote{grid-column:2}.raycastFeature{grid-template-columns:1fr}.engineering{grid-template-columns:1fr}}
+@media(max-width:850px){.header,.hero,.principle,.surfaces,.routing,.raycastFeature,.engineering,.footer{width:min(100% - 32px,1280px)}.sectionIntro{grid-template-columns:1fr}.hero{padding:76px 0 92px}.hero h1{font-size:clamp(58px,12vw,88px)}}
+@media(max-width:580px){.hero h1{font-size:52px}.principle,.surfaces,.routing,.raycastFeature,.engineering{padding:82px 0}.closing{padding:82px 22px}.closing h2{font-size:54px}.dispatchDesk{border-radius:14px;box-shadow:none}}

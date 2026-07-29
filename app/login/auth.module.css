@@ -22,3 +22,12 @@
 .footer{min-height:92px;display:flex;align-items:center;justify-content:space-between;gap:25px;border-top:1px solid var(--ink);color:var(--muted);font-family:var(--font-agentbox-mono),monospace;font-size:8px;text-transform:uppercase}.footer div{display:flex;gap:18px}.footer a:hover{color:var(--red)}
 @media(max-width:940px){.main{grid-template-columns:1fr;gap:55px}.cardWrap{width:min(620px,calc(100% - 18px));margin:0 auto}}
 @media(max-width:650px){.header,.main,.footer{width:min(100% - 24px,1320px)}.brand small{display:none}.nav a:first-child{display:none}.main{padding:58px 0 74px}.story h1{font-size:52px}.story>p{font-size:15px}.card{padding:22px}.card h2{font-size:43px}.cardWrap:before{inset:9px -9px -9px 9px}.cliDiagram{grid-template-columns:1fr;gap:12px}.cliDiagram i{width:1px;height:42px;margin:0 auto;background:repeating-linear-gradient(var(--ink) 0 6px,transparent 6px 11px)}.footer{padding:24px 0;flex-wrap:wrap}.footer div{width:100%;flex-wrap:wrap}}
+
+/* 2026 minimal redesign */
+.page{--paper:#f7f7f4;--paper-2:#efefeb;--card:#fff;--ink:#151515;--muted:#6f706b;--hairline:rgba(21,21,21,.14);--red:#d64b2a;background:var(--paper)}
+:global(:root[data-theme="dark"]) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--red:#ff7655}
+@media(prefers-color-scheme:dark){:global(:root:not([data-theme="light"])) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--red:#ff7655}}
+.header,.main,.footer{width:min(1180px,calc(100% - 48px))}.header{min-height:72px;border-bottom-color:var(--hairline)}.mark{border-radius:7px}.nav{font-size:8px;letter-spacing:.04em}
+.main{grid-template-columns:1fr 460px;gap:110px;padding:110px 0 126px}.story h1{font-size:clamp(64px,6vw,96px);line-height:.91}.story>p{font-size:15px;line-height:1.75}.ticket{border-color:var(--hairline)}.ticket div{border-color:var(--hairline)}
+.cardWrap:before{display:none}.card{padding:34px;border-color:var(--hairline);border-radius:20px;box-shadow:0 24px 80px rgba(0,0,0,.12)}.cardTop{border-color:var(--hairline)}.card h2{font-size:48px;line-height:.95}.input{border-color:var(--hairline);border-radius:10px;background:var(--paper)}.submit{border-radius:999px;min-height:50px}.note{border-color:var(--hairline)}.footer{border-top-color:var(--hairline)}
+@media(max-width:900px){.header,.main,.footer{width:min(100% - 32px,1180px)}.main{grid-template-columns:1fr;gap:56px;padding:76px 0}.cardWrap{max-width:560px}}

@@ -1,27 +1,26 @@
 import type { Metadata } from "next";
-import { Bodoni_Moda, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { Instrument_Serif, Manrope, Fragment_Mono } from "next/font/google";
 import "./globals.css";
 
-const displayFont = Bodoni_Moda({
+const displayFont = Instrument_Serif({
   variable: "--font-agentbox-display",
   subsets: ["latin"],
-  weight: "variable",
+  weight: "400",
   style: ["normal", "italic"],
   display: "swap"
 });
 
-const bodyFont = IBM_Plex_Sans({
+const bodyFont = Manrope({
   variable: "--font-agentbox-body",
   subsets: ["latin"],
   weight: "variable",
-  style: ["normal", "italic"],
   display: "swap"
 });
 
-const monoFont = IBM_Plex_Mono({
+const monoFont = Fragment_Mono({
   variable: "--font-agentbox-mono",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: "400",
   display: "swap"
 });
 

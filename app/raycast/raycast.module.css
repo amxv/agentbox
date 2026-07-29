@@ -192,3 +192,20 @@
   .closing h2 { font-size: 52px; }
   .footer > div:last-child { width: 100%; flex-wrap: wrap; gap: 13px; }
 }
+
+/* 2026 minimal redesign */
+.page { --paper:#f7f7f4; --paper-2:#efefeb; --card:#fff; --ink:#151515; --muted:#6f706b; --hairline:rgba(21,21,21,.14); --red:#d64b2a; background:var(--paper); }
+:global(:root[data-theme="dark"]) .page { --paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--red:#ff7655; }
+@media(prefers-color-scheme:dark){:global(:root:not([data-theme="light"])) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--red:#ff7655}}
+.header,.hero,.directory,.install,.preferences,.workflows,.closing,.footer{width:min(1280px,calc(100% - 48px))}
+.header{min-height:72px;border-bottom-color:var(--hairline)}.mark{border-radius:7px}.nav{font-size:8px;letter-spacing:.04em}
+.hero{min-height:auto;grid-template-columns:1fr .86fr;gap:100px;padding:112px 0 126px}.hero h1{font-size:clamp(68px,7vw,108px);line-height:.9}.heroCopy>p:not(.eyebrow){font-size:16px;line-height:1.75}
+.primaryAction,.copyGuide,.closingPrimary{border-radius:999px;min-height:48px}.secondaryAction,.closingSecondary{border:0;padding:10px 0}
+.commandWindow{border-radius:20px;box-shadow:0 28px 90px rgba(0,0,0,.22)}.commandStrip{min-height:46px}
+.directory,.preferences,.workflows{padding:128px 0}.sectionIntro{grid-template-columns:.34fr 1.3fr .7fr;gap:48px}.sectionIntro h2{font-size:clamp(50px,5.4vw,80px);line-height:.96}
+.commandList{border-top-color:var(--hairline)}.commandList article{border-bottom-color:var(--hairline);min-height:132px}.commandList h3{font-size:35px}
+.install{padding:128px 0;gap:88px}.install aside{top:96px}.install aside h2{font-size:clamp(48px,5vw,76px)}.installSteps article{border-color:var(--hairline);border-radius:18px;margin-bottom:18px;overflow:hidden}.codeBlock{border-radius:12px}
+.preferenceTable{border-radius:18px;overflow:hidden;border-color:var(--hairline)}.preferenceTable article,.preferenceTable>div span{border-color:var(--hairline)}
+.workflowList{gap:14px}.workflowList article{border:1px solid var(--hairline);border-radius:18px;background:var(--card)}
+.closing{width:100%;padding:110px max(24px,calc((100vw - 1280px)/2));min-height:600px}.closing h2{font-size:clamp(64px,7vw,106px)}.footer{border-top-color:var(--hairline)}
+@media(max-width:900px){.header,.hero,.directory,.install,.preferences,.workflows,.footer{width:min(100% - 32px,1280px)}.hero{grid-template-columns:1fr;gap:56px}.sectionIntro{grid-template-columns:1fr}.install{grid-template-columns:1fr}.install aside{position:static}}
