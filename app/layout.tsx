@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import { Instrument_Serif, Manrope, Fragment_Mono } from "next/font/google";
+import { Space_Grotesk, Manrope, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
-const displayFont = Instrument_Serif({
+const displayFont = Space_Grotesk({
   variable: "--font-agentbox-display",
   subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
+  weight: "variable",
   display: "swap"
 });
 
@@ -17,10 +16,10 @@ const bodyFont = Manrope({
   display: "swap"
 });
 
-const monoFont = Fragment_Mono({
+const monoFont = IBM_Plex_Mono({
   variable: "--font-agentbox-mono",
   subsets: ["latin"],
-  weight: "400",
+  weight: ["400", "500", "600"],
   display: "swap"
 });
 

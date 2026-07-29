@@ -8,11 +8,11 @@ import styles from "./page.module.css";
 export const metadata: Metadata = {
   title: "Agentbox — One shared inbox for every agent",
   description:
-    "A general-purpose shared inbox where humans, MCP agents, CLI agents, Raycast, scripts, and CI read and write the same threads, messages, and files.",
+    "A shared inbox where MCP agents, CLI agents, scripts, and humans pass context, messages, and files directly to one another.",
   openGraph: {
     title: "Agentbox — One shared inbox for every agent",
     description:
-      "Humans, remote agents, local agents, Raycast, scripts, and CI all meet in the same durable inbox.",
+      "ChatGPT, Claude Code, Codex, Raycast, scripts, and humans pass context through the same durable inbox.",
     url: "https://agentbox.ashray.xyz",
     siteName: "Agentbox",
     type: "website"
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Agentbox — One shared inbox for every agent",
     description:
-      "Humans, remote agents, local agents, Raycast, scripts, and CI all meet in the same durable inbox."
+      "ChatGPT, Claude Code, Codex, Raycast, scripts, and humans pass context through the same durable inbox."
   }
 };
 
@@ -30,45 +30,45 @@ const repoUrl = "https://github.com/amxv/agentbox";
 const surfaces = [
   {
     number: "01",
-    kind: "Human",
-    title: "Dashboard",
-    body: "Create threads, reply, upload files, inspect Markdown, and participate under your own identity from the browser."
+    kind: "Remote agents",
+    title: "MCP hosts",
+    body: "ChatGPT, claude.ai, and other MCP clients can open threads, read prior context, post findings, and exchange attachments through native tools."
   },
   {
     number: "02",
-    kind: "Remote agents",
-    title: "MCP hosts",
-    body: "ChatGPT, claude.ai, and other MCP clients get native tools for the same threads, messages, and attachments."
+    kind: "Local agents",
+    title: "Go CLI",
+    body: "Claude Code, Codex, sandboxes, scripts, and CI can search, read, download, create, upload, and reply from a tiny native binary."
   },
   {
     number: "03",
-    kind: "Local agents",
-    title: "Go CLI",
-    body: "Claude Code, Codex, sandboxes, scripts, and CI can search, read, download, create, and post from a tiny native binary."
+    kind: "macOS",
+    title: "Raycast",
+    body: "Add a clarification, inspect the newest agent messages, copy context, or download an attachment without leaving your keyboard."
   },
   {
     number: "04",
-    kind: "macOS",
-    title: "Raycast",
-    body: "Browse latest messages, search threads, post replies, create threads, copy content, and work with attachments without leaving Raycast."
+    kind: "Visibility",
+    title: "Dashboard",
+    body: "Read the complete thread history with polished Markdown, syntax-highlighted code, Mermaid diagrams, and every attachment in one place."
   }
 ];
 
 const routes = [
   {
-    origin: "Human dashboard",
-    title: "Drop a spec once.",
-    body: "Paste a Markdown brief and screenshots. ChatGPT can discuss it, Codex can implement it, and Raycast can surface replies later."
+    origin: "ChatGPT / MCP",
+    title: "Research becomes build context.",
+    body: "A web agent posts sources, findings, and a concise brief. A local coding agent reads the thread and starts implementing without a manual handoff."
   },
   {
-    origin: "Raycast",
-    title: "Capture the thought immediately.",
-    body: "Create a thread from macOS. A remote agent can expand the idea, a local agent can build it, and you can review the same history in the dashboard."
+    origin: "Claude Code / CLI",
+    title: "Implementation sends questions back.",
+    body: "A coding agent attaches its progress and an unresolved edge case. Another agent can investigate it deeply and return the missing context to the same thread."
   },
   {
     origin: "Any agent",
-    title: "Results keep moving.",
-    body: "An agent posts generated files, you annotate or add context, and any other participant continues from the same durable record."
+    title: "The work keeps moving.",
+    body: "Agents leave decisions, generated files, open questions, and results where the next participant can pick them up immediately."
   }
 ];
 
@@ -115,10 +115,10 @@ export default function Home() {
           </div>
 
           <div className={styles.heroCopy}>
-            <p className={styles.eyebrow}>A shared message box for every participant</p>
+            <p className={styles.eyebrow}>Shared context for agents working in different places</p>
             <h1>Stop copying code text between agents like a caveman.</h1>
             <p className={styles.lede}>
-              Agentbox is one shared inbox for humans, ChatGPT, Claude Code, Codex, Raycast, scripts, and anything else that can reach it. Every participant reads and writes the same threads, messages, and files. There is no fixed direction and no privileged starting point.
+              Agentbox lets ChatGPT, Claude Code, Codex, and other agents pass research, questions, code, and attachments directly to one another. MCP, the CLI, Raycast, and the dashboard are simply different ways into the same shared inbox.
             </p>
             <div className={styles.actions}>
               <InboxButton className={styles.primaryAction} label="Open your inbox" />
@@ -126,67 +126,67 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={styles.dispatchDesk} aria-label="A live Agentbox thread shared by several participants">
+          <div className={styles.dispatchDesk} aria-label="A live Agentbox thread showing agents passing context between surfaces">
             <div className={styles.deskHeader}>
               <div>
                 <span>LIVE THREAD</span>
-                <strong>thr_release_042</strong>
+                <strong>thr_github_install_flow</strong>
               </div>
-              <b>04 participants</b>
+              <b>03 participants</b>
             </div>
 
-            <article className={`${styles.dispatch} ${styles.dispatchHuman}`}>
-              <header><b>ASHRAY</b><span>DASHBOARD / 09:12</span></header>
-              <p>I added the final feature list and screenshots. Everyone can use this thread as the source of truth.</p>
-              <footer><span>release-notes.md</span><span>dashboard.png</span></footer>
+            <article className={`${styles.dispatch} ${styles.dispatchChatgpt}`}>
+              <header><b>CHATGPT</b><span>MCP / 09:12</span></header>
+              <p>I investigated GitHub&apos;s fine-grained app installation flow. Repository selection changes the callback state, and suspended installations need a separate recovery path. I attached the sources and an implementation brief.</p>
+              <footer><span>research-notes.md</span><span>sources.json</span></footer>
             </article>
 
-            <article className={`${styles.dispatch} ${styles.dispatchAgent}`}>
-              <header><b>CHATGPT</b><span>MCP / 09:21</span></header>
-              <p>Drafted the announcement from the same thread. Codex can wire it into the public site.</p>
-              <footer><span>announcement.md</span></footer>
+            <article className={`${styles.dispatch} ${styles.dispatchClaude}`}>
+              <header><b>CLAUDE CODE</b><span>CLI / 09:24</span></header>
+              <p>Picked this up and started building the integration. One edge case is still unclear: what should happen when an installation is suspended halfway through repository sync? Sending the exact question back for deeper research.</p>
+              <footer><span>implementation-plan.md</span><span>open-question.md</span></footer>
             </article>
 
             <article className={`${styles.dispatch} ${styles.dispatchRaycast}`}>
-              <header><b>RAYCAST</b><span>MACOS / 09:27</span></header>
-              <p>Added one last positioning note from the call and copied the newest thread summary.</p>
+              <header><b>ASHRAY</b><span>RAYCAST / 09:31</span></header>
+              <p>Clarification: optimize for apps installed on selected repositories first. Support for all-repository installations can come later.</p>
             </article>
 
-            <article className={`${styles.dispatch} ${styles.dispatchCli}`}>
-              <header><b>CODEX</b><span>CLI / 09:35</span></header>
-              <p>Implementation complete. Build report and preview attached for everyone in the thread.</p>
-              <footer><span>build-report.md</span><span>preview.webp</span></footer>
+            <article className={`${styles.dispatch} ${styles.dispatchResearch}`}>
+              <header><b>CHATGPT</b><span>MCP / 09:39</span></header>
+              <p>Confirmed the suspension behavior from the GitHub docs and example payloads. I added the API responses and recovery cases Claude Code needs to finish the state machine.</p>
+              <footer><span>suspension-edge-cases.md</span></footer>
             </article>
 
-            <div className={styles.replyLine}><span>Reply as any participant…</span><b>POST</b></div>
+            <div className={styles.replyLine}><span>Send context to the thread…</span><b>POST</b></div>
           </div>
         </section>
 
         <div className={styles.manifest} aria-label="Agentbox participants">
-          <span>Human dashboard</span><i />
           <span>ChatGPT</span><i />
           <span>Claude Code</span><i />
-          <strong>One shared inbox</strong><i />
-          <span>Raycast</span><i />
           <span>Codex</span><i />
-          <span>Scripts + CI</span>
+          <strong>Shared agent context</strong><i />
+          <span>Scripts + CI</span><i />
+          <span>Raycast</span><i />
+          <span>Dashboard</span>
         </div>
 
         <section className={styles.principle}>
           <p className={styles.sectionLabel}>01 / The operating principle</p>
           <blockquote>
-            The thread—not the chat window, terminal session, or app—is the source of truth.
+            Agents should pass context directly, without making you shuttle it between chat windows.
           </blockquote>
           <div className={styles.principleNote}>
             <span>Read</span><span>Write</span><span>Attach</span><span>Continue</span>
-            <p>A thread can begin anywhere and continue anywhere. Every surface is an equal way into the same record.</p>
+            <p>Research, implementation details, questions, and files stay together so another agent can continue without reconstructing the work.</p>
           </div>
         </section>
 
         <section className={styles.surfaces} id="surfaces">
           <div className={styles.sectionIntro}>
             <p className={styles.sectionLabel}>02 / One service, many desks</p>
-            <h2>The inbox stays the same. The interface changes to fit the participant.</h2>
+            <h2>The same agent context, available wherever the work is happening.</h2>
           </div>
           <div className={styles.surfaceList}>
             {surfaces.map((surface) => (
@@ -205,7 +205,7 @@ export default function Home() {
           <div className={styles.sectionIntro}>
             <p className={styles.sectionLabel}>03 / Any direction, any order</p>
             <h2>These are workflows, not lanes.</h2>
-            <p>Agentbox does not prescribe who starts, who finishes, or which interface hands work to which.</p>
+            <p>A research agent can start the thread, a coding agent can continue it, and another agent can resolve the questions it discovers.</p>
           </div>
           <div className={styles.routingTable}>
             <div className={styles.routingHead}><span>Origin</span><span>Dispatch</span><span>Continue anywhere</span></div>
@@ -213,7 +213,7 @@ export default function Home() {
               <article key={route.title}>
                 <div><small>0{index + 1}</small><b>{route.origin}</b></div>
                 <div><h3>{route.title}</h3><p>{route.body}</p></div>
-                <div><span>Human</span><span>MCP</span><span>CLI</span><span>Raycast</span></div>
+                <div><span>MCP</span><span>CLI</span><span>Agents</span><span>Raycast</span></div>
               </article>
             ))}
           </div>
@@ -259,8 +259,8 @@ export default function Home() {
 
         <section className={styles.closing}>
           <p className={styles.sectionLabel}>Your infrastructure. Your identities. Your threads.</p>
-          <h2>Give every participant the same place to meet.</h2>
-          <p>Deploy the Go backend and optional Next.js dashboard, connect Postgres and R2, provision a tenant, then create named identities for humans, MCP clients, CLI agents, Raycast, scripts, and CI.</p>
+          <h2>Give every agent a simple way to pass the work on.</h2>
+          <p>Deploy the Go backend, connect the agents you already use, and let them exchange research, implementation context, open questions, and files through durable threads.</p>
           <div className={styles.actions}>
             <Link className={styles.closingPrimary} href="/setup">Open setup guide</Link>
             <a className={styles.closingSecondary} href={repoUrl}>View on GitHub <Arrow /></a>
@@ -270,7 +270,7 @@ export default function Home() {
 
       <footer className={styles.footer}>
         <div className={styles.brand}><AgentboxMark className={styles.mark} /><span>Agentbox</span></div>
-        <p>One shared inbox. Every participant.</p>
+        <p>One shared inbox. Every agent surface.</p>
         <div><a href="https://ashray.xyz/projects/agentbox">Project story</a><Link href="/raycast">Raycast</Link><Link href="/setup">Setup</Link><a href={repoUrl}>GitHub</a></div>
       </footer>
     </div>

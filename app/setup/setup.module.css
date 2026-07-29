@@ -5,9 +5,9 @@
   --ink: #11100e;
   --muted: #6d675f;
   --hairline: rgba(17,16,14,.24);
-  --red: #d94b32;
+  --accent: #5267e9;
   --blue: #274fbe;
-  --red-soft: #f0d8d1;
+  --accent-soft: #e3e7ff;
   min-height: 100vh;
   color: var(--ink);
   background: var(--paper);
@@ -21,9 +21,9 @@
   --ink: #f2ede4;
   --muted: #aaa39a;
   --hairline: rgba(242,237,228,.22);
-  --red: #e56a50;
+  --accent: #91a0ff;
   --blue: #7696ee;
-  --red-soft: #3a2420;
+  --accent-soft: #252b4d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,9 +34,9 @@
     --ink: #f2ede4;
     --muted: #aaa39a;
     --hairline: rgba(242,237,228,.22);
-    --red: #e56a50;
+    --accent: #91a0ff;
     --blue: #7696ee;
-    --red-soft: #3a2420;
+    --accent-soft: #252b4d;
   }
 }
 
@@ -69,10 +69,10 @@
 .brand small { padding-left: 12px; border-left: 1px solid var(--hairline); color: var(--muted); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
 .mark { width: 31px; height: 31px; display: grid; grid-template-columns: repeat(2,1fr); gap: 2px; padding: 4px; border: 1px solid currentColor; }
 .mark i { background: currentColor; }
-.mark i:nth-child(2), .mark i:nth-child(3) { background: var(--red); }
+.mark i:nth-child(2), .mark i:nth-child(3) { background: var(--accent); }
 .nav { display: flex; align-items: center; gap: 24px; font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
 .nav > a, .inboxLink { border: 0; padding: 7px 0; background: transparent; color: var(--ink); cursor: pointer; font: inherit; text-transform: inherit; }
-.nav > a:hover, .inboxLink:hover { color: var(--red); }
+.nav > a:hover, .inboxLink:hover { color: var(--accent); }
 
 .hero {
   min-height: 720px;
@@ -82,7 +82,7 @@
   align-items: center;
   padding: 84px 0 105px;
 }
-.eyebrow { margin: 0; color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 9px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+.eyebrow { margin: 0; color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 9px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
 .hero h1,
 .chapter h2,
 .reference h2,
@@ -98,29 +98,29 @@
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; margin-top: 34px; }
 .primaryAction,
 .closingPrimary { min-height: 51px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--ink); padding: 0 20px; background: var(--ink); color: var(--paper) !important; font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.primaryAction:hover, .closingPrimary:hover { background: var(--red); }
+.primaryAction:hover, .closingPrimary:hover { background: var(--accent); }
 .secondaryAction,
 .closingSecondary { border: 0; border-bottom: 1px solid var(--ink); padding: 6px 0; background: transparent; color: var(--ink); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
 
 .cover { border: 1px solid var(--ink); background: var(--card); box-shadow: 16px 16px 0 var(--ink); }
 .coverTitle { min-height: 61px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
-.coverTitle b { color: var(--red); font-size: 16px; }
+.coverTitle b { color: var(--accent); font-size: 16px; }
 .cover article { min-height: 120px; display: grid; grid-template-columns: 58px 1fr; gap: 18px; align-items: start; padding: 19px; border-bottom: 1px solid var(--ink); }
-.cover article > span { color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 10px; font-weight: 600; }
+.cover article > span { color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 10px; font-weight: 600; }
 .cover h2 { margin: 0; font-family: var(--font-agentbox-display), serif; font-size: 31px; font-weight: 500; letter-spacing: -.035em; }
 .cover p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .cover footer { display: flex; justify-content: space-between; gap: 15px; padding: 14px 18px; font-family: var(--font-agentbox-mono), monospace; font-size: 7px; letter-spacing: .07em; text-transform: uppercase; }
 
 .manualStrip { min-height: 56px; display: flex; align-items: center; justify-content: center; gap: 17px; overflow: hidden; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
-.manualStrip i { width: 4px; height: 4px; border-radius: 50%; background: var(--red); }
-.manualStrip strong { padding: 6px 8px; background: var(--red); color: #fff; }
+.manualStrip i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
+.manualStrip strong { padding: 6px 8px; background: var(--accent); color: #fff; }
 
 .manual { display: grid; grid-template-columns: 250px 1fr; gap: 76px; padding: 112px 0 130px; }
 .manualIndex { position: sticky; top: 28px; align-self: start; display: grid; border-top: 1px solid var(--ink); }
-.manualIndex > p { margin: 0; padding: 14px 0; color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.manualIndex > p { margin: 0; padding: 14px 0; color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 .manualIndex a { display: grid; grid-template-columns: 35px 1fr; gap: 10px; padding: 13px 0; border-top: 1px solid var(--hairline); font-size: 12px; }
 .manualIndex a span { color: var(--muted); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; }
-.manualIndex a:hover { color: var(--red); }
+.manualIndex a:hover { color: var(--accent); }
 .copyGuide { min-height: 45px; margin-top: 24px; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 
 .manualBody { min-width: 0; display: grid; gap: 120px; }
@@ -129,7 +129,7 @@
 .verification > header { display: grid; grid-template-columns: 90px 1fr; gap: 35px; padding-bottom: 38px; border-bottom: 1px solid var(--ink); }
 .chapter > header > span,
 .reference > header > span,
-.verification > header > span { color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 13px; font-weight: 600; }
+.verification > header > span { color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 13px; font-weight: 600; }
 .chapter small,
 .reference small,
 .verification small { color: var(--muted); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
@@ -141,7 +141,7 @@
 .verification header p { max-width: 680px; margin: 19px 0 0; color: var(--muted); font-size: 14px; line-height: 1.62; }
 .steps { display: grid; }
 .step { display: grid; grid-template-columns: .73fr 1.27fr; gap: 42px; padding: 43px 0; border-bottom: 1px solid var(--ink); }
-.stepCopy > span { color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; }
+.stepCopy > span { color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; }
 .step h3 { margin: 29px 0 0; font-family: var(--font-agentbox-display), serif; font-size: 32px; font-weight: 500; letter-spacing: -.035em; }
 .step p { margin: 13px 0 0; color: var(--muted); font-size: 13px; line-height: 1.62; }
 
@@ -156,14 +156,14 @@
 .envGrid ul { display: grid; gap: 1px; margin: 32px 0 25px; padding: 1px; background: var(--ink); list-style: none; }
 .envGrid li { padding: 11px; background: var(--paper); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; overflow-wrap: anywhere; }
 .copyEnv { min-height: 41px; margin-top: auto; border: 1px solid var(--ink); background: transparent; color: var(--ink); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; font-weight: 600; text-transform: uppercase; }
-.copyEnv:hover { background: var(--red); color: #fff; }
+.copyEnv:hover { background: var(--accent); color: #fff; }
 
 .verification ol { margin: 0; padding: 0; list-style: none; counter-reset: verification; }
 .verification li { counter-increment: verification; display: grid; grid-template-columns: 55px 1fr; gap: 25px; padding: 24px 0; border-bottom: 1px solid var(--ink); color: var(--muted); font-size: 14px; line-height: 1.62; }
-.verification li::before { content: counter(verification, decimal-leading-zero); color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 9px; font-weight: 600; }
+.verification li::before { content: counter(verification, decimal-leading-zero); color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 9px; font-weight: 600; }
 
 .closing { min-height: 560px; display: flex; flex-direction: column; justify-content: center; padding: 90px 8vw; background: var(--ink); color: var(--paper); }
-.closing > p { margin: 0; color: var(--red); font-family: var(--font-agentbox-mono), monospace; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.closing > p { margin: 0; color: var(--accent); font-family: var(--font-agentbox-mono), monospace; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .closing h2 { max-width: 1050px; margin: 27px 0 0; font-size: clamp(63px, 6.8vw, 108px); }
 .closingPrimary { background: var(--paper); color: var(--ink) !important; }
 .closingSecondary { border-color: var(--paper); color: var(--paper); }
@@ -171,7 +171,7 @@
 .footer { min-height: 110px; display: flex; align-items: center; justify-content: space-between; gap: 25px; border-top: 1px solid var(--ink); }
 .footer > p { margin: 0; font-family: var(--font-agentbox-display), serif; font-size: 17px; font-style: italic; }
 .footer > div:last-child { display: flex; gap: 19px; color: var(--muted); font-family: var(--font-agentbox-mono), monospace; font-size: 8px; text-transform: uppercase; }
-.footer a:hover { color: var(--red); }
+.footer a:hover { color: var(--accent); }
 
 @media (max-width: 1050px) {
   .hero { grid-template-columns: 1fr; }
@@ -217,9 +217,9 @@
 }
 
 /* 2026 minimal redesign */
-.page{--paper:#f7f7f4;--paper-2:#efefeb;--card:#fff;--ink:#151515;--muted:#6f706b;--hairline:rgba(21,21,21,.14);--red:#d64b2a;background:var(--paper)}
-:global(:root[data-theme="dark"]) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--red:#ff7655}
-@media(prefers-color-scheme:dark){:global(:root:not([data-theme="light"])) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--red:#ff7655}}
+.page{--paper:#f7f7f4;--paper-2:#efefeb;--card:#fff;--ink:#151515;--muted:#6f706b;--hairline:rgba(21,21,21,.14);--accent:#5267e9;background:var(--paper)}
+:global(:root[data-theme="dark"]) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--accent:#91a0ff}
+@media(prefers-color-scheme:dark){:global(:root:not([data-theme="light"])) .page{--paper:#10110f;--paper-2:#171815;--card:#1c1d1a;--ink:#f2f1eb;--muted:#a7a89f;--hairline:rgba(242,241,235,.14);--accent:#91a0ff}}
 .header,.hero,.manual,.closing,.footer{width:min(1280px,calc(100% - 48px))}.header{min-height:72px;border-bottom-color:var(--hairline)}.mark{border-radius:7px}.nav{font-size:8px;letter-spacing:.04em}
 .hero{min-height:auto;grid-template-columns:1fr .78fr;gap:96px;padding:112px 0 126px}.hero h1{font-size:clamp(66px,7vw,106px);line-height:.9}.heroCopy>p:not(.eyebrow){font-size:16px;line-height:1.75}.primaryAction,.copyGuide,.closingPrimary{border-radius:999px;min-height:48px}.secondaryAction,.closingSecondary{border:0;padding:10px 0}
 .cover{border-color:var(--hairline);border-radius:20px;overflow:hidden;box-shadow:0 28px 80px rgba(0,0,0,.12)}.cover article{border-color:var(--hairline)}.manualStrip{min-height:46px}
@@ -227,3 +227,15 @@
 .step{grid-template-columns:.72fr 1.28fr;gap:52px;padding:42px 0;border-color:var(--hairline)}.step h3{font-size:30px}.codeBlock{border-radius:14px;overflow:hidden}.envGrid{gap:14px}.envGrid section{border:1px solid var(--hairline);border-radius:16px;overflow:hidden}.verification ol{border-color:var(--hairline);border-radius:16px;overflow:hidden}.verification li{border-color:var(--hairline)}
 .closing{width:100%;padding:110px max(24px,calc((100vw - 1280px)/2));min-height:600px}.closing h2{font-size:clamp(64px,7vw,106px)}.footer{border-top-color:var(--hairline)}
 @media(max-width:950px){.header,.hero,.manual,.footer{width:min(100% - 32px,1280px)}.hero{grid-template-columns:1fr}.manual{grid-template-columns:1fr}.manualIndex{position:static}.step{grid-template-columns:1fr}.chapter>header,.reference>header,.verification>header{grid-template-columns:1fr}}
+
+/* Command blocks are primary documentation, not decorative terminal chrome. */
+.codeBlock header { min-height: 46px; padding: 0 16px; font-size: 10px; letter-spacing: .045em; }
+.copyButton { padding: 7px 10px; border-radius: 7px; font-size: 10px; letter-spacing: .035em; }
+.codeBlock pre { padding: 24px; font-size: 14px; line-height: 1.72; white-space: pre; word-break: normal; }
+.copyGuide { display: flex; align-items: center; justify-content: center; text-align: center; }
+.hero h1, .cover h2, .chapter h2, .reference h2, .verification h2, .step h3, .closing h2 { font-weight: 520; letter-spacing: -.045em; }
+.footer > p { font-family: var(--font-agentbox-body), sans-serif; font-style: normal; font-weight: 550; }
+@media (max-width: 620px) {
+  .codeBlock pre { padding: 18px; font-size: 12.5px; line-height: 1.68; }
+  .codeBlock header, .copyButton { font-size: 9px; }
+}

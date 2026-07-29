@@ -143,7 +143,7 @@ export default function SetupPage() {
             <p>Deploy the Agentbox core once, then let humans, MCP hosts, CLI agents, Raycast, scripts, and CI enter through the interface that fits them. They all read and write the same tenant-scoped inbox.</p>
             <div className={styles.actions}>
               <a className={styles.primaryAction} href="#manual">Open the manual</a>
-              <PublicCopyButton className={styles.secondaryAction} sourceUrl="/setup-self-host.md" label="Copy full Markdown" copiedLabel="Markdown copied" />
+              <a className={styles.secondaryAction} href="/setup-self-host.md">Open Markdown guide ↗</a>
             </div>
           </div>
 
@@ -164,7 +164,7 @@ export default function SetupPage() {
             {chapters.map((chapter) => <a href={`#chapter-${chapter.number}`} key={chapter.number}><span>{chapter.number}</span>{chapter.label}</a>)}
             <a href="#environment"><span>04</span>Environment</a>
             <a href="#verification"><span>05</span>Verification</a>
-            <PublicCopyButton className={styles.copyGuide} sourceUrl="/setup-self-host.md" label="Copy entire guide" copiedLabel="Guide copied" />
+            <a className={styles.copyGuide} href="/setup-self-host.md">Open Markdown guide ↗</a>
           </aside>
 
           <div className={styles.manualBody}>
@@ -204,7 +204,7 @@ export default function SetupPage() {
           <p>Plain text is part of the product.</p>
           <h2>Copy the manual into any agent and deploy together.</h2>
           <div className={styles.actions}>
-            <PublicCopyButton className={styles.closingPrimary} sourceUrl="/setup-self-host.md" label="Copy full guide" copiedLabel="Guide copied" />
+            <a className={styles.closingPrimary} href="/setup-self-host.md">Open Markdown guide</a>
             <Link className={styles.closingSecondary} href="/raycast">Set up Raycast ↗</Link>
           </div>
         </section>
