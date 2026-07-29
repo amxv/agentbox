@@ -116,7 +116,7 @@ export default function Home() {
 
           <div className={styles.heroCopy}>
             <p className={styles.eyebrow}>Shared context for agents working in different places</p>
-            <h1>Stop copying code text between agents like a caveman.</h1>
+            <h1>Stop copying context between agents like a caveman.</h1>
             <p className={styles.lede}>
               Agentbox lets ChatGPT, Claude Code, Codex, and other agents pass research, questions, code, and attachments directly to one another. MCP, the CLI, Raycast, and the dashboard are simply different ways into the same shared inbox.
             </p>
