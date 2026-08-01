@@ -126,7 +126,7 @@ func (r *Repository) SetThreadVisibility(ctx context.Context, userID string, thr
 select t.owner_user_id
 from threads t
 where `+normalThreadAccessPredicate+` and t.id = $2
-for update
+for update of t
 `, userID, threadID).Scan(&visibility.OwnerUserID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ThreadVisibility{}, types.ErrThreadNotFound
@@ -175,6 +175,268 @@ order by lower(t.name), lower(t.slug), t.id
 	}
 	defer rows.Close()
 	return scanTeams(rows)
+}
+
+func (r *Repository) GetThreadPublicLink(ctx context.Context, userID string, threadID string) (*types.ThreadPublicLink, error) {
+	link, err := scanThreadPublicLink(r.pool.QueryRow(ctx, `
+select
+  link.thread_id,
+  link.token_hash,
+  link.token_prefix,
+  link.created_by_user_id,
+  link.created_at,
+  link.updated_at,
+  link.revoked_at
+from threads t
+join thread_public_links link on link.thread_id = t.id
+where `+normalThreadAccessPredicate+`
+  and t.id = $2
+  and link.revoked_at is null
+`, userID, threadID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &link, nil
+}
+
+func (r *Repository) CreateThreadPublicLink(ctx context.Context, userID string, threadID string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.ThreadPublicLink{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var lockedThreadID string
+	if err := tx.QueryRow(ctx, `
+select t.id
+from threads t
+where `+normalThreadAccessPredicate+` and t.id = $2
+for update of t
+`, userID, threadID).Scan(&lockedThreadID); errors.Is(err, pgx.ErrNoRows) {
+		return types.ThreadPublicLink{}, types.ErrThreadNotFound
+	} else if err != nil {
+		return types.ThreadPublicLink{}, err
+	}
+
+	var activeExists bool
+	if err := tx.QueryRow(ctx, `
+select exists (
+  select 1
+  from thread_public_links
+  where thread_id = $1 and revoked_at is null
+)
+`, threadID).Scan(&activeExists); err != nil {
+		return types.ThreadPublicLink{}, err
+	}
+	if activeExists && !rotate {
+		return types.ThreadPublicLink{}, types.ErrThreadPublicLinkExists
+	}
+
+	link, err := scanThreadPublicLink(tx.QueryRow(ctx, `
+insert into thread_public_links (
+  thread_id, token_hash, token_prefix, created_by_user_id
+)
+values ($1, $2, $3, $4)
+on conflict (thread_id) do update
+set token_hash = excluded.token_hash,
+    token_prefix = excluded.token_prefix,
+    created_by_user_id = excluded.created_by_user_id,
+    updated_at = now(),
+    revoked_at = null
+returning
+  thread_id,
+  token_hash,
+  token_prefix,
+  created_by_user_id,
+  created_at,
+  updated_at,
+  revoked_at
+`, threadID, tokenHash, tokenPrefix, userID))
+	if err != nil {
+		return types.ThreadPublicLink{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.ThreadPublicLink{}, err
+	}
+	return link, nil
+}
+
+func (r *Repository) RevokeThreadPublicLink(ctx context.Context, userID string, threadID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var lockedThreadID string
+	if err := tx.QueryRow(ctx, `
+select t.id
+from threads t
+where `+normalThreadAccessPredicate+` and t.id = $2
+for update of t
+`, userID, threadID).Scan(&lockedThreadID); errors.Is(err, pgx.ErrNoRows) {
+		return false, types.ErrThreadNotFound
+	} else if err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `
+update thread_public_links
+set revoked_at = now(), updated_at = now()
+where thread_id = $1 and revoked_at is null
+`, threadID)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) GetThreadByPublicTokenHash(ctx context.Context, tokenHash string) (*types.ThreadWithMessages, error) {
+	thread, err := scanThread(r.pool.QueryRow(ctx, `
+select
+  t.id,
+  t.tenant_id,
+  t.owner_user_id,
+  t.title,
+  t.created_at,
+  t.updated_at,
+  t.created_by,
+  t.created_by_user_id,
+  t.created_by_key_id,
+  t.created_by_user_display_name,
+  t.created_by_actor_name
+from thread_public_links link
+join threads t on t.id = link.thread_id
+where link.token_hash = $1 and link.revoked_at is null
+`, tokenHash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	messages, err := r.loadThreadMessages(ctx, thread.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &types.ThreadWithMessages{
+		Thread:     thread,
+		Messages:   messages,
+		Visibility: types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID},
+	}, nil
+}
+
+func (r *Repository) GetAssetByPublicTokenHash(ctx context.Context, tokenHash string, assetID string) (*types.Asset, error) {
+	asset, err := scanAsset(r.pool.QueryRow(ctx, `
+select
+  a.id,
+  a.tenant_id,
+  a.message_id,
+  a.storage_key,
+  a.file_name,
+  a.mime_type,
+  a.size_bytes,
+  null::text as public_url,
+  a.created_at,
+  a.created_by,
+  a.created_by_user_id,
+  a.created_by_key_id,
+  a.created_by_user_display_name,
+  a.created_by_actor_name
+from thread_public_links link
+join messages m on m.thread_id = link.thread_id
+join assets a on a.message_id = m.id
+where link.token_hash = $1
+  and link.revoked_at is null
+  and a.id = $2
+`, tokenHash, assetID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &asset, nil
+}
+
+func (r *Repository) loadThreadMessages(ctx context.Context, threadID string) ([]types.Message, error) {
+	rows, err := r.pool.Query(ctx, `
+select
+  id,
+  tenant_id,
+  thread_id,
+  author,
+  body,
+  body_content_type,
+  created_at,
+  created_by_user_id,
+  created_by_key_id,
+  created_by_user_display_name,
+  created_by_actor_name
+from messages
+where thread_id = $1
+order by created_at, id
+`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []types.Message{}
+	messageIndex := map[string]int{}
+	for rows.Next() {
+		message, err := scanMessage(rows, nil)
+		if err != nil {
+			return nil, err
+		}
+		messageIndex[message.ID] = len(messages)
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	assetRows, err := r.pool.Query(ctx, `
+select
+  a.id,
+  a.tenant_id,
+  a.message_id,
+  a.storage_key,
+  a.file_name,
+  a.mime_type,
+  a.size_bytes,
+  null::text as public_url,
+  a.created_at,
+  a.created_by,
+  a.created_by_user_id,
+  a.created_by_key_id,
+  a.created_by_user_display_name,
+  a.created_by_actor_name
+from assets a
+join messages m on m.id = a.message_id
+where m.thread_id = $1
+order by a.created_at, a.id
+`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer assetRows.Close()
+	for assetRows.Next() {
+		asset, err := scanAsset(assetRows)
+		if err != nil {
+			return nil, err
+		}
+		if index, ok := messageIndex[asset.MessageID]; ok {
+			messages[index].Assets = append(messages[index].Assets, asset)
+		}
+	}
+	if err := assetRows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 func (r *Repository) ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error) {
@@ -2019,6 +2281,26 @@ func scanTeamMembership(row threadScanner) (types.TeamMembership, error) {
 	err := row.Scan(&membership.TeamID, &membership.UserID, &createdAt)
 	membership.CreatedAt = isoMillis(createdAt)
 	return membership, err
+}
+
+func scanThreadPublicLink(row threadScanner) (types.ThreadPublicLink, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	var revokedAt *time.Time
+	link := types.ThreadPublicLink{}
+	err := row.Scan(
+		&link.ThreadID,
+		&link.TokenHash,
+		&link.TokenPrefix,
+		&link.CreatedByUserID,
+		&createdAt,
+		&updatedAt,
+		&revokedAt,
+	)
+	link.CreatedAt = isoMillis(createdAt)
+	link.UpdatedAt = isoMillis(updatedAt)
+	link.RevokedAt = optionalISOTime(revokedAt)
+	return link, err
 }
 
 func hashSecret(value string) string {

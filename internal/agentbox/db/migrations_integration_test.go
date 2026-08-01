@@ -682,6 +682,225 @@ limit 50
 	}
 }
 
+func TestThreadPublicLinksAreSingleHashedRevocableAndIndexed(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "public-link-owner@example.com", "Public Link Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "public-link-member@example.com", "Public Link Member", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "public-link-outsider@example.com", "Public Link Outsider", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := repository.CreateTeam(ctx, "public-link-team", "Public Link Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AddTeamMember(ctx, team.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
+	thread, err := repository.CreateThread(ctx, owner.ID, "PostgreSQL public marker", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SetThreadVisibility(ctx, owner.ID, thread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	mimeType := "text/plain"
+	message, err := repository.PostMessage(ctx, owner.ID, thread.ID, ownerAuth, "PostgreSQL public body", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + owner.ID + "/" + thread.ID + "/postgres-public.txt",
+		FileName:   "postgres-public.txt",
+		MimeType:   &mimeType,
+		SizeBytes:  8,
+	}})
+	if err != nil || len(message.Assets) != 1 {
+		t.Fatalf("public-link fixture message=%#v err=%v", message, err)
+	}
+	otherThread, err := repository.CreateThread(ctx, owner.ID, "PostgreSQL other marker", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherMessage, err := repository.PostMessage(ctx, owner.ID, otherThread.ID, ownerAuth, "Other public body", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + owner.ID + "/" + otherThread.ID + "/postgres-other.txt",
+		FileName:   "postgres-other.txt",
+		MimeType:   &mimeType,
+		SizeBytes:  5,
+	}})
+	if err != nil || len(otherMessage.Assets) != 1 {
+		t.Fatalf("other public-link fixture message=%#v err=%v", otherMessage, err)
+	}
+
+	if link, err := repository.GetThreadPublicLink(ctx, member.ID, thread.ID); err != nil || link != nil {
+		t.Fatalf("initial public link=%#v err=%v", link, err)
+	}
+	firstToken := "agpub_postgres_first"
+	firstHash := hashSecret(firstToken)
+	created, err := repository.CreateThreadPublicLink(ctx, member.ID, thread.ID, firstHash, "agpub_postgr", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ThreadID != thread.ID || created.TokenHash != firstHash || created.CreatedByUserID == nil || *created.CreatedByUserID != member.ID || created.RevokedAt != nil {
+		t.Fatalf("created public link=%#v", created)
+	}
+	var rowCount int
+	var storedHash string
+	if err := repository.pool.QueryRow(ctx, `
+select count(*), max(token_hash)
+from thread_public_links
+where thread_id = $1
+`, thread.ID).Scan(&rowCount, &storedHash); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 1 || storedHash != firstHash || storedHash == firstToken {
+		t.Fatalf("stored public-link row count=%d hash=%q", rowCount, storedHash)
+	}
+	if _, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, hashSecret("duplicate"), "duplicate", false); !errors.Is(err, types.ErrThreadPublicLinkExists) {
+		t.Fatalf("duplicate public link error=%v", err)
+	}
+	if _, err := repository.CreateThreadPublicLink(ctx, outsider.ID, thread.ID, hashSecret("outsider"), "outsider", true); !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("outsider public link mutation error=%v", err)
+	}
+
+	publicThread, err := repository.GetThreadByPublicTokenHash(ctx, firstHash)
+	if err != nil || publicThread == nil || publicThread.ID != thread.ID || len(publicThread.Messages) != 1 || len(publicThread.Messages[0].Assets) != 1 {
+		t.Fatalf("public thread lookup=%#v err=%v", publicThread, err)
+	}
+	publicAsset, err := repository.GetAssetByPublicTokenHash(ctx, firstHash, message.Assets[0].ID)
+	if err != nil || publicAsset == nil || publicAsset.ID != message.Assets[0].ID || publicAsset.PublicURL != nil {
+		t.Fatalf("public asset lookup=%#v err=%v", publicAsset, err)
+	}
+	if asset, err := repository.GetAssetByPublicTokenHash(ctx, firstHash, otherMessage.Assets[0].ID); err != nil || asset != nil {
+		t.Fatalf("cross-thread public asset lookup=%#v err=%v", asset, err)
+	}
+
+	secondToken := "agpub_postgres_rotated"
+	secondHash := hashSecret(secondToken)
+	rotated, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, secondHash, "agpub_rotate", true)
+	if err != nil || rotated.ThreadID != thread.ID || rotated.TokenHash != secondHash || rotated.RevokedAt != nil {
+		t.Fatalf("rotated public link=%#v err=%v", rotated, err)
+	}
+	if oldThread, err := repository.GetThreadByPublicTokenHash(ctx, firstHash); err != nil || oldThread != nil {
+		t.Fatalf("old token remained active: thread=%#v err=%v", oldThread, err)
+	}
+	if newThread, err := repository.GetThreadByPublicTokenHash(ctx, secondHash); err != nil || newThread == nil || newThread.ID != thread.ID {
+		t.Fatalf("rotated token inactive: thread=%#v err=%v", newThread, err)
+	}
+	if err := repository.pool.QueryRow(ctx, `select count(*) from thread_public_links where thread_id = $1`, thread.ID).Scan(&rowCount); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("rotation created %d public-link rows", rowCount)
+	}
+
+	if revoked, err := repository.RevokeThreadPublicLink(ctx, member.ID, thread.ID); err != nil || !revoked {
+		t.Fatalf("revoke public link revoked=%t err=%v", revoked, err)
+	}
+	if revoked, err := repository.RevokeThreadPublicLink(ctx, member.ID, thread.ID); err != nil || revoked {
+		t.Fatalf("idempotent revoke revoked=%t err=%v", revoked, err)
+	}
+	if publicThread, err := repository.GetThreadByPublicTokenHash(ctx, secondHash); err != nil || publicThread != nil {
+		t.Fatalf("revoked public token active: thread=%#v err=%v", publicThread, err)
+	}
+	if publicAsset, err := repository.GetAssetByPublicTokenHash(ctx, secondHash, message.Assets[0].ID); err != nil || publicAsset != nil {
+		t.Fatalf("revoked public token resolved asset=%#v err=%v", publicAsset, err)
+	}
+	if link, err := repository.GetThreadPublicLink(ctx, owner.ID, thread.ID); err != nil || link != nil {
+		t.Fatalf("revoked active metadata=%#v err=%v", link, err)
+	}
+	thirdHash := hashSecret("agpub_postgres_recreated")
+	if _, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, thirdHash, "agpub_recre", false); err != nil {
+		t.Fatalf("recreate after revoke: %v", err)
+	}
+	if err := repository.pool.QueryRow(ctx, `select count(*) from thread_public_links where thread_id = $1`, thread.ID).Scan(&rowCount); err != nil {
+		t.Fatal(err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("recreate created %d public-link rows", rowCount)
+	}
+
+	concurrentThread, err := repository.CreateThread(ctx, owner.ID, "Concurrent public link", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type createResult struct {
+		link types.ThreadPublicLink
+		err  error
+	}
+	results := make(chan createResult, 2)
+	start := make(chan struct{})
+	for index := 0; index < 2; index++ {
+		index := index
+		go func() {
+			<-start
+			link, err := repository.CreateThreadPublicLink(context.Background(), owner.ID, concurrentThread.ID, hashSecret(fmt.Sprintf("concurrent-public-%d", index)), fmt.Sprintf("agpub_%d", index), false)
+			results <- createResult{link: link, err: err}
+		}()
+	}
+	close(start)
+	successes := 0
+	conflicts := 0
+	for index := 0; index < 2; index++ {
+		result := <-results
+		switch {
+		case result.err == nil:
+			successes++
+			if result.link.ThreadID != concurrentThread.ID {
+				t.Fatalf("concurrent public-link result=%#v", result.link)
+			}
+		case errors.Is(result.err, types.ErrThreadPublicLinkExists):
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent public-link error=%v", result.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent public-link successes=%d conflicts=%d", successes, conflicts)
+	}
+
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	planRows, err := tx.Query(ctx, `
+explain (format text)
+select t.id
+from thread_public_links link
+join threads t on t.id = link.thread_id
+where link.token_hash = $1 and link.revoked_at is null
+`, thirdHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planRows.Close()
+	plan := strings.Builder{}
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := planRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "thread_public_links_active_token_idx") && !strings.Contains(plan.String(), "thread_public_links_token_hash_unique") {
+		t.Fatalf("public token lookup plan missed indexes:\n%s", plan.String())
+	}
+}
+
 func TestCredentialMigrationRemovesTenantAndPlaintextSecretColumns(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

@@ -13,6 +13,7 @@ var ErrTeamNotFound = errors.New("team not found")
 var ErrTeamSlugConflict = errors.New("team slug is already in use")
 var ErrInvalidOnboardingConnector = errors.New("invalid onboarding connector")
 var ErrOnboardingCredentialExists = errors.New("onboarding credential already exists")
+var ErrThreadPublicLinkExists = errors.New("thread public link already exists")
 
 const DefaultTenantID = "ten_default"
 
@@ -173,6 +174,50 @@ type ThreadVisibility struct {
 	ThreadID    string `json:"thread_id"`
 	OwnerUserID string `json:"owner_user_id"`
 	SharedTeams []Team `json:"shared_teams"`
+}
+
+type ThreadPublicLink struct {
+	ThreadID        string  `json:"thread_id"`
+	TokenHash       string  `json:"-"`
+	TokenPrefix     string  `json:"token_prefix"`
+	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	UpdatedAt       string  `json:"updated_at"`
+	RevokedAt       *string `json:"revoked_at,omitempty"`
+}
+
+type PublicAsset struct {
+	ID                       string  `json:"id"`
+	FileName                 string  `json:"file_name"`
+	MimeType                 *string `json:"mime_type,omitempty"`
+	SizeBytes                int64   `json:"size_bytes"`
+	CreatedAt                string  `json:"created_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	DownloadPath             string  `json:"download_path"`
+}
+
+type PublicMessage struct {
+	ID                       string        `json:"id"`
+	Author                   string        `json:"author"`
+	Body                     string        `json:"body"`
+	BodyContentType          *string       `json:"body_content_type,omitempty"`
+	CreatedAt                string        `json:"created_at"`
+	CreatedByUserDisplayName *string       `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string       `json:"created_by_actor_name,omitempty"`
+	Assets                   []PublicAsset `json:"assets"`
+}
+
+type PublicThreadView struct {
+	ID                       string          `json:"id"`
+	Title                    string          `json:"title"`
+	CreatedAt                string          `json:"created_at"`
+	UpdatedAt                string          `json:"updated_at"`
+	CreatedBy                string          `json:"created_by"`
+	CreatedByUserDisplayName *string         `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string         `json:"created_by_actor_name,omitempty"`
+	Messages                 []PublicMessage `json:"messages"`
 }
 
 type Asset struct {

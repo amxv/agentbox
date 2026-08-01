@@ -29,6 +29,11 @@ type Repository interface {
 	ResolveThreadAccess(ctx context.Context, userID string, threadID string) (*types.ThreadAccess, error)
 	GetThreadVisibility(ctx context.Context, userID string, threadID string) (*types.ThreadVisibility, error)
 	SetThreadVisibility(ctx context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error)
+	GetThreadPublicLink(ctx context.Context, userID string, threadID string) (*types.ThreadPublicLink, error)
+	CreateThreadPublicLink(ctx context.Context, userID string, threadID string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error)
+	RevokeThreadPublicLink(ctx context.Context, userID string, threadID string) (bool, error)
+	GetThreadByPublicTokenHash(ctx context.Context, tokenHash string) (*types.ThreadWithMessages, error)
+	GetAssetByPublicTokenHash(ctx context.Context, tokenHash string, assetID string) (*types.Asset, error)
 	ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error)
 	SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
@@ -1195,6 +1200,54 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return "agb_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func generatePublicToken() (string, error) {
+	buffer := make([]byte, 32)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return "agpub_" + hex.EncodeToString(buffer), nil
+}
+
+func sanitizePublicThread(token string, thread types.ThreadWithMessages) types.PublicThreadView {
+	view := types.PublicThreadView{
+		ID:                       thread.ID,
+		Title:                    thread.Title,
+		CreatedAt:                thread.CreatedAt,
+		UpdatedAt:                thread.UpdatedAt,
+		CreatedBy:                thread.CreatedBy,
+		CreatedByUserDisplayName: thread.CreatedByUserDisplayName,
+		CreatedByActorName:       thread.CreatedByActorName,
+		Messages:                 make([]types.PublicMessage, 0, len(thread.Messages)),
+	}
+	for _, message := range thread.Messages {
+		publicMessage := types.PublicMessage{
+			ID:                       message.ID,
+			Author:                   message.Author,
+			Body:                     message.Body,
+			BodyContentType:          message.BodyContentType,
+			CreatedAt:                message.CreatedAt,
+			CreatedByUserDisplayName: message.CreatedByUserDisplayName,
+			CreatedByActorName:       message.CreatedByActorName,
+			Assets:                   make([]types.PublicAsset, 0, len(message.Assets)),
+		}
+		for _, asset := range message.Assets {
+			publicMessage.Assets = append(publicMessage.Assets, types.PublicAsset{
+				ID:                       asset.ID,
+				FileName:                 asset.FileName,
+				MimeType:                 asset.MimeType,
+				SizeBytes:                asset.SizeBytes,
+				CreatedAt:                asset.CreatedAt,
+				CreatedBy:                asset.CreatedBy,
+				CreatedByUserDisplayName: asset.CreatedByUserDisplayName,
+				CreatedByActorName:       asset.CreatedByActorName,
+				DownloadPath:             "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID) + "/download",
+			})
+		}
+		view.Messages = append(view.Messages, publicMessage)
+	}
+	return view
 }
 
 func defaultAPIKeyScopes() []string {

@@ -1503,6 +1503,181 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 	}
 }
 
+func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
+	ownerAuth := authContext(types.DefaultTenantID, "public-owner")
+	ownerAuth.UserID = "usr_http_public_owner"
+	ownerAuth.UserDisplayName = "HTTP Public Owner"
+	memberAuth := authContext(types.DefaultTenantID, "public-member")
+	memberAuth.UserID = "usr_http_public_member"
+	memberAuth.UserDisplayName = "HTTP Public Member"
+	outsiderAuth := authContext(types.DefaultTenantID, "public-outsider")
+	outsiderAuth.UserID = "usr_http_public_outsider"
+	outsiderAuth.UserDisplayName = "HTTP Public Outsider"
+	repo.Users = append(repo.Users,
+		types.User{ID: ownerAuth.UserID, TenantID: types.DefaultTenantID, Email: "http-public-owner@example.com", DisplayName: ownerAuth.UserDisplayName, Role: "member"},
+		types.User{ID: memberAuth.UserID, TenantID: types.DefaultTenantID, Email: "http-public-member@example.com", DisplayName: memberAuth.UserDisplayName, Role: "member"},
+		types.User{ID: outsiderAuth.UserID, TenantID: types.DefaultTenantID, Email: "http-public-outsider@example.com", DisplayName: outsiderAuth.UserDisplayName, Role: "member"},
+	)
+	team, err := repo.CreateTeam(t.Context(), "http-public-team", "HTTP Public Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddTeamMember(t.Context(), team.ID, memberAuth.UserID); err != nil {
+		t.Fatal(err)
+	}
+	ownerKey, err := svc.CreateAPIKey(t.Context(), ownerAuth, "public-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberKey, err := svc.CreateAPIKey(t.Context(), memberAuth, "public-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsiderKey, err := svc.CreateAPIKey(t.Context(), outsiderAuth, "public-outsider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := repo.CreateThread(t.Context(), ownerAuth.UserID, "HTTP public marker", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(t.Context(), ownerAuth.UserID, thread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	mimeType := "text/plain"
+	message, err := repo.PostMessage(t.Context(), ownerAuth.UserID, thread.ID, ownerAuth, "HTTP public body", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + ownerAuth.UserID + "/" + thread.ID + "/http-public.txt",
+		FileName:   "http-public.txt",
+		MimeType:   &mimeType,
+		SizeBytes:  7,
+	}})
+	if err != nil || len(message.Assets) != 1 {
+		t.Fatalf("public HTTP fixture message=%#v err=%v", message, err)
+	}
+	otherThread, err := repo.CreateThread(t.Context(), ownerAuth.UserID, "HTTP other marker", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherMessage, err := repo.PostMessage(t.Context(), ownerAuth.UserID, otherThread.ID, ownerAuth, "HTTP other body", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + ownerAuth.UserID + "/" + otherThread.ID + "/http-other.txt",
+		FileName:   "http-other.txt",
+		MimeType:   &mimeType,
+		SizeBytes:  5,
+	}})
+	if err != nil || len(otherMessage.Assets) != 1 {
+		t.Fatalf("other HTTP fixture message=%#v err=%v", otherMessage, err)
+	}
+
+	server := NewServer(config.Config{
+		SessionCookieName: config.DefaultSessionCookieName,
+		AppPublicURL:      "https://agentbox.example",
+	}, svc)
+	request := func(method string, path string, secret string, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if secret != "" {
+			req.Header.Set("authorization", "Bearer "+secret)
+		}
+		if body != "" {
+			req.Header.Set("content-type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, req)
+		return response
+	}
+
+	initial := request(http.MethodGet, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, "")
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"link":null`) || initial.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("initial public-link status=%d cache=%q body=%s", initial.Code, initial.Header().Get("Cache-Control"), initial.Body.String())
+	}
+	createdResponse := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, `{"rotate":false}`)
+	if createdResponse.Code != http.StatusCreated || createdResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("create public-link status=%d cache=%q body=%s", createdResponse.Code, createdResponse.Header().Get("Cache-Control"), createdResponse.Body.String())
+	}
+	var created struct {
+		Link      types.ThreadPublicLink `json:"link"`
+		Token     string                 `json:"token"`
+		PublicURL string                 `json:"public_url"`
+	}
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/public/"+created.Token || created.Link.TokenHash != "" {
+		t.Fatalf("created public HTTP payload=%#v body=%s", created, createdResponse.Body.String())
+	}
+	duplicate := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, `{"rotate":false}`)
+	if duplicate.Code != http.StatusConflict || !strings.Contains(duplicate.Body.String(), "PUBLIC_LINK_EXISTS") {
+		t.Fatalf("duplicate public-link status=%d body=%s", duplicate.Code, duplicate.Body.String())
+	}
+	metadata := request(http.MethodGet, "/api/threads/"+thread.ID+"/public-link", ownerKey.Key, "")
+	if metadata.Code != http.StatusOK || strings.Contains(metadata.Body.String(), created.Token) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
+		t.Fatalf("public-link metadata status=%d body=%s", metadata.Code, metadata.Body.String())
+	}
+
+	publicView := request(http.MethodGet, "/api/public/threads/"+created.Token, "", "")
+	if publicView.Code != http.StatusOK || publicView.Header().Get("Cache-Control") != "no-store" || !strings.Contains(publicView.Body.String(), "HTTP public marker") || !strings.Contains(publicView.Body.String(), message.Assets[0].ID) {
+		t.Fatalf("public view status=%d cache=%q body=%s", publicView.Code, publicView.Header().Get("Cache-Control"), publicView.Body.String())
+	}
+	for _, forbidden := range []string{"tenant_id", "owner_user_id", "created_by_user_id", "created_by_key_id", "storage_key", "token_hash"} {
+		if strings.Contains(publicView.Body.String(), forbidden) {
+			t.Fatalf("public HTTP payload leaked %q: %s", forbidden, publicView.Body.String())
+		}
+	}
+	publicWrite := request(http.MethodPost, "/api/public/threads/"+created.Token, "", `{"body":"blocked"}`)
+	if publicWrite.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("public link accepted write: status=%d body=%s", publicWrite.Code, publicWrite.Body.String())
+	}
+	publicDownload := request(http.MethodGet, "/api/public/threads/"+created.Token+"/assets/"+message.Assets[0].ID+"/download", "", "")
+	if publicDownload.Code != http.StatusOK || !strings.Contains(publicDownload.Body.String(), `"download_url"`) {
+		t.Fatalf("public download status=%d body=%s", publicDownload.Code, publicDownload.Body.String())
+	}
+	crossThreadDownload := request(http.MethodGet, "/api/public/threads/"+created.Token+"/assets/"+otherMessage.Assets[0].ID+"/download", "", "")
+	if crossThreadDownload.Code != http.StatusNotFound || !strings.Contains(crossThreadDownload.Body.String(), "PUBLIC_ASSET_NOT_FOUND") {
+		t.Fatalf("cross-thread public download status=%d body=%s", crossThreadDownload.Code, crossThreadDownload.Body.String())
+	}
+
+	outsiderRotate := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", outsiderKey.Key, `{"rotate":true}`)
+	if outsiderRotate.Code != http.StatusNotFound {
+		t.Fatalf("outsider rotated public link: status=%d body=%s", outsiderRotate.Code, outsiderRotate.Body.String())
+	}
+	rotatedResponse := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", ownerKey.Key, `{"rotate":true}`)
+	if rotatedResponse.Code != http.StatusCreated {
+		t.Fatalf("rotate public-link status=%d body=%s", rotatedResponse.Code, rotatedResponse.Body.String())
+	}
+	var rotated struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rotatedResponse.Body.Bytes(), &rotated); err != nil {
+		t.Fatal(err)
+	}
+	if rotated.Token == "" || rotated.Token == created.Token {
+		t.Fatalf("rotated public token=%#v", rotated)
+	}
+	oldView := request(http.MethodGet, "/api/public/threads/"+created.Token, "", "")
+	if oldView.Code != http.StatusNotFound {
+		t.Fatalf("old public URL remained active: status=%d body=%s", oldView.Code, oldView.Body.String())
+	}
+	newView := request(http.MethodGet, "/api/public/threads/"+rotated.Token, "", "")
+	if newView.Code != http.StatusOK {
+		t.Fatalf("rotated public URL inactive: status=%d body=%s", newView.Code, newView.Body.String())
+	}
+	revoke := request(http.MethodDelete, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, "")
+	if revoke.Code != http.StatusOK {
+		t.Fatalf("revoke public-link status=%d body=%s", revoke.Code, revoke.Body.String())
+	}
+	revokedView := request(http.MethodGet, "/api/public/threads/"+rotated.Token, "", "")
+	if revokedView.Code != http.StatusNotFound {
+		t.Fatalf("revoked public URL remained active: status=%d body=%s", revokedView.Code, revokedView.Body.String())
+	}
+	revokedDownload := request(http.MethodGet, "/api/public/threads/"+rotated.Token+"/assets/"+message.Assets[0].ID+"/download", "", "")
+	if revokedDownload.Code != http.StatusNotFound {
+		t.Fatalf("revoked public URL signed attachment: status=%d body=%s", revokedDownload.Code, revokedDownload.Body.String())
+	}
+}
+
 func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})

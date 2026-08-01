@@ -26,6 +26,7 @@ type MemoryRepository struct {
 	Teams             []types.Team
 	TeamMemberships   []types.TeamMembership
 	ThreadTeamShares  []types.ThreadTeamShare
+	ThreadPublicLinks []types.ThreadPublicLink
 	Onboarding        []types.OnboardingState
 }
 
@@ -122,6 +123,167 @@ func (m *MemoryRepository) SetThreadVisibility(_ context.Context, userID string,
 	}
 	m.ThreadTeamShares = kept
 	return types.ThreadVisibility{ThreadID: threadID, OwnerUserID: thread.OwnerUserID, SharedTeams: desiredTeams}, nil
+}
+
+func (m *MemoryRepository) GetThreadPublicLink(_ context.Context, userID string, threadID string) (*types.ThreadPublicLink, error) {
+	for _, thread := range m.Threads {
+		if thread.ID != threadID || m.normalThreadAccess(thread, userID) == nil {
+			continue
+		}
+		for _, link := range m.ThreadPublicLinks {
+			if link.ThreadID == threadID && link.RevokedAt == nil {
+				copyLink := link
+				return &copyLink, nil
+			}
+		}
+		return nil, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) CreateThreadPublicLink(_ context.Context, userID string, threadID string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
+	var accessible bool
+	for _, thread := range m.Threads {
+		if thread.ID == threadID && m.normalThreadAccess(thread, userID) != nil {
+			accessible = true
+			break
+		}
+	}
+	if !accessible {
+		return types.ThreadPublicLink{}, types.ErrThreadNotFound
+	}
+	for _, link := range m.ThreadPublicLinks {
+		if link.TokenHash == tokenHash && link.ThreadID != threadID {
+			return types.ThreadPublicLink{}, errors.New("public token hash already exists")
+		}
+	}
+	now := isoMillis(time.Now().UTC())
+	creator := userID
+	for index := range m.ThreadPublicLinks {
+		link := &m.ThreadPublicLinks[index]
+		if link.ThreadID != threadID {
+			continue
+		}
+		if link.RevokedAt == nil && !rotate {
+			return types.ThreadPublicLink{}, types.ErrThreadPublicLinkExists
+		}
+		link.TokenHash = tokenHash
+		link.TokenPrefix = tokenPrefix
+		link.CreatedByUserID = &creator
+		link.UpdatedAt = now
+		link.RevokedAt = nil
+		return *link, nil
+	}
+	link := types.ThreadPublicLink{
+		ThreadID:        threadID,
+		TokenHash:       tokenHash,
+		TokenPrefix:     tokenPrefix,
+		CreatedByUserID: &creator,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	m.ThreadPublicLinks = append(m.ThreadPublicLinks, link)
+	return link, nil
+}
+
+func (m *MemoryRepository) RevokeThreadPublicLink(_ context.Context, userID string, threadID string) (bool, error) {
+	var accessible bool
+	for _, thread := range m.Threads {
+		if thread.ID == threadID && m.normalThreadAccess(thread, userID) != nil {
+			accessible = true
+			break
+		}
+	}
+	if !accessible {
+		return false, types.ErrThreadNotFound
+	}
+	now := isoMillis(time.Now().UTC())
+	for index := range m.ThreadPublicLinks {
+		link := &m.ThreadPublicLinks[index]
+		if link.ThreadID == threadID && link.RevokedAt == nil {
+			link.RevokedAt = &now
+			link.UpdatedAt = now
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MemoryRepository) GetThreadByPublicTokenHash(_ context.Context, tokenHash string) (*types.ThreadWithMessages, error) {
+	threadID := ""
+	for _, link := range m.ThreadPublicLinks {
+		if link.TokenHash == tokenHash && link.RevokedAt == nil {
+			threadID = link.ThreadID
+			break
+		}
+	}
+	if threadID == "" {
+		return nil, nil
+	}
+	for _, thread := range m.Threads {
+		if thread.ID != threadID {
+			continue
+		}
+		messages := []types.Message{}
+		for _, message := range m.Messages {
+			if message.ThreadID != threadID {
+				continue
+			}
+			copyMessage := message
+			copyMessage.Assets = []types.Asset{}
+			for _, asset := range m.Assets {
+				if asset.MessageID == message.ID {
+					copyAsset := asset
+					copyAsset.PublicURL = nil
+					copyMessage.Assets = append(copyMessage.Assets, copyAsset)
+				}
+			}
+			messages = append(messages, copyMessage)
+		}
+		sort.SliceStable(messages, func(i, j int) bool {
+			if messages[i].CreatedAt != messages[j].CreatedAt {
+				return messages[i].CreatedAt < messages[j].CreatedAt
+			}
+			return messages[i].ID < messages[j].ID
+		})
+		return &types.ThreadWithMessages{
+			Thread:     thread,
+			Messages:   messages,
+			Visibility: types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID},
+		}, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) GetAssetByPublicTokenHash(_ context.Context, tokenHash string, assetID string) (*types.Asset, error) {
+	threadID := ""
+	for _, link := range m.ThreadPublicLinks {
+		if link.TokenHash == tokenHash && link.RevokedAt == nil {
+			threadID = link.ThreadID
+			break
+		}
+	}
+	if threadID == "" {
+		return nil, nil
+	}
+	messageIDs := map[string]struct{}{}
+	for _, message := range m.Messages {
+		if message.ThreadID == threadID {
+			messageIDs[message.ID] = struct{}{}
+		}
+	}
+	for _, asset := range m.Assets {
+		if asset.ID != assetID {
+			continue
+		}
+		if _, ok := messageIDs[asset.MessageID]; !ok {
+			return nil, nil
+		}
+		copyAsset := asset
+		copyAsset.PublicURL = nil
+		return &copyAsset, nil
+	}
+	return nil, nil
 }
 
 func (m *MemoryRepository) threadVisibility(thread types.Thread) types.ThreadVisibility {
