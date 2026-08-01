@@ -16,6 +16,7 @@ import (
 	migrationfiles "agentbox/migrations"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -616,19 +617,51 @@ func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	invitationSecret := "aginv_transactional"
-	invitation, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(invitationSecret), time.Now().UTC().Add(time.Hour))
+	engineering, err := repository.CreateTeam(ctx, "engineering", "Engineering")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if invitation.CreatedByUserID != owner.ID {
+	operations, err := repository.CreateTeam(ctx, "operations", "Operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateTeam(ctx, "ENGINEERING", "Duplicate"); !errors.Is(err, types.ErrTeamSlugConflict) {
+		t.Fatalf("duplicate team slug error=%v", err)
+	}
+
+	invitationSecret := "aginv_transactional"
+	invitation, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(invitationSecret), time.Now().UTC().Add(time.Hour), []string{engineering.ID, operations.ID, engineering.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitation.CreatedByUserID != owner.ID || len(invitation.Teams) != 2 {
 		t.Fatalf("unexpected invitation=%#v", invitation)
+	}
+	if _, err := repository.pool.Exec(ctx, `delete from teams where id = $1`, engineering.ID); err == nil {
+		t.Fatal("team referenced by an active invitation was deleted")
+	} else {
+		var postgresError *pgconn.PgError
+		if !errors.As(err, &postgresError) || postgresError.Code != "23503" {
+			t.Fatalf("active-invitation team deletion error=%v", err)
+		}
 	}
 	if _, _, _, err := repository.RegisterWithSignupInvitation(ctx, hashSecret(invitationSecret), "EXISTING@example.com", "Duplicate", "password-hash", "session-duplicate", time.Now().UTC().Add(time.Hour)); !errors.Is(err, types.ErrEmailAlreadyRegistered) {
 		t.Fatalf("duplicate registration error=%v", err)
 	}
 	if active, err := repository.FindSignupInvitation(ctx, hashSecret(invitationSecret)); err != nil || active == nil {
 		t.Fatalf("duplicate registration consumed invitation: active=%#v err=%v", active, err)
+	}
+	var existingMemberships int
+	if err := repository.pool.QueryRow(ctx, `
+select count(*)
+from team_memberships tm
+join users u on u.id = tm.user_id
+where lower(u.email) = lower('existing@example.com')
+`).Scan(&existingMemberships); err != nil {
+		t.Fatal(err)
+	}
+	if existingMemberships != 0 {
+		t.Fatalf("failed duplicate registration created memberships=%d", existingMemberships)
 	}
 
 	memberSessionHash := "member-session-hash"
@@ -638,6 +671,41 @@ func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
 	}
 	if member.IsOwner || member.Role != "member" || session.UserID != member.ID || consumed.ConsumedAt == nil || consumed.ConsumedByUserID == nil || *consumed.ConsumedByUserID != member.ID {
 		t.Fatalf("unexpected registration member=%#v session=%#v invitation=%#v", member, session, consumed)
+	}
+	memberTeams, err := repository.ListUserTeams(ctx, member.ID)
+	if err != nil || len(memberTeams) != 2 || memberTeams[0].ID != engineering.ID || memberTeams[1].ID != operations.ID {
+		t.Fatalf("transactional invitation memberships=%#v err=%v", memberTeams, err)
+	}
+	if _, err := repository.AddTeamMember(ctx, engineering.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	firstOwnerMembership, err := repository.AddTeamMember(ctx, engineering.ID, owner.ID)
+	if err != nil {
+		t.Fatalf("duplicate membership add failed: %v", err)
+	}
+	if firstOwnerMembership.TeamID != engineering.ID || firstOwnerMembership.UserID != owner.ID {
+		t.Fatalf("duplicate membership result=%#v", firstOwnerMembership)
+	}
+	renamedEngineering, err := repository.RenameTeam(ctx, engineering.ID, "Product Engineering")
+	if err != nil || renamedEngineering.Slug != engineering.Slug || renamedEngineering.Name != "Product Engineering" {
+		t.Fatalf("rename team=%#v err=%v", renamedEngineering, err)
+	}
+	if removed, err := repository.RemoveTeamMember(ctx, operations.ID, member.ID); err != nil || !removed {
+		t.Fatalf("remove membership removed=%t err=%v", removed, err)
+	}
+	if removed, err := repository.RemoveTeamMember(ctx, operations.ID, member.ID); err != nil || removed {
+		t.Fatalf("idempotent remove removed=%t err=%v", removed, err)
+	}
+	memberTeams, err = repository.ListUserTeams(ctx, member.ID)
+	if err != nil || len(memberTeams) != 1 || memberTeams[0].ID != engineering.ID {
+		t.Fatalf("membership removal teams=%#v err=%v", memberTeams, err)
+	}
+	ownerThread, err := repository.CreateThread(ctx, owner.ID, "membership does not share", types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, ActorName: "Web dashboard"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, ownerThread.ID); err != nil || access != nil {
+		t.Fatalf("team membership changed private thread access: access=%#v err=%v", access, err)
 	}
 	if active, err := repository.FindSignupInvitation(ctx, hashSecret(invitationSecret)); err != nil || active != nil {
 		t.Fatalf("consumed invitation remained active: active=%#v err=%v", active, err)
@@ -680,7 +748,7 @@ func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
 	}
 
 	concurrentSecret := "aginv_concurrent"
-	if _, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(concurrentSecret), time.Now().UTC().Add(time.Hour)); err != nil {
+	if _, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(concurrentSecret), time.Now().UTC().Add(time.Hour), []string{engineering.ID}); err != nil {
 		t.Fatal(err)
 	}
 	type registrationResult struct {
@@ -710,12 +778,14 @@ func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
 	close(results)
 	successes := 0
 	invalids := 0
+	successfulUserID := ""
 	for result := range results {
 		if result.err == nil {
 			successes++
 			if result.user.ID == "" {
 				t.Fatal("successful concurrent registration had empty user ID")
 			}
+			successfulUserID = result.user.ID
 		} else if errors.Is(result.err, types.ErrSignupInvitationInvalid) {
 			invalids++
 		} else {
@@ -724,6 +794,56 @@ func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
 	}
 	if successes != 1 || invalids != 1 {
 		t.Fatalf("concurrent registration results: successes=%d invalids=%d", successes, invalids)
+	}
+	if teams, err := repository.ListUserTeams(ctx, successfulUserID); err != nil || len(teams) != 1 || teams[0].ID != engineering.ID {
+		t.Fatalf("concurrent winner memberships=%#v err=%v", teams, err)
+	}
+
+	zeroSecret := "aginv_zero_team"
+	if _, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(zeroSecret), time.Now().UTC().Add(time.Hour), nil); err != nil {
+		t.Fatal(err)
+	}
+	zeroUser, _, _, err := repository.RegisterWithSignupInvitation(ctx, hashSecret(zeroSecret), "zero@example.com", "Zero", "hash", "zero-session", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if teams, err := repository.ListUserTeams(ctx, zeroUser.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("zero-team registration teams=%#v err=%v", teams, err)
+	}
+
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	planRows, err := tx.Query(ctx, `
+explain (format text)
+select t.id
+from team_memberships tm
+join teams t on t.id = tm.team_id
+where tm.user_id = $1
+`, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planRows.Close()
+	plan := strings.Builder{}
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := planRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "team_memberships_user_team_idx") {
+		t.Fatalf("team list plan did not use membership index:\n%s", plan.String())
 	}
 }
 

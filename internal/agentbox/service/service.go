@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,14 +54,23 @@ type Repository interface {
 	ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error)
 	CreateOwnerSetupToken(ctx context.Context, tokenHash string, expiresAt time.Time) (types.OwnerSetupToken, error)
 	UseOwnerSetupToken(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error)
-	CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error)
+	CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time, teamIDs []string) (types.SignupInvitation, error)
 	ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error)
 	RevokeSignupInvitation(ctx context.Context, invitationID string) (bool, error)
 	FindSignupInvitation(ctx context.Context, tokenHash string) (*types.SignupInvitation, error)
 	RegisterWithSignupInvitation(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string, sessionSecretHash string, sessionExpiresAt time.Time) (types.User, types.UserSession, types.SignupInvitation, error)
 	ListUsers(ctx context.Context) ([]types.User, error)
 	SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error)
+	CreateTeam(ctx context.Context, slug string, name string) (types.Team, error)
+	RenameTeam(ctx context.Context, teamID string, name string) (types.Team, error)
+	ListTeams(ctx context.Context) ([]types.Team, error)
+	ListUserTeams(ctx context.Context, userID string) ([]types.Team, error)
+	ListTeamMembers(ctx context.Context, teamID string) ([]types.User, error)
+	AddTeamMember(ctx context.Context, teamID string, userID string) (types.TeamMembership, error)
+	RemoveTeamMember(ctx context.Context, teamID string, userID string) (bool, error)
 }
+
+var teamSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 type Service struct {
 	repo   Repository
@@ -553,7 +563,7 @@ func (s *Service) CompleteOwnerSetup(ctx context.Context, token string, email st
 	return authContext, sessionSecret, owner, nil
 }
 
-func (s *Service) CreateSignupInvitation(ctx context.Context, authContext types.AuthContext, ttl time.Duration) (SignupInvitationTokenResult, error) {
+func (s *Service) CreateSignupInvitation(ctx context.Context, authContext types.AuthContext, ttl time.Duration, requestedTeamIDs ...string) (SignupInvitationTokenResult, error) {
 	if err := requireOwnerBrowser(authContext); err != nil {
 		return SignupInvitationTokenResult{}, err
 	}
@@ -564,7 +574,11 @@ func (s *Service) CreateSignupInvitation(ctx context.Context, authContext types.
 	if err != nil {
 		return SignupInvitationTokenResult{}, err
 	}
-	invitation, err := s.repo.CreateSignupInvitation(ctx, authContext.UserID, hashSecret(secret), time.Now().UTC().Add(ttl))
+	teamIDs := uniqueTrimmedStrings(requestedTeamIDs)
+	invitation, err := s.repo.CreateSignupInvitation(ctx, authContext.UserID, hashSecret(secret), time.Now().UTC().Add(ttl), teamIDs)
+	if errors.Is(err, types.ErrTeamNotFound) {
+		return SignupInvitationTokenResult{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "One or more selected teams no longer exist.", Err: err}
+	}
 	if err != nil {
 		return SignupInvitationTokenResult{}, err
 	}
@@ -679,6 +693,117 @@ func (s *Service) SetUserDisabled(ctx context.Context, authContext types.AuthCon
 		return types.User{}, err
 	}
 	return user, nil
+}
+
+func (s *Service) CreateTeam(ctx context.Context, authContext types.AuthContext, slug string, name string) (types.Team, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.Team{}, err
+	}
+	slug, err := normalizeTeamSlug(slug)
+	if err != nil {
+		return types.Team{}, err
+	}
+	name, err = normalizeTeamName(name)
+	if err != nil {
+		return types.Team{}, err
+	}
+	team, err := s.repo.CreateTeam(ctx, slug, name)
+	if errors.Is(err, types.ErrTeamSlugConflict) {
+		return types.Team{}, CodedError{Code: "TEAM_SLUG_CONFLICT", Message: "That team slug is already in use.", Err: err}
+	}
+	if err != nil {
+		return types.Team{}, err
+	}
+	return team, nil
+}
+
+func (s *Service) RenameTeam(ctx context.Context, authContext types.AuthContext, teamID string, name string) (types.Team, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.Team{}, err
+	}
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" {
+		return types.Team{}, CodedError{Code: "INVALID_ARGUMENT", Message: "team_id is required."}
+	}
+	name, err := normalizeTeamName(name)
+	if err != nil {
+		return types.Team{}, err
+	}
+	team, err := s.repo.RenameTeam(ctx, teamID, name)
+	if errors.Is(err, types.ErrTeamNotFound) {
+		return types.Team{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "Team not found.", Err: err}
+	}
+	if err != nil {
+		return types.Team{}, err
+	}
+	return team, nil
+}
+
+func (s *Service) ListOwnerTeams(ctx context.Context, authContext types.AuthContext) ([]types.TeamWithMembers, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return nil, err
+	}
+	teams, err := s.repo.ListTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]types.TeamWithMembers, 0, len(teams))
+	for _, team := range teams {
+		members, err := s.repo.ListTeamMembers(ctx, team.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, types.TeamWithMembers{Team: team, Members: members})
+	}
+	return result, nil
+}
+
+func (s *Service) ListMyTeams(ctx context.Context, authContext types.AuthContext) ([]types.Team, error) {
+	if err := requireUserAuthContext(authContext); err != nil {
+		return nil, err
+	}
+	return s.repo.ListUserTeams(ctx, authContext.UserID)
+}
+
+func (s *Service) AddTeamMember(ctx context.Context, authContext types.AuthContext, teamID string, userID string) (types.TeamMembership, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.TeamMembership{}, err
+	}
+	teamID = strings.TrimSpace(teamID)
+	userID = strings.TrimSpace(userID)
+	if teamID == "" || userID == "" {
+		return types.TeamMembership{}, CodedError{Code: "INVALID_ARGUMENT", Message: "team_id and user_id are required."}
+	}
+	membership, err := s.repo.AddTeamMember(ctx, teamID, userID)
+	if errors.Is(err, types.ErrTeamNotFound) {
+		return types.TeamMembership{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "Team not found.", Err: err}
+	}
+	if errors.Is(err, types.ErrUserNotFound) {
+		return types.TeamMembership{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: err}
+	}
+	if err != nil {
+		return types.TeamMembership{}, err
+	}
+	return membership, nil
+}
+
+func (s *Service) RemoveTeamMember(ctx context.Context, authContext types.AuthContext, teamID string, userID string) error {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return err
+	}
+	teamID = strings.TrimSpace(teamID)
+	userID = strings.TrimSpace(userID)
+	if teamID == "" || userID == "" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "team_id and user_id are required."}
+	}
+	_, err := s.repo.RemoveTeamMember(ctx, teamID, userID)
+	if errors.Is(err, types.ErrTeamNotFound) {
+		return CodedError{Code: "TEAM_NOT_FOUND", Message: "Team not found.", Err: err}
+	}
+	if errors.Is(err, types.ErrUserNotFound) {
+		return CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: err}
+	}
+	return err
 }
 
 func (s *Service) ProvisionUser(ctx context.Context, params ProvisionUserParams) (types.User, string, error) {
@@ -1086,6 +1211,48 @@ func normalizeTenantSlug(value string) (string, error) {
 		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "tenant_slug may contain only lowercase letters, numbers, hyphens, and underscores."}
 	}
 	return value, nil
+}
+
+func normalizeTeamSlug(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "team slug is required."}
+	}
+	if len(value) > 63 {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "team slug must be at most 63 characters."}
+	}
+	if !teamSlugPattern.MatchString(value) {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "team slug may contain lowercase letters, numbers, and single hyphens between words."}
+	}
+	return value, nil
+}
+
+func normalizeTeamName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "team name is required."}
+	}
+	if len(value) > 120 {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "team name must be at most 120 characters."}
+	}
+	return value, nil
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func tenantIDForSlug(slug string) string {

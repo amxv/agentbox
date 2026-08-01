@@ -49,6 +49,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
 	s.mux.HandleFunc("/api/me", s.authMe)
+	s.mux.HandleFunc("/api/me/teams", s.myTeams)
 	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
 	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
@@ -58,6 +59,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/owner/invitations/", s.ownerInvitation)
 	s.mux.HandleFunc("/api/owner/users", s.ownerUsers)
 	s.mux.HandleFunc("/api/owner/users/", s.ownerUserAction)
+	s.mux.HandleFunc("/api/owner/teams", s.ownerTeams)
+	s.mux.HandleFunc("/api/owner/teams/", s.ownerTeam)
 	s.mux.HandleFunc("/api/keys", s.keys)
 	s.mux.HandleFunc("/api/keys/", s.key)
 	s.mux.HandleFunc("/api/threads", s.threads)
@@ -83,7 +86,8 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"invitations": invitations})
 	case http.MethodPost:
 		var input struct {
-			ExpiresInMinutes int `json:"expires_in_minutes"`
+			ExpiresInMinutes int      `json:"expires_in_minutes"`
+			TeamIDs          []string `json:"team_ids"`
 		}
 		if r.Body != nil && r.ContentLength != 0 {
 			if err := parseJSON(r, &input); err != nil {
@@ -95,7 +99,7 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "expires_in_minutes must not be negative.")
 			return
 		}
-		result, err := s.service.CreateSignupInvitation(r.Context(), *authContext, time.Duration(input.ExpiresInMinutes)*time.Minute)
+		result, err := s.service.CreateSignupInvitation(r.Context(), *authContext, time.Duration(input.ExpiresInMinutes)*time.Minute, input.TeamIDs...)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -148,6 +152,122 @@ func (s *Server) ownerUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+func (s *Server) ownerTeams(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		teams, err := s.service.ListOwnerTeams(r.Context(), *authContext)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"teams": teams})
+	case http.MethodPost:
+		var input struct {
+			Slug string `json:"slug"`
+			Name string `json:"name"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		team, err := s.service.CreateTeam(r.Context(), *authContext, input.Slug, input.Name)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"team": team})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) ownerTeam(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/teams/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 1 && parts[0] != "" {
+		if !method(w, r, http.MethodPatch) {
+			return
+		}
+		var input struct {
+			Name string `json:"name"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		team, err := s.service.RenameTeam(r.Context(), *authContext, parts[0], input.Name)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"team": team})
+		return
+	}
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "members" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		teams, err := s.service.ListOwnerTeams(r.Context(), *authContext)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		for _, team := range teams {
+			if team.ID == parts[0] {
+				writeJSON(w, http.StatusOK, map[string]any{"team": team.Team, "members": team.Members})
+				return
+			}
+		}
+		writeCodedError(w, http.StatusNotFound, "TEAM_NOT_FOUND", "Team not found.")
+		return
+	}
+	if len(parts) == 3 && parts[0] != "" && parts[1] == "members" && parts[2] != "" {
+		switch r.Method {
+		case http.MethodPut:
+			membership, err := s.service.AddTeamMember(r.Context(), *authContext, parts[0], parts[2])
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"membership": membership})
+		case http.MethodDelete:
+			if err := s.service.RemoveTeamMember(r.Context(), *authContext, parts[0], parts[2]); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"removed": true})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) myTeams(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	teams, err := s.service.ListMyTeams(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"teams": teams})
 }
 
 func (s *Server) ownerUserAction(w http.ResponseWriter, r *http.Request) {
@@ -1018,11 +1138,13 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		code = coded.Code
 		message = coded.Message
 		switch coded.Code {
-		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND":
+		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND":
 			status = http.StatusNotFound
 		case "PERMISSION_DENIED":
 			status = http.StatusForbidden
 		case "OWNER_EMAIL_MISMATCH":
+			status = http.StatusConflict
+		case "TEAM_SLUG_CONFLICT":
 			status = http.StatusConflict
 		case "RATE_LIMITED":
 			status = http.StatusTooManyRequests

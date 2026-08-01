@@ -23,6 +23,8 @@ type MemoryRepository struct {
 	CLICodes          []types.CLILoginCode
 	OwnerSetupTokens  []memoryOwnerSetupToken
 	SignupInvitations []memorySignupInvitation
+	Teams             []types.Team
+	TeamMemberships   []types.TeamMembership
 }
 
 type memoryOwnerSetupToken struct {
@@ -33,6 +35,7 @@ type memoryOwnerSetupToken struct {
 type memorySignupInvitation struct {
 	Invitation types.SignupInvitation
 	TokenHash  string
+	TeamIDs    []string
 }
 
 func (m *MemoryRepository) ResolveThreadAccess(_ context.Context, userID string, threadID string) (*types.ThreadAccess, error) {
@@ -640,9 +643,24 @@ func (m *MemoryRepository) assignLegacyThreadsToOwner(ownerUserID string) {
 	}
 }
 
-func (m *MemoryRepository) CreateSignupInvitation(_ context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error) {
+func (m *MemoryRepository) CreateSignupInvitation(_ context.Context, createdByUserID string, tokenHash string, expiresAt time.Time, teamIDs []string) (types.SignupInvitation, error) {
 	if strings.TrimSpace(createdByUserID) == "" || strings.TrimSpace(tokenHash) == "" || !expiresAt.After(time.Now().UTC()) {
 		return types.SignupInvitation{}, errors.New("invitation creator, token hash, and future expiry are required")
+	}
+	teamIDs = uniqueNonEmptyStrings(teamIDs)
+	teams := make([]types.Team, 0, len(teamIDs))
+	for _, teamID := range teamIDs {
+		found := false
+		for _, team := range m.Teams {
+			if team.ID == teamID {
+				teams = append(teams, team)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return types.SignupInvitation{}, types.ErrTeamNotFound
+		}
 	}
 	now := isoMillis(time.Now().UTC())
 	invitation := types.SignupInvitation{
@@ -650,15 +668,20 @@ func (m *MemoryRepository) CreateSignupInvitation(_ context.Context, createdByUs
 		CreatedByUserID: createdByUserID,
 		CreatedAt:       now,
 		ExpiresAt:       isoMillis(expiresAt),
+		Teams:           teams,
 	}
-	m.SignupInvitations = append(m.SignupInvitations, memorySignupInvitation{Invitation: invitation, TokenHash: tokenHash})
+	m.SignupInvitations = append(m.SignupInvitations, memorySignupInvitation{Invitation: invitation, TokenHash: tokenHash, TeamIDs: teamIDs})
 	return invitation, nil
 }
 
 func (m *MemoryRepository) ListSignupInvitations(context.Context) ([]types.SignupInvitation, error) {
 	invitations := make([]types.SignupInvitation, 0, len(m.SignupInvitations))
 	for index := len(m.SignupInvitations) - 1; index >= 0; index-- {
-		invitations = append(invitations, m.SignupInvitations[index].Invitation)
+		invitation, err := m.hydrateSignupInvitation(m.SignupInvitations[index])
+		if err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, invitation)
 	}
 	return invitations, nil
 }
@@ -682,7 +705,10 @@ func (m *MemoryRepository) FindSignupInvitation(_ context.Context, tokenHash str
 		if err != nil || entry.TokenHash != tokenHash || entry.Invitation.ConsumedAt != nil || entry.Invitation.RevokedAt != nil || !expiresAt.After(now) {
 			continue
 		}
-		invitation := entry.Invitation
+		invitation, err := m.hydrateSignupInvitation(entry)
+		if err != nil {
+			return nil, err
+		}
 		return &invitation, nil
 	}
 	return nil, nil
@@ -709,6 +735,10 @@ func (m *MemoryRepository) RegisterWithSignupInvitation(_ context.Context, token
 		}
 	}
 	nowValue := isoMillis(now)
+	invitationValue, err := m.hydrateSignupInvitation(m.SignupInvitations[invitationIndex])
+	if err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
 	user := types.User{
 		ID:           "usr_" + uuid.NewString(),
 		TenantID:     types.DefaultTenantID,
@@ -718,6 +748,10 @@ func (m *MemoryRepository) RegisterWithSignupInvitation(_ context.Context, token
 		Role:         "member",
 		CreatedAt:    nowValue,
 		UpdatedAt:    nowValue,
+	}
+	memberships := make([]types.TeamMembership, 0, len(invitationValue.Teams))
+	for _, team := range invitationValue.Teams {
+		memberships = append(memberships, types.TeamMembership{TeamID: team.ID, UserID: user.ID, CreatedAt: nowValue})
 	}
 	session := types.UserSession{
 		ID:         "sess_" + uuid.NewString(),
@@ -730,9 +764,200 @@ func (m *MemoryRepository) RegisterWithSignupInvitation(_ context.Context, token
 	invitation := &m.SignupInvitations[invitationIndex].Invitation
 	invitation.ConsumedAt = &consumedAt
 	invitation.ConsumedByUserID = &user.ID
+	invitation.Teams = invitationValue.Teams
 	m.Users = append(m.Users, user)
 	m.Sessions = append(m.Sessions, session)
+	m.TeamMemberships = append(m.TeamMemberships, memberships...)
 	return user, session, *invitation, nil
+}
+
+func (m *MemoryRepository) hydrateSignupInvitation(entry memorySignupInvitation) (types.SignupInvitation, error) {
+	invitation := entry.Invitation
+	invitation.Teams = make([]types.Team, 0, len(entry.TeamIDs))
+	for _, teamID := range entry.TeamIDs {
+		found := false
+		for _, team := range m.Teams {
+			if team.ID == teamID {
+				invitation.Teams = append(invitation.Teams, team)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return types.SignupInvitation{}, types.ErrTeamNotFound
+		}
+	}
+	sort.SliceStable(invitation.Teams, func(i, j int) bool {
+		if !strings.EqualFold(invitation.Teams[i].Name, invitation.Teams[j].Name) {
+			return strings.ToLower(invitation.Teams[i].Name) < strings.ToLower(invitation.Teams[j].Name)
+		}
+		return invitation.Teams[i].ID < invitation.Teams[j].ID
+	})
+	return invitation, nil
+}
+
+func (m *MemoryRepository) CreateTeam(_ context.Context, slug string, name string) (types.Team, error) {
+	slug = strings.TrimSpace(slug)
+	name = strings.TrimSpace(name)
+	for _, team := range m.Teams {
+		if strings.EqualFold(team.Slug, slug) {
+			return types.Team{}, types.ErrTeamSlugConflict
+		}
+	}
+	now := isoMillis(time.Now().UTC())
+	team := types.Team{ID: "team_" + uuid.NewString(), Slug: slug, Name: name, CreatedAt: now, UpdatedAt: now}
+	m.Teams = append(m.Teams, team)
+	return team, nil
+}
+
+func (m *MemoryRepository) RenameTeam(_ context.Context, teamID string, name string) (types.Team, error) {
+	teamID = strings.TrimSpace(teamID)
+	for index := range m.Teams {
+		if m.Teams[index].ID != teamID {
+			continue
+		}
+		m.Teams[index].Name = strings.TrimSpace(name)
+		m.Teams[index].UpdatedAt = isoMillis(time.Now().UTC())
+		return m.Teams[index], nil
+	}
+	return types.Team{}, types.ErrTeamNotFound
+}
+
+func (m *MemoryRepository) ListTeams(context.Context) ([]types.Team, error) {
+	teams := append([]types.Team(nil), m.Teams...)
+	sort.SliceStable(teams, func(i, j int) bool {
+		if !strings.EqualFold(teams[i].Name, teams[j].Name) {
+			return strings.ToLower(teams[i].Name) < strings.ToLower(teams[j].Name)
+		}
+		if !strings.EqualFold(teams[i].Slug, teams[j].Slug) {
+			return strings.ToLower(teams[i].Slug) < strings.ToLower(teams[j].Slug)
+		}
+		return teams[i].ID < teams[j].ID
+	})
+	return teams, nil
+}
+
+func (m *MemoryRepository) ListUserTeams(_ context.Context, userID string) ([]types.Team, error) {
+	wanted := map[string]struct{}{}
+	for _, membership := range m.TeamMemberships {
+		if membership.UserID == strings.TrimSpace(userID) {
+			wanted[membership.TeamID] = struct{}{}
+		}
+	}
+	teams := []types.Team{}
+	for _, team := range m.Teams {
+		if _, exists := wanted[team.ID]; exists {
+			teams = append(teams, team)
+		}
+	}
+	sort.SliceStable(teams, func(i, j int) bool {
+		if !strings.EqualFold(teams[i].Name, teams[j].Name) {
+			return strings.ToLower(teams[i].Name) < strings.ToLower(teams[j].Name)
+		}
+		return teams[i].ID < teams[j].ID
+	})
+	return teams, nil
+}
+
+func (m *MemoryRepository) ListTeamMembers(_ context.Context, teamID string) ([]types.User, error) {
+	teamID = strings.TrimSpace(teamID)
+	teamFound := false
+	for _, team := range m.Teams {
+		if team.ID == teamID {
+			teamFound = true
+			break
+		}
+	}
+	if !teamFound {
+		return nil, types.ErrTeamNotFound
+	}
+	wanted := map[string]struct{}{}
+	for _, membership := range m.TeamMemberships {
+		if membership.TeamID == teamID {
+			wanted[membership.UserID] = struct{}{}
+		}
+	}
+	users := []types.User{}
+	for _, user := range m.Users {
+		if _, exists := wanted[user.ID]; exists {
+			users = append(users, user)
+		}
+	}
+	sort.SliceStable(users, func(i, j int) bool {
+		if users[i].IsOwner != users[j].IsOwner {
+			return users[i].IsOwner
+		}
+		if !strings.EqualFold(users[i].DisplayName, users[j].DisplayName) {
+			return strings.ToLower(users[i].DisplayName) < strings.ToLower(users[j].DisplayName)
+		}
+		return users[i].ID < users[j].ID
+	})
+	return users, nil
+}
+
+func (m *MemoryRepository) AddTeamMember(_ context.Context, teamID string, userID string) (types.TeamMembership, error) {
+	teamID = strings.TrimSpace(teamID)
+	userID = strings.TrimSpace(userID)
+	teamFound := false
+	for _, team := range m.Teams {
+		if team.ID == teamID {
+			teamFound = true
+			break
+		}
+	}
+	if !teamFound {
+		return types.TeamMembership{}, types.ErrTeamNotFound
+	}
+	userFound := false
+	for _, user := range m.Users {
+		if user.ID == userID {
+			userFound = true
+			break
+		}
+	}
+	if !userFound {
+		return types.TeamMembership{}, types.ErrUserNotFound
+	}
+	for _, membership := range m.TeamMemberships {
+		if membership.TeamID == teamID && membership.UserID == userID {
+			return membership, nil
+		}
+	}
+	membership := types.TeamMembership{TeamID: teamID, UserID: userID, CreatedAt: isoMillis(time.Now().UTC())}
+	m.TeamMemberships = append(m.TeamMemberships, membership)
+	return membership, nil
+}
+
+func (m *MemoryRepository) RemoveTeamMember(_ context.Context, teamID string, userID string) (bool, error) {
+	teamID = strings.TrimSpace(teamID)
+	userID = strings.TrimSpace(userID)
+	teamFound := false
+	for _, team := range m.Teams {
+		if team.ID == teamID {
+			teamFound = true
+			break
+		}
+	}
+	if !teamFound {
+		return false, types.ErrTeamNotFound
+	}
+	userFound := false
+	for _, user := range m.Users {
+		if user.ID == userID {
+			userFound = true
+			break
+		}
+	}
+	if !userFound {
+		return false, types.ErrUserNotFound
+	}
+	for index, membership := range m.TeamMemberships {
+		if membership.TeamID == teamID && membership.UserID == userID {
+			m.TeamMemberships = append(m.TeamMemberships[:index], m.TeamMemberships[index+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *MemoryRepository) ListUsers(context.Context) ([]types.User, error) {

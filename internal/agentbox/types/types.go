@@ -9,6 +9,8 @@ var ErrEmailAlreadyRegistered = errors.New("email is already registered")
 var ErrUserNotFound = errors.New("user not found")
 var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
 var ErrThreadNotFound = errors.New("Thread not found.")
+var ErrTeamNotFound = errors.New("team not found")
+var ErrTeamSlugConflict = errors.New("team slug is already in use")
 
 const DefaultTenantID = "ten_default"
 
@@ -99,6 +101,26 @@ type SignupInvitation struct {
 	ConsumedAt       *string `json:"consumed_at,omitempty"`
 	ConsumedByUserID *string `json:"consumed_by_user_id,omitempty"`
 	RevokedAt        *string `json:"revoked_at,omitempty"`
+	Teams            []Team  `json:"teams"`
+}
+
+type Team struct {
+	ID        string `json:"id"`
+	Slug      string `json:"slug"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type TeamMembership struct {
+	TeamID    string `json:"team_id"`
+	UserID    string `json:"user_id"`
+	CreatedAt string `json:"created_at"`
+}
+
+type TeamWithMembers struct {
+	Team
+	Members []User `json:"members"`
 }
 
 type Thread struct {

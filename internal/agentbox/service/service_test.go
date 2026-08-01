@@ -183,11 +183,26 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	invitationResult, err := svc.CreateSignupInvitation(context.Background(), ownerAuth, 2*time.Hour)
+	engineering, err := svc.CreateTeam(context.Background(), ownerAuth, "engineering", "Engineering")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if invitationResult.Invitation.CreatedByUserID != ownerAuth.UserID || !strings.HasPrefix(invitationResult.Token, "aginv_") {
+	operations, err := svc.CreateTeam(context.Background(), ownerAuth, "operations", "Operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateTeam(context.Background(), ownerAuth, "Engineering", "Duplicate"); !hasCodedError(err, "TEAM_SLUG_CONFLICT") {
+		t.Fatalf("duplicate team slug error=%v", err)
+	}
+	if _, err := svc.CreateSignupInvitation(context.Background(), ownerAuth, time.Hour, "team_missing"); !hasCodedError(err, "TEAM_NOT_FOUND") {
+		t.Fatalf("missing invitation team error=%v", err)
+	}
+
+	invitationResult, err := svc.CreateSignupInvitation(context.Background(), ownerAuth, 2*time.Hour, engineering.ID, operations.ID, engineering.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitationResult.Invitation.CreatedByUserID != ownerAuth.UserID || !strings.HasPrefix(invitationResult.Token, "aginv_") || len(invitationResult.Invitation.Teams) != 2 {
 		t.Fatalf("unexpected invitation: %#v", invitationResult)
 	}
 	inspection, err := svc.InspectSignupInvitation(context.Background(), invitationResult.Token)
@@ -201,6 +216,32 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 	}
 	if member.ID == "" || member.IsOwner || member.Role != "member" || memberAuth.UserID != member.ID || memberSessionSecret == "" {
 		t.Fatalf("unexpected registration: auth=%#v user=%#v", memberAuth, member)
+	}
+	memberTeams, err := svc.ListMyTeams(context.Background(), memberAuth)
+	if err != nil || len(memberTeams) != 2 || memberTeams[0].ID != engineering.ID || memberTeams[1].ID != operations.ID {
+		t.Fatalf("invitation memberships=%#v err=%v", memberTeams, err)
+	}
+	ownerTeams, err := svc.ListOwnerTeams(context.Background(), ownerAuth)
+	if err != nil || len(ownerTeams) != 2 || len(ownerTeams[0].Members) != 1 || ownerTeams[0].Members[0].ID != member.ID {
+		t.Fatalf("owner team view=%#v err=%v", ownerTeams, err)
+	}
+	if _, err := svc.AddTeamMember(context.Background(), ownerAuth, engineering.ID, ownerAuth.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AddTeamMember(context.Background(), ownerAuth, engineering.ID, ownerAuth.UserID); err != nil {
+		t.Fatalf("duplicate membership was not idempotent: %v", err)
+	}
+	renamed, err := svc.RenameTeam(context.Background(), ownerAuth, engineering.ID, "Product Engineering")
+	if err != nil || renamed.Slug != "engineering" || renamed.Name != "Product Engineering" {
+		t.Fatalf("renamed team=%#v err=%v", renamed, err)
+	}
+
+	ownerThread, err := svc.CreateThread(context.Background(), ownerAuth, "still private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetThread(context.Background(), memberAuth, ownerThread.ID); !hasCodedError(err, "THREAD_NOT_FOUND") {
+		t.Fatalf("Phase 5 membership changed private thread access: %v", err)
 	}
 	if _, err := svc.InspectSignupInvitation(context.Background(), invitationResult.Token); !hasCodedError(err, "INVALID_INVITATION") {
 		t.Fatalf("consumed invitation inspection error=%v", err)
@@ -230,8 +271,18 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	memberKeyAuth, err := svc.AuthenticateAPIKey(context.Background(), memberKey.Key)
+	if err != nil || memberKeyAuth == nil {
+		t.Fatalf("member key auth=%#v err=%v", memberKeyAuth, err)
+	}
+	if teams, err := svc.ListMyTeams(context.Background(), *memberKeyAuth); err != nil || len(teams) != 2 {
+		t.Fatalf("member credential team list=%#v err=%v", teams, err)
+	}
 	if _, err := svc.CreateSignupInvitation(context.Background(), memberAuth, time.Hour); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
 		t.Fatalf("member created invitation: %v", err)
+	}
+	if _, err := svc.CreateTeam(context.Background(), memberAuth, "blocked", "Blocked"); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("member created team: %v", err)
 	}
 	ownerKey, err := svc.CreateAPIKey(context.Background(), ownerAuth, "owner-api")
 	if err != nil {
@@ -243,6 +294,34 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 	}
 	if _, err := svc.ListUsers(context.Background(), *ownerKeyAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
 		t.Fatalf("owner API key listed users: %v", err)
+	}
+	if _, err := svc.ListOwnerTeams(context.Background(), *ownerKeyAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner API key listed owner team view: %v", err)
+	}
+	if teams, err := svc.ListMyTeams(context.Background(), *ownerKeyAuth); err != nil || len(teams) != 1 || teams[0].ID != engineering.ID {
+		t.Fatalf("owner credential own-team list=%#v err=%v", teams, err)
+	}
+
+	if err := svc.RemoveTeamMember(context.Background(), ownerAuth, operations.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RemoveTeamMember(context.Background(), ownerAuth, operations.ID, member.ID); err != nil {
+		t.Fatalf("duplicate membership removal was not idempotent: %v", err)
+	}
+	if teams, err := svc.ListMyTeams(context.Background(), memberAuth); err != nil || len(teams) != 1 || teams[0].ID != engineering.ID {
+		t.Fatalf("membership removal result=%#v err=%v", teams, err)
+	}
+
+	zeroTeamInvitation, err := svc.CreateSignupInvitation(context.Background(), ownerAuth, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroAuth, _, zeroUser, err := svc.RegisterWithSignupInvitation(context.Background(), zeroTeamInvitation.Token, "zero@example.com", "Zero Team", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if teams, err := svc.ListMyTeams(context.Background(), zeroAuth); err != nil || len(teams) != 0 {
+		t.Fatalf("zero-team user %s has teams=%#v err=%v", zeroUser.ID, teams, err)
 	}
 
 	disabledMember, err := svc.SetUserDisabled(context.Background(), ownerAuth, member.ID, true)

@@ -799,6 +799,16 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 	if ownerSetupResponse.Code != http.StatusOK {
 		t.Fatalf("owner setup status=%d body=%s", ownerSetupResponse.Code, ownerSetupResponse.Body.String())
 	}
+	var ownerSetupPayload struct {
+		Owner types.User `json:"owner"`
+	}
+	if err := json.Unmarshal(ownerSetupResponse.Body.Bytes(), &ownerSetupPayload); err != nil {
+		t.Fatal(err)
+	}
+	ownerID := ownerSetupPayload.Owner.ID
+	if ownerID == "" {
+		t.Fatalf("owner setup payload=%s", ownerSetupResponse.Body.String())
+	}
 	ownerCookies := ownerSetupResponse.Result().Cookies()
 	if len(ownerCookies) != 1 {
 		t.Fatalf("owner cookies=%#v", ownerCookies)
@@ -813,7 +823,32 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 		t.Fatalf("deployment secret accessed owner users: status=%d body=%s", deploymentSecretResponse.Code, deploymentSecretResponse.Body.String())
 	}
 
-	createInvitationRequest := httptest.NewRequest(http.MethodPost, "/api/owner/invitations", strings.NewReader(`{"expires_in_minutes":120}`))
+	createTeam := func(slug string, name string) types.Team {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"slug": slug, "name": name})
+		request := httptest.NewRequest(http.MethodPost, "/api/owner/teams", bytes.NewReader(body))
+		request.AddCookie(ownerCookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create team %s status=%d body=%s", slug, response.Code, response.Body.String())
+		}
+		var payload struct {
+			Team types.Team `json:"team"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload.Team
+	}
+	engineering := createTeam("engineering", "Engineering")
+	operations := createTeam("operations", "Operations")
+
+	invitationBody, _ := json.Marshal(map[string]any{
+		"expires_in_minutes": 120,
+		"team_ids":           []string{engineering.ID, operations.ID, engineering.ID},
+	})
+	createInvitationRequest := httptest.NewRequest(http.MethodPost, "/api/owner/invitations", bytes.NewReader(invitationBody))
 	createInvitationRequest.AddCookie(ownerCookie)
 	createInvitationResponse := httptest.NewRecorder()
 	server.ServeHTTP(createInvitationResponse, createInvitationRequest)
@@ -828,7 +863,7 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 	if err := json.Unmarshal(createInvitationResponse.Body.Bytes(), &invitationPayload); err != nil {
 		t.Fatal(err)
 	}
-	if invitationPayload.Invitation.ID == "" || !strings.HasPrefix(invitationPayload.Token, "aginv_") || !strings.HasPrefix(invitationPayload.SignupURL, "https://agentbox.example/signup?token=") {
+	if invitationPayload.Invitation.ID == "" || !strings.HasPrefix(invitationPayload.Token, "aginv_") || !strings.HasPrefix(invitationPayload.SignupURL, "https://agentbox.example/signup?token=") || len(invitationPayload.Invitation.Teams) != 2 {
 		t.Fatalf("invitation payload=%#v", invitationPayload)
 	}
 
@@ -865,6 +900,68 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 		t.Fatalf("registered user=%#v", registrationPayload.User)
 	}
 
+	memberTeamsRequest := httptest.NewRequest(http.MethodGet, "/api/me/teams", nil)
+	memberTeamsRequest.AddCookie(memberCookies[0])
+	memberTeamsResponse := httptest.NewRecorder()
+	server.ServeHTTP(memberTeamsResponse, memberTeamsRequest)
+	if memberTeamsResponse.Code != http.StatusOK || !strings.Contains(memberTeamsResponse.Body.String(), engineering.ID) || !strings.Contains(memberTeamsResponse.Body.String(), operations.ID) {
+		t.Fatalf("member team list status=%d body=%s", memberTeamsResponse.Code, memberTeamsResponse.Body.String())
+	}
+
+	ownerTeamsRequest := httptest.NewRequest(http.MethodGet, "/api/owner/teams", nil)
+	ownerTeamsRequest.AddCookie(ownerCookie)
+	ownerTeamsResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerTeamsResponse, ownerTeamsRequest)
+	if ownerTeamsResponse.Code != http.StatusOK || !strings.Contains(ownerTeamsResponse.Body.String(), `"email":"member@example.com"`) {
+		t.Fatalf("owner team list status=%d body=%s", ownerTeamsResponse.Code, ownerTeamsResponse.Body.String())
+	}
+
+	renameBody, _ := json.Marshal(map[string]string{"name": "Product Engineering"})
+	renameRequest := httptest.NewRequest(http.MethodPatch, "/api/owner/teams/"+engineering.ID, bytes.NewReader(renameBody))
+	renameRequest.AddCookie(ownerCookie)
+	renameResponse := httptest.NewRecorder()
+	server.ServeHTTP(renameResponse, renameRequest)
+	if renameResponse.Code != http.StatusOK || !strings.Contains(renameResponse.Body.String(), `"slug":"engineering"`) || !strings.Contains(renameResponse.Body.String(), `"name":"Product Engineering"`) {
+		t.Fatalf("rename team status=%d body=%s", renameResponse.Code, renameResponse.Body.String())
+	}
+
+	addOwnerRequest := httptest.NewRequest(http.MethodPut, "/api/owner/teams/"+engineering.ID+"/members/"+ownerID, nil)
+	addOwnerRequest.AddCookie(ownerCookie)
+	addOwnerResponse := httptest.NewRecorder()
+	server.ServeHTTP(addOwnerResponse, addOwnerRequest)
+	if addOwnerResponse.Code != http.StatusOK {
+		t.Fatalf("add owner membership status=%d body=%s", addOwnerResponse.Code, addOwnerResponse.Body.String())
+	}
+	duplicateAddRequest := httptest.NewRequest(http.MethodPut, "/api/owner/teams/"+engineering.ID+"/members/"+ownerID, nil)
+	duplicateAddRequest.AddCookie(ownerCookie)
+	duplicateAddResponse := httptest.NewRecorder()
+	server.ServeHTTP(duplicateAddResponse, duplicateAddRequest)
+	if duplicateAddResponse.Code != http.StatusOK {
+		t.Fatalf("duplicate add status=%d body=%s", duplicateAddResponse.Code, duplicateAddResponse.Body.String())
+	}
+
+	removeMemberRequest := httptest.NewRequest(http.MethodDelete, "/api/owner/teams/"+operations.ID+"/members/"+memberID, nil)
+	removeMemberRequest.AddCookie(ownerCookie)
+	removeMemberResponse := httptest.NewRecorder()
+	server.ServeHTTP(removeMemberResponse, removeMemberRequest)
+	if removeMemberResponse.Code != http.StatusOK {
+		t.Fatalf("remove membership status=%d body=%s", removeMemberResponse.Code, removeMemberResponse.Body.String())
+	}
+	duplicateRemoveRequest := httptest.NewRequest(http.MethodDelete, "/api/owner/teams/"+operations.ID+"/members/"+memberID, nil)
+	duplicateRemoveRequest.AddCookie(ownerCookie)
+	duplicateRemoveResponse := httptest.NewRecorder()
+	server.ServeHTTP(duplicateRemoveResponse, duplicateRemoveRequest)
+	if duplicateRemoveResponse.Code != http.StatusOK {
+		t.Fatalf("duplicate remove status=%d body=%s", duplicateRemoveResponse.Code, duplicateRemoveResponse.Body.String())
+	}
+	memberTeamsAfterRemovalRequest := httptest.NewRequest(http.MethodGet, "/api/me/teams", nil)
+	memberTeamsAfterRemovalRequest.AddCookie(memberCookies[0])
+	memberTeamsAfterRemovalResponse := httptest.NewRecorder()
+	server.ServeHTTP(memberTeamsAfterRemovalResponse, memberTeamsAfterRemovalRequest)
+	if memberTeamsAfterRemovalResponse.Code != http.StatusOK || !strings.Contains(memberTeamsAfterRemovalResponse.Body.String(), engineering.ID) || strings.Contains(memberTeamsAfterRemovalResponse.Body.String(), operations.ID) {
+		t.Fatalf("member teams after removal status=%d body=%s", memberTeamsAfterRemovalResponse.Code, memberTeamsAfterRemovalResponse.Body.String())
+	}
+
 	memberOwnerRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
 	memberOwnerRequest.AddCookie(memberCookies[0])
 	memberOwnerResponse := httptest.NewRecorder()
@@ -894,6 +991,20 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 	server.ServeHTTP(ownerKeyResponse, ownerKeyRequest)
 	if ownerKeyResponse.Code != http.StatusForbidden || !strings.Contains(ownerKeyResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
 		t.Fatalf("owner key owner access status=%d body=%s", ownerKeyResponse.Code, ownerKeyResponse.Body.String())
+	}
+	ownerKeyTeamRequest := httptest.NewRequest(http.MethodPost, "/api/owner/teams", strings.NewReader(`{"slug":"blocked","name":"Blocked"}`))
+	ownerKeyTeamRequest.Header.Set("authorization", "Bearer "+ownerKeyPayload.Key.Secret)
+	ownerKeyTeamResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerKeyTeamResponse, ownerKeyTeamRequest)
+	if ownerKeyTeamResponse.Code != http.StatusForbidden || !strings.Contains(ownerKeyTeamResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner key mutated teams status=%d body=%s", ownerKeyTeamResponse.Code, ownerKeyTeamResponse.Body.String())
+	}
+	ownerKeyOwnTeamsRequest := httptest.NewRequest(http.MethodGet, "/api/me/teams", nil)
+	ownerKeyOwnTeamsRequest.Header.Set("authorization", "Bearer "+ownerKeyPayload.Key.Secret)
+	ownerKeyOwnTeamsResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerKeyOwnTeamsResponse, ownerKeyOwnTeamsRequest)
+	if ownerKeyOwnTeamsResponse.Code != http.StatusOK || !strings.Contains(ownerKeyOwnTeamsResponse.Body.String(), engineering.ID) {
+		t.Fatalf("owner key own-team list status=%d body=%s", ownerKeyOwnTeamsResponse.Code, ownerKeyOwnTeamsResponse.Body.String())
 	}
 
 	listUsersRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)

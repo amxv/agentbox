@@ -714,15 +714,40 @@ returning id, tenant_id, email, display_name, password_hash, role, is_owner, cre
 `, "usr_"+uuid.NewString(), types.DefaultTenantID, email, displayName, passwordHash))
 }
 
-func (r *Repository) CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error) {
+func (r *Repository) CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time, teamIDs []string) (types.SignupInvitation, error) {
 	if strings.TrimSpace(createdByUserID) == "" || strings.TrimSpace(tokenHash) == "" || !expiresAt.After(time.Now().UTC()) {
 		return types.SignupInvitation{}, errors.New("invitation creator, token hash, and future expiry are required")
 	}
-	return scanSignupInvitation(r.pool.QueryRow(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.SignupInvitation{}, err
+	}
+	defer tx.Rollback(ctx)
+	teams, err := listTeamsByIDsTx(ctx, tx, teamIDs)
+	if err != nil {
+		return types.SignupInvitation{}, err
+	}
+	invitation, err := scanSignupInvitation(tx.QueryRow(ctx, `
 insert into signup_invitations (id, token_hash, created_by_user_id, expires_at)
 values ($1, $2, $3, $4)
 returning id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
 `, "inv_"+uuid.NewString(), tokenHash, createdByUserID, expiresAt))
+	if err != nil {
+		return types.SignupInvitation{}, err
+	}
+	for _, team := range teams {
+		if _, err := tx.Exec(ctx, `
+insert into signup_invitation_teams (invitation_id, team_id)
+values ($1, $2)
+`, invitation.ID, team.ID); err != nil {
+			return types.SignupInvitation{}, err
+		}
+	}
+	invitation.Teams = teams
+	if err := tx.Commit(ctx); err != nil {
+		return types.SignupInvitation{}, err
+	}
+	return invitation, nil
 }
 
 func (r *Repository) ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error) {
@@ -745,6 +770,14 @@ order by created_at desc, id desc
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	rows.Close()
+	for index := range invitations {
+		teams, err := r.listInvitationTeams(ctx, invitations[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		invitations[index].Teams = teams
 	}
 	return invitations, nil
 }
@@ -776,6 +809,11 @@ where token_hash = $1
 	if err != nil {
 		return nil, err
 	}
+	teams, err := r.listInvitationTeams(ctx, invitation.ID)
+	if err != nil {
+		return nil, err
+	}
+	invitation.Teams = teams
 	return &invitation, nil
 }
 
@@ -807,6 +845,11 @@ for update
 		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
 	}
 
+	teams, err := listInvitationTeamsTx(ctx, tx, invitation.ID)
+	if err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+
 	user, err := scanUser(tx.QueryRow(ctx, `
 insert into users (id, tenant_id, email, display_name, password_hash, role, is_owner)
 values ($1, $2, $3, $4, $5, 'member', false)
@@ -818,6 +861,15 @@ returning id, tenant_id, email, display_name, password_hash, role, is_owner, cre
 			return types.User{}, types.UserSession{}, types.SignupInvitation{}, types.ErrEmailAlreadyRegistered
 		}
 		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+
+	for _, team := range teams {
+		if _, err := tx.Exec(ctx, `
+insert into team_memberships (team_id, user_id)
+values ($1, $2)
+`, team.ID, user.ID); err != nil {
+			return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+		}
 	}
 
 	session, err := scanUserSession(tx.QueryRow(ctx, `
@@ -838,10 +890,237 @@ returning id, created_by_user_id, created_at, expires_at, consumed_at, consumed_
 	if err != nil {
 		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
 	}
+	invitation.Teams = teams
 	if err := tx.Commit(ctx); err != nil {
 		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
 	}
 	return user, session, invitation, nil
+}
+
+func (r *Repository) CreateTeam(ctx context.Context, slug string, name string) (types.Team, error) {
+	team, err := scanTeam(r.pool.QueryRow(ctx, `
+insert into teams (id, slug, name)
+values ($1, $2, $3)
+returning id, slug, name, created_at, updated_at
+`, "team_"+uuid.NewString(), strings.TrimSpace(slug), strings.TrimSpace(name)))
+	if err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+			return types.Team{}, types.ErrTeamSlugConflict
+		}
+		return types.Team{}, err
+	}
+	return team, nil
+}
+
+func (r *Repository) RenameTeam(ctx context.Context, teamID string, name string) (types.Team, error) {
+	team, err := scanTeam(r.pool.QueryRow(ctx, `
+update teams
+set name = $2, updated_at = now()
+where id = $1
+returning id, slug, name, created_at, updated_at
+`, strings.TrimSpace(teamID), strings.TrimSpace(name)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.Team{}, types.ErrTeamNotFound
+	}
+	return team, err
+}
+
+func (r *Repository) ListTeams(ctx context.Context) ([]types.Team, error) {
+	rows, err := r.pool.Query(ctx, `
+select id, slug, name, created_at, updated_at
+from teams
+order by lower(name), lower(slug), id
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	teams := []types.Team{}
+	for rows.Next() {
+		team, err := scanTeam(rows)
+		if err != nil {
+			return nil, err
+		}
+		teams = append(teams, team)
+	}
+	return teams, rows.Err()
+}
+
+func (r *Repository) ListUserTeams(ctx context.Context, userID string) ([]types.Team, error) {
+	rows, err := r.pool.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join team_memberships tm on tm.team_id = t.id
+where tm.user_id = $1
+order by lower(t.name), lower(t.slug), t.id
+`, strings.TrimSpace(userID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	teams := []types.Team{}
+	for rows.Next() {
+		team, err := scanTeam(rows)
+		if err != nil {
+			return nil, err
+		}
+		teams = append(teams, team)
+	}
+	return teams, rows.Err()
+}
+
+func (r *Repository) ListTeamMembers(ctx context.Context, teamID string) ([]types.User, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `select exists (select 1 from teams where id = $1)`, strings.TrimSpace(teamID)).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, types.ErrTeamNotFound
+	}
+	rows, err := r.pool.Query(ctx, `
+select u.id, u.tenant_id, u.email, u.display_name, u.password_hash, u.role, u.is_owner,
+       u.created_at, u.updated_at, u.disabled_at
+from users u
+join team_memberships tm on tm.user_id = u.id
+where tm.team_id = $1
+order by u.is_owner desc, lower(u.display_name), lower(u.email), u.id
+`, strings.TrimSpace(teamID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []types.User{}
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, rows.Err()
+}
+
+func (r *Repository) AddTeamMember(ctx context.Context, teamID string, userID string) (types.TeamMembership, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.TeamMembership{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := requireTeamAndUserTx(ctx, tx, teamID, userID); err != nil {
+		return types.TeamMembership{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+insert into team_memberships (team_id, user_id)
+values ($1, $2)
+on conflict (team_id, user_id) do nothing
+`, strings.TrimSpace(teamID), strings.TrimSpace(userID)); err != nil {
+		return types.TeamMembership{}, err
+	}
+	membership, err := scanTeamMembership(tx.QueryRow(ctx, `
+select team_id, user_id, created_at
+from team_memberships
+where team_id = $1 and user_id = $2
+`, strings.TrimSpace(teamID), strings.TrimSpace(userID)))
+	if err != nil {
+		return types.TeamMembership{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.TeamMembership{}, err
+	}
+	return membership, nil
+}
+
+func (r *Repository) RemoveTeamMember(ctx context.Context, teamID string, userID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	if err := requireTeamAndUserTx(ctx, tx, teamID, userID); err != nil {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, `delete from team_memberships where team_id = $1 and user_id = $2`, strings.TrimSpace(teamID), strings.TrimSpace(userID))
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) listInvitationTeams(ctx context.Context, invitationID string) ([]types.Team, error) {
+	rows, err := r.pool.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join signup_invitation_teams sit on sit.team_id = t.id
+where sit.invitation_id = $1
+order by lower(t.name), lower(t.slug), t.id
+`, invitationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTeams(rows)
+}
+
+func listTeamsByIDsTx(ctx context.Context, tx pgx.Tx, teamIDs []string) ([]types.Team, error) {
+	teamIDs = uniqueNonEmptyStrings(teamIDs)
+	if len(teamIDs) == 0 {
+		return []types.Team{}, nil
+	}
+	rows, err := tx.Query(ctx, `
+select id, slug, name, created_at, updated_at
+from teams
+where id = any($1)
+order by lower(name), lower(slug), id
+for key share
+`, teamIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	teams, err := scanTeams(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(teams) != len(teamIDs) {
+		return nil, types.ErrTeamNotFound
+	}
+	return teams, nil
+}
+
+func listInvitationTeamsTx(ctx context.Context, tx pgx.Tx, invitationID string) ([]types.Team, error) {
+	rows, err := tx.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join signup_invitation_teams sit on sit.team_id = t.id
+where sit.invitation_id = $1
+order by lower(t.name), lower(t.slug), t.id
+for key share of t
+`, invitationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTeams(rows)
+}
+
+func requireTeamAndUserTx(ctx context.Context, tx pgx.Tx, teamID string, userID string) error {
+	var lockedTeamID string
+	if err := tx.QueryRow(ctx, `select id from teams where id = $1 for key share`, strings.TrimSpace(teamID)).Scan(&lockedTeamID); errors.Is(err, pgx.ErrNoRows) {
+		return types.ErrTeamNotFound
+	} else if err != nil {
+		return err
+	}
+	var lockedUserID string
+	if err := tx.QueryRow(ctx, `select id from users where id = $1 for key share`, strings.TrimSpace(userID)).Scan(&lockedUserID); errors.Is(err, pgx.ErrNoRows) {
+		return types.ErrUserNotFound
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Repository) ListUsers(ctx context.Context) ([]types.User, error) {
@@ -1423,6 +1702,36 @@ func scanSignupInvitation(row threadScanner) (types.SignupInvitation, error) {
 	return invitation, err
 }
 
+func scanTeam(row threadScanner) (types.Team, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	team := types.Team{}
+	err := row.Scan(&team.ID, &team.Slug, &team.Name, &createdAt, &updatedAt)
+	team.CreatedAt = isoMillis(createdAt)
+	team.UpdatedAt = isoMillis(updatedAt)
+	return team, err
+}
+
+func scanTeams(rows pgx.Rows) ([]types.Team, error) {
+	teams := []types.Team{}
+	for rows.Next() {
+		team, err := scanTeam(rows)
+		if err != nil {
+			return nil, err
+		}
+		teams = append(teams, team)
+	}
+	return teams, rows.Err()
+}
+
+func scanTeamMembership(row threadScanner) (types.TeamMembership, error) {
+	var createdAt time.Time
+	membership := types.TeamMembership{}
+	err := row.Scan(&membership.TeamID, &membership.UserID, &createdAt)
+	membership.CreatedAt = isoMillis(createdAt)
+	return membership, err
+}
+
 func hashSecret(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
@@ -1448,6 +1757,23 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func StorageKey(threadID string, messageHint string, fileName string) string {
