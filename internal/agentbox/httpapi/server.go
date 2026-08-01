@@ -73,7 +73,9 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	authContext, secret, err := s.service.Login(r.Context(), input.TenantID, input.Email, input.Password)
+	// tenant_id is intentionally accepted as a legacy no-op so old clients cannot
+	// influence deployment-global account selection during the transition.
+	authContext, secret, err := s.service.Login(r.Context(), "", input.Email, input.Password)
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := err.Error()
@@ -357,58 +359,14 @@ func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		keys, err := s.service.ListAPIKeys(r.Context(), adminAuthContext())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
-	case http.MethodPost:
-		var input struct {
-			Name string `json:"name"`
-		}
-		if err := parseJSON(r, &input); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		key, err := s.service.CreateAPIKey(r.Context(), adminAuthContext(), input.Name)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"key": apiKeyResponse(key),
-		})
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
+	writeCodedError(w, http.StatusGone, "LEGACY_ADMIN_KEY_DISABLED", "Deployment-wide API key management is disabled. Sign in as a user and manage that user's credentials through /api/keys.")
 }
 
 func (s *Server) adminKey(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/keys/"), "/")
-	if name == "" || strings.Contains(name, "/") {
-		http.NotFound(w, r)
-		return
-	}
-	switch r.Method {
-	case http.MethodDelete:
-		if err := s.service.RevokeAPIKey(r.Context(), adminAuthContext(), name); err != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(err, service.ErrAPIKeyNotFound) {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"revoked": name})
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
+	writeCodedError(w, http.StatusGone, "LEGACY_ADMIN_KEY_DISABLED", "Deployment-wide API key management is disabled. Sign in as a user and manage that user's credentials through /api/keys.")
 }
 
 func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
@@ -419,7 +377,7 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if !canReadKeys(*authContext) {
-			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:read scope is required.")
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:read scope is required.")
 			return
 		}
 		keys, err := s.service.ListAPIKeys(r.Context(), *authContext)
@@ -430,7 +388,7 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 	case http.MethodPost:
 		if !canManageKeys(*authContext) {
-			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:write scope is required.")
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
 			return
 		}
 		var input struct {
@@ -446,7 +404,7 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 		if len(scopes) == 0 {
 			scopes = service.ConnectorAPIKeyScopes(input.Purpose)
 		}
-		key, err := s.service.CreateAPIKeyWithScopes(r.Context(), *authContext, input.Name, scopes)
+		key, err := s.service.CreateAPIKeyWithPurposeAndScopes(r.Context(), *authContext, input.Name, input.Purpose, scopes)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -465,7 +423,7 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !canManageKeys(*authContext) {
-		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:write scope is required.")
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
 		return
 	}
 	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
@@ -859,15 +817,6 @@ func authSecretFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("key"))
 }
 
-func adminAuthContext() types.AuthContext {
-	return types.AuthContext{
-		TenantID:    types.DefaultTenantID,
-		SubjectType: types.AuthSubjectAdmin,
-		ActorName:   "admin",
-		Role:        "admin",
-	}
-}
-
 func provisionTenantResponse(result service.ProvisionTenantResult) map[string]any {
 	response := map[string]any{
 		"tenant": result.Tenant,
@@ -886,8 +835,9 @@ func provisionTenantResponse(result service.ProvisionTenantResult) map[string]an
 func apiKeyResponse(key types.APIKey) map[string]any {
 	return map[string]any{
 		"id":         key.ID,
-		"tenant_id":  key.TenantID,
+		"user_id":    key.UserID,
 		"name":       key.Name,
+		"purpose":    key.Purpose,
 		"key":        key.Key,
 		"key_masked": key.KeyMasked,
 		"created_at": key.CreatedAt,
@@ -895,12 +845,12 @@ func apiKeyResponse(key types.APIKey) map[string]any {
 	}
 }
 
-func tenantAdmin(authContext types.AuthContext) bool {
-	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.Role == "admin"
+func browserUser(authContext types.AuthContext) bool {
+	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.UserID != ""
 }
 
 func canManageKeys(authContext types.AuthContext) bool {
-	return tenantAdmin(authContext) || hasScope(authContext, "keys:write")
+	return browserUser(authContext) || hasScope(authContext, "keys:write")
 }
 
 func canReadKeys(authContext types.AuthContext) bool {

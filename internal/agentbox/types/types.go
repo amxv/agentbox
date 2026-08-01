@@ -16,15 +16,18 @@ const (
 )
 
 type AuthContext struct {
-	TenantID    string          `json:"tenant_id"`
-	TenantSlug  string          `json:"tenant_slug,omitempty"`
-	UserID      string          `json:"user_id,omitempty"`
-	SubjectType AuthSubjectType `json:"subject_type"`
-	ActorName   string          `json:"actor_name"`
-	KeyID       string          `json:"key_id,omitempty"`
-	SessionID   string          `json:"session_id,omitempty"`
-	Scopes      []string        `json:"scopes,omitempty"`
-	Role        string          `json:"role,omitempty"`
+	TenantID        string          `json:"tenant_id"`
+	TenantSlug      string          `json:"tenant_slug,omitempty"`
+	UserID          string          `json:"user_id,omitempty"`
+	UserDisplayName string          `json:"user_display_name,omitempty"`
+	SubjectType     AuthSubjectType `json:"subject_type"`
+	ActorID         string          `json:"actor_id,omitempty"`
+	ActorName       string          `json:"actor_name"`
+	KeyID           string          `json:"key_id,omitempty"`
+	SessionID       string          `json:"session_id,omitempty"`
+	Scopes          []string        `json:"scopes,omitempty"`
+	Role            string          `json:"role,omitempty"`
+	IsOwner         bool            `json:"is_owner,omitempty"`
 }
 
 type Tenant struct {
@@ -50,7 +53,6 @@ type User struct {
 
 type UserSession struct {
 	ID         string  `json:"id"`
-	TenantID   string  `json:"tenant_id"`
 	UserID     string  `json:"user_id"`
 	SecretHash string  `json:"-"`
 	CreatedAt  string  `json:"created_at"`
@@ -61,7 +63,6 @@ type UserSession struct {
 
 type CLILoginCode struct {
 	ID          string  `json:"id"`
-	TenantID    string  `json:"tenant_id"`
 	UserID      string  `json:"user_id"`
 	CodeHash    string  `json:"-"`
 	StateHash   string  `json:"-"`
@@ -193,9 +194,9 @@ type SearchThreadParams struct {
 
 type APIKey struct {
 	ID          string   `json:"id,omitempty"`
-	TenantID    string   `json:"tenant_id,omitempty"`
-	UserID      *string  `json:"user_id,omitempty"`
+	UserID      string   `json:"user_id"`
 	Name        string   `json:"name"`
+	Purpose     string   `json:"purpose"`
 	Key         string   `json:"-"`
 	KeyMasked   string   `json:"key_masked"`
 	TokenPrefix string   `json:"token_prefix,omitempty"`

@@ -41,13 +41,17 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 	fs := newFlagSet("init")
 	profileName := fs.String("profile-name", defaultString(globalProfileName, "local"), "stored profile name")
 	baseURL := fs.String("base-url", "", "Agentbox base URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	apiKey := fs.String("api-key", "", "existing user API key with keys:write scope")
+	adminKey := fs.String("admin-key", "", "deprecated; deployment-wide key management is disabled")
 	localKeyName := fs.String("local-key-name", "local", "API key name for this CLI")
 	chatgptKeyName := fs.String("chatgpt-key-name", "chatgpt", "API key name for ChatGPT")
 	skipDoctor := fs.Bool("skip-doctor", false, "skip the doctor verification step")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
+	}
+	if strings.TrimSpace(*adminKey) != "" {
+		return errors.New("--admin-key is no longer supported by init. Sign in first or provide --api-key for an existing user credential with keys:write scope.")
 	}
 
 	reader := bufio.NewReader(r.Stdin)
@@ -58,17 +62,17 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 		}
 		*baseURL = value
 	}
-	if strings.TrimSpace(*adminKey) == "" {
-		if value := strings.TrimSpace(os.Getenv("AGENTBOX_ADMIN_KEY")); value != "" {
-			*adminKey = value
+	if strings.TrimSpace(*apiKey) == "" {
+		if value := strings.TrimSpace(os.Getenv("AGENTBOX_API_KEY")); value != "" {
+			*apiKey = value
 		}
 	}
-	if strings.TrimSpace(*adminKey) == "" {
-		value, err := promptRequired(reader, r.Stdout, "Agentbox admin API key")
+	if strings.TrimSpace(*apiKey) == "" {
+		value, err := promptRequired(reader, r.Stdout, "Existing user API key")
 		if err != nil {
 			return err
 		}
-		*adminKey = value
+		*apiKey = value
 	}
 	if strings.TrimSpace(*profileName) == "" {
 		value, err := promptWithDefault(reader, r.Stdout, "Profile name", "local")
@@ -92,19 +96,22 @@ func (r *Runner) runInit(args []string, globalProfileName string) error {
 		*chatgptKeyName = value
 	}
 
-	localKey, err := r.createRemoteAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(*localKeyName))
+	localKey, err := r.createUserAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*apiKey), strings.TrimSpace(*localKeyName), "local")
 	if err != nil {
 		return err
 	}
-	chatgptKey, err := r.createRemoteAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(*chatgptKeyName))
+	chatgptKey, err := r.createUserAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*apiKey), strings.TrimSpace(*chatgptKeyName), "chatgpt")
 	if err != nil {
 		return err
 	}
 
 	store, err := profiles.SaveProfile(profiles.Profile{
-		Name:    strings.TrimSpace(*profileName),
-		BaseURL: strings.TrimSpace(*baseURL),
-		APIKey:  localKey.Secret,
+		Name:     strings.TrimSpace(*profileName),
+		BaseURL:  strings.TrimSpace(*baseURL),
+		APIKey:   localKey.Secret,
+		UserID:   localKey.UserID,
+		KeyName:  localKey.Name,
+		AuthType: "api_key",
 	}, true)
 	if err != nil {
 		return err
@@ -337,8 +344,9 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 
 type remoteAPIKey struct {
 	ID        string `json:"id"`
-	TenantID  string `json:"tenant_id"`
+	UserID    string `json:"user_id"`
 	Name      string `json:"name"`
+	Purpose   string `json:"purpose"`
 	Secret    string `json:"key"`
 	KeyMasked string `json:"key_masked"`
 	CreatedAt string `json:"created_at"`
@@ -397,19 +405,22 @@ func (r *Runner) runKeys(args []string, profileName string) error {
 func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	fs := newFlagSet("keys create")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]")
+		return errors.New("Usage: agentbox keys create <name> [--json]")
+	}
+	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
+		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
 	}
 	name := strings.TrimSpace(fs.Arg(0))
-	if strings.EqualFold(name, "raycast") && strings.TrimSpace(*adminKey) == "" {
+	if strings.EqualFold(name, "raycast") {
 		return r.printRaycastKey(profileName, *jsonOut)
 	}
-	key, err := r.createRemoteAPIKeyForProfile(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), name)
+	key, err := r.createTenantAPIKeyForProfile(profileName, name, "custom")
 	if err != nil {
 		return err
 	}
@@ -477,26 +488,19 @@ func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
 func (r *Runner) runKeysList(args []string, profileName string) error {
 	fs := newFlagSet("keys list")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
+	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
+		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
+	}
 	var data struct {
 		Keys []remoteAPIKey `json:"keys"`
 	}
-	if strings.TrimSpace(*adminKey) == "" && strings.TrimSpace(*baseURL) == "" {
-		if err := r.request("/api/keys", http.MethodGet, nil, nil, profileName, &data); err != nil {
-			return err
-		}
-	} else {
-		resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-		if err != nil {
-			return err
-		}
-		if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys", http.MethodGet, nil, &data); err != nil {
-			return err
-		}
+	if err := r.request("/api/keys", http.MethodGet, nil, nil, profileName, &data); err != nil {
+		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
@@ -514,47 +518,29 @@ func (r *Runner) runKeysList(args []string, profileName string) error {
 func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 	fs := newFlagSet("keys revoke")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]")
+		return errors.New("Usage: agentbox keys revoke <name> [--json]")
+	}
+	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
+		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
 	}
 	name := strings.TrimSpace(fs.Arg(0))
 	var data struct {
 		Revoked string `json:"revoked"`
 	}
-	if strings.TrimSpace(*adminKey) == "" && strings.TrimSpace(*baseURL) == "" {
-		if err := r.request("/api/keys/"+url.PathEscape(name), http.MethodDelete, nil, nil, profileName, &data); err != nil {
-			return err
-		}
-	} else {
-		resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-		if err != nil {
-			return err
-		}
-		if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys/"+url.PathEscape(name), http.MethodDelete, nil, &data); err != nil {
-			return err
-		}
+	if err := r.request("/api/keys/"+url.PathEscape(name), http.MethodDelete, nil, nil, profileName, &data); err != nil {
+		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
 	}
 	fmt.Fprintf(r.Stdout, "Revoked API key %q.\n", data.Revoked)
 	return nil
-}
-
-func (r *Runner) createRemoteAPIKeyForProfile(profileName string, explicitBaseURL string, explicitAdminKey string, name string) (remoteAPIKey, error) {
-	if strings.TrimSpace(explicitAdminKey) == "" && strings.TrimSpace(explicitBaseURL) == "" {
-		return r.createTenantAPIKeyForProfile(profileName, name, "")
-	}
-	baseURL, adminKey, err := r.adminConnection(profileName, explicitBaseURL, explicitAdminKey)
-	if err != nil {
-		return remoteAPIKey{}, err
-	}
-	return r.createRemoteAPIKey(baseURL, adminKey, name)
 }
 
 func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, purpose string) (remoteAPIKey, error) {
@@ -576,15 +562,55 @@ func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, p
 	return data.Key, nil
 }
 
-func (r *Runner) createRemoteAPIKey(baseURL string, adminKey string, name string) (remoteAPIKey, error) {
-	if strings.TrimSpace(name) == "" {
+func (r *Runner) createUserAPIKey(baseURL string, apiKey string, name string, purpose string) (remoteAPIKey, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		return remoteAPIKey{}, errors.New("API key name is required.")
 	}
-	payload, _ := json.Marshal(map[string]string{"name": strings.TrimSpace(name)})
+	if strings.TrimSpace(apiKey) == "" {
+		return remoteAPIKey{}, errors.New("An existing user API key is required.")
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"name":    name,
+		"purpose": strings.TrimSpace(purpose),
+	})
+	endpoint, err := url.JoinPath(strings.TrimRight(baseURL, "/"), "/api/keys")
+	if err != nil {
+		return remoteAPIKey{}, err
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return remoteAPIKey{}, err
+	}
+	request.Header.Set("authorization", "Bearer "+strings.TrimSpace(apiKey))
+	request.Header.Set("content-type", "application/json")
+	response, err := r.HTTPClient.Do(request)
+	if err != nil {
+		return remoteAPIKey{}, err
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		return remoteAPIKey{}, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var failure struct {
+			Code  string `json:"code"`
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(contents, &failure)
+		if failure.Error != "" {
+			if failure.Code != "" {
+				return remoteAPIKey{}, fmt.Errorf("%s: %s", failure.Code, failure.Error)
+			}
+			return remoteAPIKey{}, errors.New(failure.Error)
+		}
+		return remoteAPIKey{}, fmt.Errorf("Request failed with HTTP %d", response.StatusCode)
+	}
 	var data struct {
 		Key remoteAPIKey `json:"key"`
 	}
-	if err := r.adminRequest(baseURL, adminKey, "/api/admin/keys", http.MethodPost, bytes.NewReader(payload), &data); err != nil {
+	if err := json.Unmarshal(contents, &data); err != nil {
 		return remoteAPIKey{}, err
 	}
 	return data.Key, nil
@@ -663,15 +689,15 @@ func (r *Runner) adminRequest(baseURL string, adminKey string, path string, meth
 
 func (r *Runner) printKeysSubcommandHelp(command string) {
 	usage := map[string]string{
-		"create": `Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]
+		"create": `Usage: agentbox keys create <name> [--json]
 
-Create or replace a named tenant-scoped API key. With a logged-in profile this uses the tenant API; --admin-key is a legacy/provisioning fallback. Use "raycast" to print Raycast preference values.`,
-		"list": `Usage: agentbox keys list [--base-url <url>] [--admin-key <key>] [--json]
+Create or rotate a named credential for the signed-in profile's user. Use "raycast" to print Raycast preference values.`,
+		"list": `Usage: agentbox keys list [--json]
 
-List tenant API key names and masked key values. A logged-in profile lists the current tenant; --admin-key is a legacy/provisioning fallback.`,
-		"revoke": `Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]
+List credential names and masked values for the signed-in profile's user.`,
+		"revoke": `Usage: agentbox keys revoke <name> [--json]
 
-Revoke a tenant API key by name. A logged-in profile revokes inside the current tenant; --admin-key is a legacy/provisioning fallback.`,
+Revoke a credential by name for the signed-in profile's user.`,
 	}
 	if text, ok := usage[command]; ok {
 		fmt.Fprintln(r.Stdout, text)

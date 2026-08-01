@@ -185,6 +185,140 @@ func TestBootstrapOwnerIsUniqueIdempotentAndProtected(t *testing.T) {
 	}
 }
 
+func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "member@example.com", "Member", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownerFirstSecret := "agb_owner_first"
+	ownerFirst, err := repository.CreateAPIKey(ctx, owner.ID, "chatgpt", "chatgpt", hashSecret(ownerFirstSecret), "agb_owner_f", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberSecret := "agb_member"
+	memberKey, err := repository.CreateAPIKey(ctx, member.ID, "chatgpt", "chatgpt", hashSecret(memberSecret), "agb_member", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownerFirst.ID == memberKey.ID || ownerFirst.UserID != owner.ID || memberKey.UserID != member.ID {
+		t.Fatalf("same-label credentials were not user-scoped: owner=%#v member=%#v", ownerFirst, memberKey)
+	}
+
+	ownerSecondSecret := "agb_owner_second"
+	ownerSecond, err := repository.CreateAPIKey(ctx, owner.ID, "CHATGPT", "chatgpt", hashSecret(ownerSecondSecret), "agb_owner_s", []string{"threads:read", "threads:write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownerSecond.ID != ownerFirst.ID || ownerSecond.TokenHash == ownerFirst.TokenHash || ownerSecond.Purpose != "chatgpt" {
+		t.Fatalf("owner rotation did not update the existing credential: first=%#v second=%#v", ownerFirst, ownerSecond)
+	}
+
+	ownerKeys, err := repository.ListAPIKeys(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberKeys, err := repository.ListAPIKeys(ctx, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownerKeys) != 1 || ownerKeys[0].ID != ownerSecond.ID || len(memberKeys) != 1 || memberKeys[0].ID != memberKey.ID {
+		t.Fatalf("credential lists crossed users: owner=%#v member=%#v", ownerKeys, memberKeys)
+	}
+
+	oldOwnerKey, oldOwnerUser, err := repository.FindAPIKeyBySecret(ctx, ownerFirstSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldOwnerKey != nil || oldOwnerUser != nil {
+		t.Fatalf("rotated secret still authenticated: key=%#v user=%#v", oldOwnerKey, oldOwnerUser)
+	}
+	activeOwnerKey, activeOwnerUser, err := repository.FindAPIKeyBySecret(ctx, ownerSecondSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeOwnerKey == nil || activeOwnerUser == nil || activeOwnerUser.ID != owner.ID {
+		t.Fatalf("rotated owner secret did not resolve owner: key=%#v user=%#v", activeOwnerKey, activeOwnerUser)
+	}
+	activeMemberKey, activeMemberUser, err := repository.FindAPIKeyBySecret(ctx, memberSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeMemberKey == nil || activeMemberUser == nil || activeMemberUser.ID != member.ID {
+		t.Fatalf("member secret did not resolve member: key=%#v user=%#v", activeMemberKey, activeMemberUser)
+	}
+
+	if removed, err := repository.RevokeAPIKey(ctx, owner.ID, "chatgpt"); err != nil || !removed {
+		t.Fatalf("revoke owner credential: removed=%t err=%v", removed, err)
+	}
+	if key, user, err := repository.FindAPIKeyBySecret(ctx, ownerSecondSecret); err != nil || key != nil || user != nil {
+		t.Fatalf("revoked owner credential authenticated: key=%#v user=%#v err=%v", key, user, err)
+	}
+	if key, user, err := repository.FindAPIKeyBySecret(ctx, memberSecret); err != nil || key == nil || user == nil {
+		t.Fatalf("owner revoke affected member credential: key=%#v user=%#v err=%v", key, user, err)
+	}
+
+	if _, err := repository.pool.Exec(ctx, `update users set disabled_at = now() where id = $1`, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if key, user, err := repository.FindAPIKeyBySecret(ctx, memberSecret); err != nil || key != nil || user != nil {
+		t.Fatalf("disabled user credential authenticated: key=%#v user=%#v err=%v", key, user, err)
+	}
+}
+
+func TestCredentialMigrationRemovesTenantAndPlaintextSecretColumns(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	for table, forbiddenColumns := range map[string][]string{
+		"api_keys":        {"tenant_id", "key_value"},
+		"user_sessions":   {"tenant_id"},
+		"cli_login_codes": {"tenant_id"},
+	} {
+		for _, column := range forbiddenColumns {
+			var exists bool
+			if err := repository.pool.QueryRow(ctx, `
+select exists (
+  select 1
+  from information_schema.columns
+  where table_schema = current_schema()
+    and table_name = $1
+    and column_name = $2
+)
+`, table, column).Scan(&exists); err != nil {
+				t.Fatal(err)
+			}
+			if exists {
+				t.Fatalf("legacy identity column %s.%s still exists", table, column)
+			}
+		}
+	}
+
+	var purposeNotNull bool
+	var userIDNotNull bool
+	if err := repository.pool.QueryRow(ctx, `
+select
+  (select is_nullable = 'NO' from information_schema.columns where table_schema = current_schema() and table_name = 'api_keys' and column_name = 'purpose'),
+  (select is_nullable = 'NO' from information_schema.columns where table_schema = current_schema() and table_name = 'api_keys' and column_name = 'user_id')
+`).Scan(&purposeNotNull, &userIDNotNull); err != nil {
+		t.Fatal(err)
+	}
+	if !purposeNotNull || !userIDNotNull {
+		t.Fatalf("credential ownership columns are nullable: purpose=%t user_id=%t", purposeNotNull, userIDNotNull)
+	}
+}
+
 func TestMigrateRejectsAppliedMigrationDrift(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

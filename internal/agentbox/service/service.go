@@ -34,10 +34,10 @@ type Repository interface {
 	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error)
 	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error
 	PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
-	CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
-	ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error)
-	RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error)
-	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error)
+	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
+	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
+	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
+	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
 	UpsertTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error)
 	GetTenant(ctx context.Context, idOrSlug string) (*types.Tenant, error)
@@ -374,11 +374,15 @@ func (s *Service) SignedAssetDownloadURL(ctx context.Context, auth types.AuthCon
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, auth types.AuthContext, name string) (types.APIKey, error) {
-	return s.CreateAPIKeyWithScopes(ctx, auth, name, defaultAPIKeyScopes())
+	return s.CreateAPIKeyWithPurposeAndScopes(ctx, auth, name, "custom", defaultAPIKeyScopes())
 }
 
 func (s *Service) CreateAPIKeyWithScopes(ctx context.Context, auth types.AuthContext, name string, scopes []string) (types.APIKey, error) {
-	if err := requireAuthContext(auth); err != nil {
+	return s.CreateAPIKeyWithPurposeAndScopes(ctx, auth, name, "custom", scopes)
+}
+
+func (s *Service) CreateAPIKeyWithPurposeAndScopes(ctx context.Context, auth types.AuthContext, name string, purpose string, scopes []string) (types.APIKey, error) {
+	if err := requireUserAuthContext(auth); err != nil {
 		return types.APIKey{}, err
 	}
 	name = strings.TrimSpace(name)
@@ -389,25 +393,30 @@ func (s *Service) CreateAPIKeyWithScopes(ctx context.Context, auth types.AuthCon
 	if err != nil {
 		return types.APIKey{}, err
 	}
-	return s.repo.CreateAPIKey(ctx, auth.TenantID, auth.UserID, name, secret, hashSecret(secret), tokenPrefix(secret), normalizeScopes(scopes))
+	created, err := s.repo.CreateAPIKey(ctx, auth.UserID, name, normalizeCredentialPurpose(purpose), hashSecret(secret), tokenPrefix(secret), normalizeScopes(scopes))
+	if err != nil {
+		return types.APIKey{}, err
+	}
+	created.Key = secret
+	return created, nil
 }
 
 func (s *Service) ListAPIKeys(ctx context.Context, auth types.AuthContext) ([]types.APIKey, error) {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireUserAuthContext(auth); err != nil {
 		return nil, err
 	}
-	return s.repo.ListAPIKeys(ctx, auth.TenantID)
+	return s.repo.ListAPIKeys(ctx, auth.UserID)
 }
 
 func (s *Service) RevokeAPIKey(ctx context.Context, auth types.AuthContext, name string) error {
-	if err := requireAuthContext(auth); err != nil {
+	if err := requireUserAuthContext(auth); err != nil {
 		return err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("API key name is required.")
 	}
-	removed, err := s.repo.RevokeAPIKey(ctx, auth.TenantID, name)
+	removed, err := s.repo.RevokeAPIKey(ctx, auth.UserID, name)
 	if err != nil {
 		return err
 	}
@@ -490,12 +499,15 @@ func (s *Service) ProvisionTenant(ctx context.Context, params ProvisionTenantPar
 			keyName = "cli"
 		}
 		key, err := s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
-			TenantID:    tenant.ID,
-			TenantSlug:  tenant.Slug,
-			UserID:      user.ID,
-			SubjectType: types.AuthSubjectAdmin,
-			ActorName:   "admin",
-			Role:        "admin",
+			TenantID:        tenant.ID,
+			TenantSlug:      tenant.Slug,
+			UserID:          user.ID,
+			UserDisplayName: user.DisplayName,
+			SubjectType:     types.AuthSubjectUserSession,
+			ActorID:         user.ID,
+			ActorName:       user.DisplayName,
+			Role:            user.Role,
+			IsOwner:         user.IsOwner,
 		}, keyName, cliAPIKeyScopes())
 		if err != nil {
 			return ProvisionTenantResult{}, err
@@ -521,24 +533,10 @@ func (s *Service) ProvisionUser(ctx context.Context, params ProvisionUserParams)
 }
 
 func (s *Service) ProvisionTenantAPIKey(ctx context.Context, tenantIDOrSlug string, name string) (types.APIKey, error) {
-	tenantIDOrSlug = strings.TrimSpace(tenantIDOrSlug)
-	if tenantIDOrSlug == "" {
-		return types.APIKey{}, CodedError{Code: "INVALID_ARGUMENT", Message: "tenant_id is required."}
-	}
-	tenant, err := s.repo.GetTenant(ctx, tenantIDOrSlug)
-	if err != nil {
-		return types.APIKey{}, err
-	}
-	if tenant == nil {
-		return types.APIKey{}, CodedError{Code: "TENANT_NOT_FOUND", Message: "Tenant not found."}
-	}
-	return s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
-		TenantID:    tenant.ID,
-		TenantSlug:  tenant.Slug,
-		SubjectType: types.AuthSubjectAdmin,
-		ActorName:   "admin",
-		Role:        "admin",
-	}, name, cliAPIKeyScopes())
+	_ = ctx
+	_ = tenantIDOrSlug
+	_ = name
+	return types.APIKey{}, CodedError{Code: "LEGACY_TENANT_KEY_DISABLED", Message: "Tenant-wide credentials are disabled. Create a credential from an authenticated user account."}
 }
 
 func (s *Service) provisionUser(ctx context.Context, tenantID string, params ProvisionUserParams) (types.User, string, error) {
@@ -593,11 +591,11 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 	if secret == "" {
 		return nil, nil
 	}
-	key, err := s.repo.FindAPIKeyBySecret(ctx, secret)
+	key, user, err := s.repo.FindAPIKeyBySecret(ctx, secret)
 	if err != nil {
 		return nil, err
 	}
-	if key == nil {
+	if key == nil || user == nil {
 		return nil, nil
 	}
 	if key.ID != "" {
@@ -605,17 +603,19 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 			return nil, err
 		}
 	}
-	tenantID := key.TenantID
+	tenantID := user.TenantID
 	if tenantID == "" {
 		tenantID = types.DefaultTenantID
 	}
 	authContext := &types.AuthContext{
-		TenantID:    tenantID,
-		UserID:      stringValue(key.UserID),
-		SubjectType: types.AuthSubjectAPIKey,
-		ActorName:   key.Name,
-		KeyID:       key.ID,
-		Scopes:      append([]string(nil), key.Scopes...),
+		TenantID:        tenantID,
+		UserID:          user.ID,
+		UserDisplayName: user.DisplayName,
+		SubjectType:     types.AuthSubjectAPIKey,
+		ActorID:         key.ID,
+		ActorName:       key.Name,
+		KeyID:           key.ID,
+		Scopes:          append([]string(nil), key.Scopes...),
 	}
 	if tenant, err := s.repo.GetTenant(ctx, tenantID); err != nil {
 		return nil, err
@@ -625,13 +625,12 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 	return authContext, nil
 }
 
-func (s *Service) Login(ctx context.Context, tenantID string, email string, password string) (types.AuthContext, string, error) {
+func (s *Service) Login(ctx context.Context, _ string, email string, password string) (types.AuthContext, string, error) {
 	email = strings.TrimSpace(email)
-	tenantID = strings.TrimSpace(tenantID)
 	if email == "" || password == "" {
 		return types.AuthContext{}, "", ErrInvalidLogin
 	}
-	user, err := s.repo.FindUserByEmail(ctx, tenantID, email)
+	user, err := s.repo.FindUserByEmail(ctx, "", email)
 	if err != nil {
 		return types.AuthContext{}, "", err
 	}
@@ -644,7 +643,6 @@ func (s *Service) Login(ctx context.Context, tenantID string, email string, pass
 	}
 	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
 	session, err := s.repo.CreateUserSession(ctx, types.UserSession{
-		TenantID:   user.TenantID,
 		UserID:     user.ID,
 		SecretHash: hashSecret(secret),
 		ExpiresAt:  expiresAt,
@@ -723,7 +721,6 @@ func (s *Service) AuthorizeCLILogin(ctx context.Context, authContext types.AuthC
 	}
 	expiresAt := time.Now().UTC().Add(5 * time.Minute).Format("2006-01-02T15:04:05.000Z")
 	if _, err := s.repo.CreateCLILoginCode(ctx, types.CLILoginCode{
-		TenantID:    authContext.TenantID,
 		UserID:      authContext.UserID,
 		CodeHash:    hashSecret(code),
 		StateHash:   hashSecret(state),
@@ -752,7 +749,7 @@ func (s *Service) ExchangeCLILogin(ctx context.Context, code string, state strin
 	if loginCode == nil || user == nil {
 		return CLILoginExchangeResult{}, CodedError{Code: "PERMISSION_DENIED", Message: "Invalid or expired CLI login code."}
 	}
-	tenant, err := s.repo.GetTenant(ctx, loginCode.TenantID)
+	tenant, err := s.repo.GetTenant(ctx, user.TenantID)
 	if err != nil {
 		return CLILoginExchangeResult{}, err
 	}
@@ -763,14 +760,17 @@ func (s *Service) ExchangeCLILogin(ctx context.Context, code string, state strin
 	if keyName == "" {
 		keyName = defaultCLIKeyName()
 	}
-	key, err := s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
-		TenantID:    tenant.ID,
-		TenantSlug:  tenant.Slug,
-		UserID:      user.ID,
-		SubjectType: types.AuthSubjectUserSession,
-		ActorName:   user.DisplayName,
-		Role:        user.Role,
-	}, keyName, cliAPIKeyScopes())
+	key, err := s.CreateAPIKeyWithPurposeAndScopes(ctx, types.AuthContext{
+		TenantID:        tenant.ID,
+		TenantSlug:      tenant.Slug,
+		UserID:          user.ID,
+		UserDisplayName: user.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorID:         loginCode.ID,
+		ActorName:       user.DisplayName,
+		Role:            user.Role,
+		IsOwner:         user.IsOwner,
+	}, keyName, "local", cliAPIKeyScopes())
 	if err != nil {
 		return CLILoginExchangeResult{}, err
 	}
@@ -875,12 +875,15 @@ func validateCLIRedirectURI(value string) error {
 
 func authContextForUserSession(session types.UserSession, user types.User) types.AuthContext {
 	return types.AuthContext{
-		TenantID:    user.TenantID,
-		UserID:      user.ID,
-		SubjectType: types.AuthSubjectUserSession,
-		ActorName:   user.DisplayName,
-		SessionID:   session.ID,
-		Role:        user.Role,
+		TenantID:        user.TenantID,
+		UserID:          user.ID,
+		UserDisplayName: user.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorID:         session.ID,
+		ActorName:       user.DisplayName,
+		SessionID:       session.ID,
+		Role:            user.Role,
+		IsOwner:         user.IsOwner,
 	}
 }
 
@@ -930,6 +933,21 @@ func requireAuthContext(auth types.AuthContext) error {
 	return nil
 }
 
+func requireUserAuthContext(auth types.AuthContext) error {
+	if strings.TrimSpace(auth.UserID) == "" || strings.TrimSpace(auth.ActorName) == "" {
+		return CodedError{Code: "PERMISSION_DENIED", Message: "Authenticated user context is required."}
+	}
+	return nil
+}
+
+func normalizeCredentialPurpose(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "custom"
+	}
+	return value
+}
+
 func requireScope(auth types.AuthContext, scope string) error {
 	if err := requireAuthContext(auth); err != nil {
 		return err
@@ -951,13 +969,6 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-func stringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }
 
 func firstNonEmpty(values ...string) string {

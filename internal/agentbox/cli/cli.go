@@ -217,7 +217,7 @@ Commands:
   connect                 print ChatGPT MCP setup instructions
   raycast-key             create a Raycast API key and print preferences
   deploy                  print self-hosting deployment guidance
-  keys                    manage tenant-scoped API keys
+  keys                    manage credentials owned by the signed-in user
   list                    list recent threads
   search <query>          search threads by title and message body
   create <title>          create a thread
@@ -252,9 +252,9 @@ Check profile, health, authenticated API access, signed download URLs, and MCP U
 		"mcp-url": `Usage: agentbox mcp-url [--json]
 
 Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized diagnostics and tenant metadata when available.`,
-		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
+		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--api-key <existing-user-key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
 
-Legacy single-tenant bootstrap command. New deployments should use agentbox provision tenant, then agentbox login or tenant-scoped key commands.`,
+Use an existing user credential with keys:write scope to create local and ChatGPT credentials for that same user, save the local credential as the active profile, and optionally run doctor.`,
 		"provision": `Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key] [--key-name cli] [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--json]
 
 Create or update a tenant and initial tenant admin user through the deployment-owner admin API. No public signup endpoint is exposed.`,
@@ -269,7 +269,7 @@ Create a tenant-scoped Raycast key and print the Agentbox URL and API key prefer
 Print the Vercel commands for deploying the backend and optional dashboard. This command does not mutate Vercel projects or env vars.`,
 		"keys": `Usage: agentbox keys [command]
 
-Manage tenant-scoped API keys.
+Manage credentials owned by the signed-in profile's user.
 
 Commands:
   create <name>           create or replace a named API key; use "raycast" for Raycast preferences

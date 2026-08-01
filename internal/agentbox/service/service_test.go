@@ -6,9 +6,71 @@ import (
 	"testing"
 
 	"agentbox/internal/agentbox/assets"
+	authpkg "agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/types"
 )
+
+func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
+	passwordHash, err := authpkg.HashPassword("secret-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+		Users: []types.User{{
+			ID:           "usr_owner",
+			TenantID:     types.DefaultTenantID,
+			Email:        "owner@example.com",
+			DisplayName:  "Owner Person",
+			PasswordHash: &passwordHash,
+			Role:         "admin",
+			IsOwner:      true,
+		}},
+	}
+	svc := New(repo, &assets.FakeStore{})
+
+	sessionAuth, sessionSecret, err := svc.Login(context.Background(), "ten_wrong", "owner@example.com", "secret-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessionAuth.UserID != "usr_owner" || sessionAuth.UserDisplayName != "Owner Person" || !sessionAuth.IsOwner || sessionAuth.ActorID == "" || sessionAuth.ActorID != sessionAuth.SessionID {
+		t.Fatalf("unexpected browser auth context: %#v", sessionAuth)
+	}
+	if sessionAuth.TenantID != types.DefaultTenantID {
+		t.Fatalf("tenant selector changed account choice: %#v", sessionAuth)
+	}
+
+	credential, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), sessionAuth, "chatgpt", "chatgpt", []string{"threads:read", "threads:write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.UserID != sessionAuth.UserID || credential.Purpose != "chatgpt" {
+		t.Fatalf("unexpected credential: %#v", credential)
+	}
+	credentialAuth, err := svc.AuthenticateAPIKey(context.Background(), credential.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentialAuth == nil || credentialAuth.UserID != sessionAuth.UserID || credentialAuth.UserDisplayName != sessionAuth.UserDisplayName {
+		t.Fatalf("credential did not resolve the browser user: session=%#v key=%#v", sessionAuth, credentialAuth)
+	}
+	if credentialAuth.ActorID != credential.ID || credentialAuth.KeyID != credential.ID || credentialAuth.ActorName != "chatgpt" || credentialAuth.IsOwner {
+		t.Fatalf("credential actor or owner authority is wrong: %#v", credentialAuth)
+	}
+	if credentialAuth.ActorID == sessionAuth.ActorID {
+		t.Fatalf("browser and credential actors collapsed: session=%#v key=%#v", sessionAuth, credentialAuth)
+	}
+
+	disabledAt := "2026-08-01T00:00:00.000Z"
+	repo.Users[0].DisabledAt = &disabledAt
+	if authenticated, err := svc.AuthenticateSession(context.Background(), sessionSecret); err != nil || authenticated != nil {
+		t.Fatalf("disabled user browser session authenticated: auth=%#v err=%v", authenticated, err)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(context.Background(), credential.Key); err != nil || authenticated != nil {
+		t.Fatalf("disabled user credential authenticated: auth=%#v err=%v", authenticated, err)
+	}
+}
 
 func TestServiceThreadAndMessageFlow(t *testing.T) {
 	repo := &db.MemoryRepository{}
@@ -81,6 +143,10 @@ func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
 	svc := New(repo, &assets.FakeStore{})
 	tenantA := testAuth("ten_a", "shared")
 	tenantB := testAuth("ten_b", "shared")
+	repo.Users = append(repo.Users,
+		types.User{ID: tenantA.UserID, TenantID: "ten_a", Email: "a@example.com", DisplayName: "User A", Role: "member"},
+		types.User{ID: tenantB.UserID, TenantID: "ten_b", Email: "b@example.com", DisplayName: "User B", Role: "member"},
+	)
 
 	keyA, err := svc.CreateAPIKey(context.Background(), tenantA, "shared")
 	if err != nil {
@@ -151,7 +217,8 @@ func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
 func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
-	adminAuth := types.AuthContext{TenantID: "ten_a", SubjectType: types.AuthSubjectAdmin, ActorName: "admin", Role: "admin"}
+	adminAuth := types.AuthContext{TenantID: "ten_a", UserID: "usr_admin", SubjectType: types.AuthSubjectUserSession, ActorName: "admin", Role: "admin"}
+	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, TenantID: "ten_a", Email: "admin@example.com", DisplayName: "Admin", Role: "admin"})
 	thread, err := svc.CreateThread(context.Background(), adminAuth, "Scoped")
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +384,7 @@ func TestServiceProvisionUserSetupToken(t *testing.T) {
 func testAuth(tenantID string, actorName string) types.AuthContext {
 	return types.AuthContext{
 		TenantID:    tenantID,
+		UserID:      "usr_" + tenantID,
 		SubjectType: types.AuthSubjectAPIKey,
 		ActorName:   actorName,
 		KeyID:       "key_" + tenantID,

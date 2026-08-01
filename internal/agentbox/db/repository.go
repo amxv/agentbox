@@ -364,50 +364,33 @@ returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_byt
 	return message, nil
 }
 
-func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
+func (r *Repository) CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
 	id := "key_" + uuid.NewString()
-	var keyUserID *string
-	if strings.TrimSpace(userID) != "" {
-		keyUserID = &userID
-	}
-	tag, err := r.pool.Exec(ctx, `
-update api_keys
-set user_id = $1, token_prefix = $2, token_hash = $3, scopes = $4, updated_at = now(), revoked_at = null
-where tenant_id = $5 and lower(name) = lower($6) and revoked_at is null
-`, keyUserID, tokenPrefix, tokenHash, scopes, tenantID, name)
-	if err != nil {
-		return types.APIKey{}, err
-	}
-	if tag.RowsAffected() == 0 {
-		_, err = r.pool.Exec(ctx, `
-insert into api_keys (id, tenant_id, user_id, name, token_prefix, token_hash, scopes)
+	created, err := scanAPIKey(r.pool.QueryRow(ctx, `
+insert into api_keys (id, user_id, name, purpose, token_prefix, token_hash, scopes)
 values ($1, $2, $3, $4, $5, $6, $7)
-`, id, tenantID, keyUserID, name, tokenPrefix, tokenHash, scopes)
-		if err != nil {
-			return types.APIKey{}, err
-		}
-	}
-	row := r.pool.QueryRow(ctx, `
-select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
-from api_keys
-where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null
-`, tenantID, name)
-	created, err := scanAPIKey(row)
+on conflict (user_id, lower(name)) where revoked_at is null do update
+set purpose = excluded.purpose,
+    token_prefix = excluded.token_prefix,
+    token_hash = excluded.token_hash,
+    scopes = excluded.scopes,
+    updated_at = now(),
+    last_used_at = null
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+`, id, userID, name, purpose, tokenPrefix, tokenHash, scopes))
 	if err != nil {
 		return types.APIKey{}, err
 	}
-	created.Key = key
-	created.KeyMasked = maskSecret(key)
 	return created, nil
 }
 
-func (r *Repository) ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error) {
+func (r *Repository) ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error) {
 	rows, err := r.pool.Query(ctx, `
-select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 from api_keys
-where tenant_id = $1 and revoked_at is null
+where user_id = $1 and revoked_at is null
 order by name asc
-`, tenantID)
+`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -424,27 +407,34 @@ order by name asc
 	return keys, rows.Err()
 }
 
-func (r *Repository) RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `update api_keys set revoked_at = now(), updated_at = now() where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null`, tenantID, name)
+func (r *Repository) RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `update api_keys set revoked_at = now(), updated_at = now() where user_id = $1 and lower(name) = lower($2) and revoked_at is null`, userID, name)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
 }
 
-func (r *Repository) FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error) {
-	found, err := scanAPIKey(r.pool.QueryRow(ctx, `
-select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
-from api_keys
-where revoked_at is null and (token_hash = $1 or key_value = $2)
-`, hashSecret(key), key))
+func (r *Repository) FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error) {
+	found, user, err := scanAPIKeyAndUser(r.pool.QueryRow(ctx, `
+select
+  k.id, k.user_id, k.name, k.purpose, k.token_prefix, k.token_hash, k.scopes,
+  k.created_at, k.updated_at, k.last_used_at, k.revoked_at,
+  u.id, u.tenant_id, u.email, u.display_name, u.password_hash, u.role, u.is_owner,
+  u.created_at, u.updated_at, u.disabled_at
+from api_keys k
+join users u on u.id = k.user_id
+where k.revoked_at is null
+  and k.token_hash = $1
+  and u.disabled_at is null
+`, hashSecret(key)))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &found, nil
+	return &found, &user, nil
 }
 
 func (r *Repository) MarkAPIKeyUsed(ctx context.Context, keyID string) error {
@@ -572,7 +562,7 @@ func (r *Repository) UpsertProvisionedUser(ctx context.Context, tenantID string,
 	row := r.pool.QueryRow(ctx, `
 insert into users (id, tenant_id, email, display_name, password_hash, role)
 values ($1, $2, $3, $4, $5, $6)
-on conflict (tenant_id, lower(email)) do update
+on conflict (lower(email)) do update
 set
   display_name = excluded.display_name,
   password_hash = coalesce(excluded.password_hash, users.password_hash),
@@ -584,38 +574,20 @@ returning id, tenant_id, email, display_name, password_hash, role, is_owner, cre
 	return scanUser(row)
 }
 
-func (r *Repository) FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error) {
-	rows, err := r.pool.Query(ctx, `
+func (r *Repository) FindUserByEmail(ctx context.Context, _ string, email string) (*types.User, error) {
+	user, err := scanUser(r.pool.QueryRow(ctx, `
 select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 from users
 where disabled_at is null
   and lower(email) = lower($1)
-  and ($2::text = '' or tenant_id = $2)
-order by created_at asc
-limit 2
-`, strings.TrimSpace(email), strings.TrimSpace(tenantID))
+`, strings.TrimSpace(email)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	users := []types.User{}
-	for rows.Next() {
-		user, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, user)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(users) == 0 {
-		return nil, nil
-	}
-	if len(users) > 1 {
-		return nil, errors.New("Multiple users match that email. Specify a tenant.")
-	}
-	return &users[0], nil
+	return &user, nil
 }
 
 func (r *Repository) CreateUserSession(ctx context.Context, session types.UserSession) (types.UserSession, error) {
@@ -624,17 +596,16 @@ func (r *Repository) CreateUserSession(ctx context.Context, session types.UserSe
 		id = "sess_" + uuid.NewString()
 	}
 	return scanUserSession(r.pool.QueryRow(ctx, `
-insert into user_sessions (id, tenant_id, user_id, secret_hash, expires_at)
-values ($1, $2, $3, $4, $5)
-returning id, tenant_id, user_id, secret_hash, created_at, last_used_at, expires_at, revoked_at
-`, id, session.TenantID, session.UserID, session.SecretHash, session.ExpiresAt))
+insert into user_sessions (id, user_id, secret_hash, expires_at)
+values ($1, $2, $3, $4)
+returning id, user_id, secret_hash, created_at, last_used_at, expires_at, revoked_at
+`, id, session.UserID, session.SecretHash, session.ExpiresAt))
 }
 
 func (r *Repository) FindUserSessionBySecretHash(ctx context.Context, secretHash string) (*types.UserSession, *types.User, error) {
 	row := r.pool.QueryRow(ctx, `
 select
   s.id,
-  s.tenant_id,
   s.user_id,
   s.secret_hash,
   s.created_at,
@@ -652,7 +623,7 @@ select
   u.updated_at,
   u.disabled_at
 from user_sessions s
-join users u on u.tenant_id = s.tenant_id and u.id = s.user_id
+join users u on u.id = s.user_id
 where s.secret_hash = $1
   and s.revoked_at is null
   and s.expires_at > now()
@@ -690,10 +661,10 @@ func (r *Repository) CreateCLILoginCode(ctx context.Context, code types.CLILogin
 		id = "clicode_" + uuid.NewString()
 	}
 	return scanCLILoginCode(r.pool.QueryRow(ctx, `
-insert into cli_login_codes (id, tenant_id, user_id, code_hash, state_hash, redirect_uri, expires_at)
-values ($1, $2, $3, $4, $5, $6, $7)
-returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_at, expires_at, consumed_at
-`, id, code.TenantID, code.UserID, code.CodeHash, code.StateHash, code.RedirectURI, code.ExpiresAt))
+insert into cli_login_codes (id, user_id, code_hash, state_hash, redirect_uri, expires_at)
+values ($1, $2, $3, $4, $5, $6)
+returning id, user_id, code_hash, state_hash, redirect_uri, created_at, expires_at, consumed_at
+`, id, code.UserID, code.CodeHash, code.StateHash, code.RedirectURI, code.ExpiresAt))
 }
 
 func (r *Repository) ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error) {
@@ -711,7 +682,7 @@ where code_hash = $1
   and redirect_uri = $3
   and consumed_at is null
   and expires_at > now()
-returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_at, expires_at, consumed_at
+returning id, user_id, code_hash, state_hash, redirect_uri, created_at, expires_at, consumed_at
 `, codeHash, stateHash, redirectURI)
 	code, err := scanCLILoginCode(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -723,8 +694,8 @@ returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_a
 	user, err := scanUser(tx.QueryRow(ctx, `
 select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 from users
-where tenant_id = $1 and id = $2 and disabled_at is null
-`, code.TenantID, code.UserID))
+where id = $1 and disabled_at is null
+`, code.UserID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, nil
 	}
@@ -833,7 +804,7 @@ func scanAPIKey(row threadScanner) (types.APIKey, error) {
 	var lastUsedAt *time.Time
 	var revokedAt *time.Time
 	key := types.APIKey{}
-	err := row.Scan(&key.ID, &key.TenantID, &key.UserID, &key.Name, &key.TokenPrefix, &key.TokenHash, &key.Scopes, &createdAt, &updatedAt, &lastUsedAt, &revokedAt)
+	err := row.Scan(&key.ID, &key.UserID, &key.Name, &key.Purpose, &key.TokenPrefix, &key.TokenHash, &key.Scopes, &createdAt, &updatedAt, &lastUsedAt, &revokedAt)
 	key.KeyMasked = maskSecret(key.TokenPrefix)
 	key.CreatedAt = isoMillis(createdAt)
 	key.UpdatedAt = isoMillis(updatedAt)
@@ -846,6 +817,59 @@ func scanAPIKey(row threadScanner) (types.APIKey, error) {
 		key.RevokedAt = &value
 	}
 	return key, err
+}
+
+func scanAPIKeyAndUser(row threadScanner) (types.APIKey, types.User, error) {
+	var keyCreatedAt time.Time
+	var keyUpdatedAt time.Time
+	var keyLastUsedAt *time.Time
+	var keyRevokedAt *time.Time
+	var userCreatedAt time.Time
+	var userUpdatedAt time.Time
+	var userDisabledAt *time.Time
+	key := types.APIKey{}
+	user := types.User{}
+	err := row.Scan(
+		&key.ID,
+		&key.UserID,
+		&key.Name,
+		&key.Purpose,
+		&key.TokenPrefix,
+		&key.TokenHash,
+		&key.Scopes,
+		&keyCreatedAt,
+		&keyUpdatedAt,
+		&keyLastUsedAt,
+		&keyRevokedAt,
+		&user.ID,
+		&user.TenantID,
+		&user.Email,
+		&user.DisplayName,
+		&user.PasswordHash,
+		&user.Role,
+		&user.IsOwner,
+		&userCreatedAt,
+		&userUpdatedAt,
+		&userDisabledAt,
+	)
+	key.KeyMasked = maskSecret(key.TokenPrefix)
+	key.CreatedAt = isoMillis(keyCreatedAt)
+	key.UpdatedAt = isoMillis(keyUpdatedAt)
+	if keyLastUsedAt != nil {
+		value := isoMillis(*keyLastUsedAt)
+		key.LastUsedAt = &value
+	}
+	if keyRevokedAt != nil {
+		value := isoMillis(*keyRevokedAt)
+		key.RevokedAt = &value
+	}
+	user.CreatedAt = isoMillis(userCreatedAt)
+	user.UpdatedAt = isoMillis(userUpdatedAt)
+	if userDisabledAt != nil {
+		value := isoMillis(*userDisabledAt)
+		user.DisabledAt = &value
+	}
+	return key, user, err
 }
 
 func scanTenant(row threadScanner) (types.Tenant, error) {
@@ -879,7 +903,7 @@ func scanUserSession(row threadScanner) (types.UserSession, error) {
 	var expiresAt time.Time
 	var revokedAt *time.Time
 	session := types.UserSession{}
-	err := row.Scan(&session.ID, &session.TenantID, &session.UserID, &session.SecretHash, &createdAt, &lastUsedAt, &expiresAt, &revokedAt)
+	err := row.Scan(&session.ID, &session.UserID, &session.SecretHash, &createdAt, &lastUsedAt, &expiresAt, &revokedAt)
 	session.CreatedAt = isoMillis(createdAt)
 	session.ExpiresAt = isoMillis(expiresAt)
 	if lastUsedAt != nil {
@@ -905,7 +929,6 @@ func scanUserSessionAndUser(row threadScanner) (types.UserSession, types.User, e
 	user := types.User{}
 	err := row.Scan(
 		&session.ID,
-		&session.TenantID,
 		&session.UserID,
 		&session.SecretHash,
 		&sessionCreatedAt,
@@ -947,7 +970,7 @@ func scanCLILoginCode(row threadScanner) (types.CLILoginCode, error) {
 	var expiresAt time.Time
 	var consumedAt *time.Time
 	code := types.CLILoginCode{}
-	err := row.Scan(&code.ID, &code.TenantID, &code.UserID, &code.CodeHash, &code.StateHash, &code.RedirectURI, &createdAt, &expiresAt, &consumedAt)
+	err := row.Scan(&code.ID, &code.UserID, &code.CodeHash, &code.StateHash, &code.RedirectURI, &createdAt, &expiresAt, &consumedAt)
 	code.CreatedAt = isoMillis(createdAt)
 	code.ExpiresAt = isoMillis(expiresAt)
 	if consumedAt != nil {

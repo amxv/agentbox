@@ -396,6 +396,7 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 func TestAuthMeSupportsAPIKeyAndAliasWithoutLeakingSecret(t *testing.T) {
 	repo := &db.MemoryRepository{
 		Tenants: []types.Tenant{{ID: "ten_acme", Slug: "acme", Name: "Acme"}},
+		Users:   []types.User{{ID: "usr_acme", TenantID: "ten_acme", Email: "admin@example.com", DisplayName: "Acme Admin", Role: "admin"}},
 	}
 	svc := service.New(repo, &assets.FakeStore{})
 	key, err := svc.CreateAPIKeyWithScopes(t.Context(), types.AuthContext{
@@ -431,6 +432,127 @@ func TestAuthMeSupportsAPIKeyAndAliasWithoutLeakingSecret(t *testing.T) {
 		if strings.Contains(body, key.Key) || strings.Contains(body, key.TokenHash) {
 			t.Fatalf("%s leaked secret material: %s", path, body)
 		}
+	}
+}
+
+func TestHTTPUserCredentialsAreIsolatedAndRotatable(t *testing.T) {
+	passwordHash, err := authpkg.HashPassword("let-me-in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+		Users: []types.User{
+			testUser(types.DefaultTenantID, "usr_a", "a@example.com", "User A", "admin", passwordHash),
+			testUser(types.DefaultTenantID, "usr_b", "b@example.com", "User B", "member", passwordHash),
+		},
+	}
+	repo.Users[0].IsOwner = true
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, service.New(repo, &assets.FakeStore{}))
+
+	login := func(email string) *http.Cookie {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"tenant_id":"ten_ignored","email":"`+email+`","password":"let-me-in"}`)))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("login %s status=%d body=%s", email, recorder.Code, recorder.Body.String())
+		}
+		cookies := recorder.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Fatalf("login %s cookies=%#v", email, cookies)
+		}
+		return cookies[0]
+	}
+	create := func(cookie *http.Cookie) types.APIKey {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(`{"name":"chatgpt","purpose":"chatgpt"}`))
+		request.AddCookie(cookie)
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("create credential status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var payload struct {
+			Key struct {
+				ID      string `json:"id"`
+				UserID  string `json:"user_id"`
+				Name    string `json:"name"`
+				Purpose string `json:"purpose"`
+				Secret  string `json:"key"`
+			} `json:"key"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return types.APIKey{ID: payload.Key.ID, UserID: payload.Key.UserID, Name: payload.Key.Name, Purpose: payload.Key.Purpose, Key: payload.Key.Secret}
+	}
+	list := func(cookie *http.Cookie) []types.APIKey {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+		request.AddCookie(cookie)
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("list credentials status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var payload struct {
+			Keys []types.APIKey `json:"keys"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload.Keys
+	}
+
+	cookieA := login("a@example.com")
+	cookieB := login("b@example.com")
+	firstA := create(cookieA)
+	keyB := create(cookieB)
+	rotatedA := create(cookieA)
+	if firstA.ID != rotatedA.ID || firstA.Key == rotatedA.Key {
+		t.Fatalf("rotation did not replace only the secret: first=%#v rotated=%#v", firstA, rotatedA)
+	}
+	if firstA.UserID != "usr_a" || rotatedA.UserID != "usr_a" || keyB.UserID != "usr_b" || keyB.ID == rotatedA.ID {
+		t.Fatalf("credential ownership crossed users: first=%#v rotated=%#v b=%#v", firstA, rotatedA, keyB)
+	}
+	if rotatedA.Purpose != "chatgpt" || keyB.Purpose != "chatgpt" {
+		t.Fatalf("credential purpose was not persisted: a=%#v b=%#v", rotatedA, keyB)
+	}
+	if keys := list(cookieA); len(keys) != 1 || keys[0].ID != rotatedA.ID || keys[0].UserID != "usr_a" {
+		t.Fatalf("user A list crossed users: %#v", keys)
+	}
+	if keys := list(cookieB); len(keys) != 1 || keys[0].ID != keyB.ID || keys[0].UserID != "usr_b" {
+		t.Fatalf("user B list crossed users: %#v", keys)
+	}
+
+	oldAuth := httptest.NewRecorder()
+	oldRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	oldRequest.Header.Set("authorization", "Bearer "+firstA.Key)
+	server.ServeHTTP(oldAuth, oldRequest)
+	if oldAuth.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated secret still authenticated: status=%d body=%s", oldAuth.Code, oldAuth.Body.String())
+	}
+	ownerKeyAuth := httptest.NewRecorder()
+	ownerKeyRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	ownerKeyRequest.Header.Set("authorization", "Bearer "+rotatedA.Key)
+	server.ServeHTTP(ownerKeyAuth, ownerKeyRequest)
+	if ownerKeyAuth.Code != http.StatusOK || strings.Contains(ownerKeyAuth.Body.String(), `"is_owner":true`) {
+		t.Fatalf("owner credential inherited browser-only owner authority: status=%d body=%s", ownerKeyAuth.Code, ownerKeyAuth.Body.String())
+	}
+
+	revokeA := httptest.NewRecorder()
+	revokeARequest := httptest.NewRequest(http.MethodDelete, "/api/keys/chatgpt", nil)
+	revokeARequest.AddCookie(cookieA)
+	server.ServeHTTP(revokeA, revokeARequest)
+	if revokeA.Code != http.StatusOK {
+		t.Fatalf("revoke A status=%d body=%s", revokeA.Code, revokeA.Body.String())
+	}
+	bAuth := httptest.NewRecorder()
+	bRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	bRequest.Header.Set("authorization", "Bearer "+keyB.Key)
+	server.ServeHTTP(bAuth, bRequest)
+	if bAuth.Code != http.StatusOK || !strings.Contains(bAuth.Body.String(), `"user_id":"usr_b"`) {
+		t.Fatalf("revoking A affected B: status=%d body=%s", bAuth.Code, bAuth.Body.String())
 	}
 }
 
@@ -495,7 +617,7 @@ func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
 	if exchanged.APIKey.Name != "cli-test" || exchanged.APIKey.Secret == "" || exchanged.Tenant.ID != "ten_acme" || exchanged.Tenant.Slug != "acme" || exchanged.User.ID != "usr_acme" {
 		t.Fatalf("exchanged = %#v", exchanged)
 	}
-	if len(repo.APIKeys) != 1 || repo.APIKeys[0].UserID == nil || *repo.APIKeys[0].UserID != "usr_acme" {
+	if len(repo.APIKeys) != 1 || repo.APIKeys[0].UserID != "usr_acme" {
 		t.Fatalf("repo API keys = %#v", repo.APIKeys)
 	}
 
@@ -506,7 +628,7 @@ func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
 	}
 }
 
-func TestAdminKeyRoutesCreateListRevokeAndAuthenticate(t *testing.T) {
+func TestAdminKeyRoutesAreDisabled(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
 	server := NewServer(config.Config{AdminKey: "adm"}, svc)
@@ -517,64 +639,17 @@ func TestAdminKeyRoutesCreateListRevokeAndAuthenticate(t *testing.T) {
 		t.Fatalf("unauthorized status = %d", unauthorized.Code)
 	}
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/admin/keys", strings.NewReader(`{"name":"chatgpt"}`))
-	createReq.Header.Set("x-agentbox-admin-key", "adm")
-	create := httptest.NewRecorder()
-	server.ServeHTTP(create, createReq)
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
-	}
-	var created struct {
-		Key struct {
-			Name      string `json:"name"`
-			Secret    string `json:"key"`
-			KeyMasked string `json:"key_masked"`
-		} `json:"key"`
-	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	if created.Key.Name != "chatgpt" || created.Key.Secret == "" || created.Key.KeyMasked == "" {
-		t.Fatalf("created = %#v", created)
-	}
-
-	apiCreate := httptest.NewRecorder()
-	server.ServeHTTP(apiCreate, httptest.NewRequest(http.MethodPost, "/api/threads?key="+created.Key.Secret, strings.NewReader(`{"title":"DB key"}`)))
-	if apiCreate.Code != http.StatusCreated {
-		t.Fatalf("authenticated create status = %d body=%s", apiCreate.Code, apiCreate.Body.String())
-	}
-	var threadPayload struct {
-		Thread struct {
-			CreatedBy string `json:"created_by"`
-		} `json:"thread"`
-	}
-	if err := json.Unmarshal(apiCreate.Body.Bytes(), &threadPayload); err != nil {
-		t.Fatal(err)
-	}
-	if threadPayload.Thread.CreatedBy != "chatgpt" {
-		t.Fatalf("thread payload = %#v", threadPayload)
-	}
-
-	listReq := httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil)
-	listReq.Header.Set("x-agentbox-admin-key", "adm")
-	list := httptest.NewRecorder()
-	server.ServeHTTP(list, listReq)
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"name":"chatgpt"`) || strings.Contains(list.Body.String(), created.Key.Secret) {
-		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
-	}
-
-	revokeReq := httptest.NewRequest(http.MethodDelete, "/api/admin/keys/chatgpt", nil)
-	revokeReq.Header.Set("x-agentbox-admin-key", "adm")
-	revoke := httptest.NewRecorder()
-	server.ServeHTTP(revoke, revokeReq)
-	if revoke.Code != http.StatusOK {
-		t.Fatalf("revoke status = %d body=%s", revoke.Code, revoke.Body.String())
-	}
-
-	afterRevoke := httptest.NewRecorder()
-	server.ServeHTTP(afterRevoke, httptest.NewRequest(http.MethodGet, "/api/threads?key="+created.Key.Secret, nil))
-	if afterRevoke.Code != http.StatusUnauthorized {
-		t.Fatalf("after revoke status = %d body=%s", afterRevoke.Code, afterRevoke.Body.String())
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil),
+		httptest.NewRequest(http.MethodPost, "/api/admin/keys", strings.NewReader(`{"name":"chatgpt"}`)),
+		httptest.NewRequest(http.MethodDelete, "/api/admin/keys/chatgpt", nil),
+	} {
+		request.Header.Set("x-agentbox-admin-key", "adm")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusGone || !strings.Contains(response.Body.String(), "LEGACY_ADMIN_KEY_DISABLED") {
+			t.Fatalf("%s %s status=%d body=%s", request.Method, request.URL.Path, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -676,21 +751,8 @@ func TestAdminTenantUserAndKeyRoutes(t *testing.T) {
 	keyReq.Header.Set("x-agentbox-admin-key", "adm")
 	keyRes := httptest.NewRecorder()
 	server.ServeHTTP(keyRes, keyReq)
-	if keyRes.Code != http.StatusCreated {
-		t.Fatalf("key status=%d body=%s", keyRes.Code, keyRes.Body.String())
-	}
-	var keyPayload struct {
-		Key struct {
-			TenantID string `json:"tenant_id"`
-			Name     string `json:"name"`
-			Secret   string `json:"key"`
-		} `json:"key"`
-	}
-	if err := json.Unmarshal(keyRes.Body.Bytes(), &keyPayload); err != nil {
-		t.Fatal(err)
-	}
-	if keyPayload.Key.TenantID != "ten_acme" || keyPayload.Key.Name != "raycast" || keyPayload.Key.Secret == "" {
-		t.Fatalf("key payload=%#v", keyPayload)
+	if keyRes.Code != http.StatusBadRequest || !strings.Contains(keyRes.Body.String(), "LEGACY_TENANT_KEY_DISABLED") {
+		t.Fatalf("legacy tenant key status=%d body=%s", keyRes.Code, keyRes.Body.String())
 	}
 }
 
@@ -780,11 +842,17 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	keyA, err := svc.CreateAPIKey(t.Context(), authContext("ten_a", "tenant-a"), "shared")
+	authA := authContext("ten_a", "tenant-a")
+	authB := authContext("ten_b", "tenant-b")
+	repo.Users = append(repo.Users,
+		types.User{ID: authA.UserID, TenantID: "ten_a", Email: "a@example.com", DisplayName: "Tenant A", Role: "member"},
+		types.User{ID: authB.UserID, TenantID: "ten_b", Email: "b@example.com", DisplayName: "Tenant B", Role: "member"},
+	)
+	keyA, err := svc.CreateAPIKey(t.Context(), authA, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyB, err := svc.CreateAPIKey(t.Context(), authContext("ten_b", "tenant-b"), "shared")
+	keyB, err := svc.CreateAPIKey(t.Context(), authB, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,6 +1103,7 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 func authContext(tenantID string, actorName string) types.AuthContext {
 	return types.AuthContext{
 		TenantID:    tenantID,
+		UserID:      "usr_" + actorName,
 		SubjectType: types.AuthSubjectAPIKey,
 		ActorName:   actorName,
 	}

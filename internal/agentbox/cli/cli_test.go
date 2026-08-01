@@ -52,15 +52,16 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"profiles", "--help"}, []string{"Usage: agentbox profiles [options] [command]", "add <name>"}},
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
+		{[]string{"init", "--help"}, []string{"Usage: agentbox init", "existing user credential"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
 		{[]string{"provision", "--help"}, []string{"Usage: agentbox provision tenant", "deployment-owner admin API"}},
 		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "tenant-scoped API key"}},
 		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "tenant metadata"}},
 		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "tenant-scoped ChatGPT key"}},
 		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key", "Raycast"}},
-		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "tenant-scoped API key"}},
-		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "current tenant"}},
-		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "current tenant"}},
+		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "signed-in profile's user"}},
+		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "signed-in profile's user"}},
+		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "signed-in profile's user"}},
 		{[]string{"search", "--help"}, []string{"Usage: agentbox search <query>", "message counts"}},
 		{[]string{"create", "--help"}, []string{"--message <body>", "first message"}},
 	}
@@ -419,7 +420,7 @@ func TestCLIInitSavesProfile(t *testing.T) {
 		HTTPClient: server.Client(),
 	}
 
-	if code := runner.Run([]string{"init", "--profile-name", "prod", "--base-url", server.URL, "--admin-key", "adm", "--local-key-name", "workstation", "--chatgpt-key-name", "chatgpt", "--skip-doctor"}); code != 0 {
+	if code := runner.Run([]string{"init", "--profile-name", "prod", "--base-url", server.URL, "--api-key", "dev-key", "--local-key-name", "workstation", "--chatgpt-key-name", "chatgpt", "--skip-doctor"}); code != 0 {
 		t.Fatalf("init failed: code=%d stderr=%s", code, stderr.String())
 	}
 	if !strings.Contains(out.String(), `Saved profile "prod"`) || !strings.Contains(out.String(), `Created ChatGPT API key "chatgpt"`) {
@@ -523,7 +524,7 @@ func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 	}
 }
 
-func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
+func TestCLIAdminKeyManagementIsDisabled(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
 	defer server.Close()
@@ -532,30 +533,11 @@ func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
 	var stderr bytes.Buffer
 	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
 
-	if code := runner.Run([]string{"keys", "create", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
-		t.Fatalf("keys create failed: code=%d stderr=%s", code, stderr.String())
+	if code := runner.Run([]string{"keys", "create", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code == 0 {
+		t.Fatalf("legacy admin key creation unexpectedly succeeded: stdout=%s", out.String())
 	}
-	created := out.String()
-	if !strings.Contains(created, `Created API key "builder"`) || !strings.Contains(created, "Secret: ") {
-		t.Fatalf("create output = %s", created)
-	}
-
-	out.Reset()
-	stderr.Reset()
-	if code := runner.Run([]string{"keys", "list", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
-		t.Fatalf("keys list failed: code=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "builder") {
-		t.Fatalf("list output = %s", out.String())
-	}
-
-	out.Reset()
-	stderr.Reset()
-	if code := runner.Run([]string{"keys", "revoke", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
-		t.Fatalf("keys revoke failed: code=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), `Revoked API key "builder"`) {
-		t.Fatalf("revoke output = %s", out.String())
+	if !strings.Contains(stderr.String(), "--admin-key and --base-url are no longer supported") {
+		t.Fatalf("stderr = %s", stderr.String())
 	}
 }
 
@@ -597,8 +579,8 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	for _, key := range listed.Keys {
 		if key.Name == "tenant-managed" {
 			found = true
-			if key.TenantID != types.DefaultTenantID {
-				t.Fatalf("tenant-managed key tenant_id=%q", key.TenantID)
+			if key.UserID != "usr_seed" {
+				t.Fatalf("tenant-managed key user_id=%q", key.UserID)
 			}
 		}
 	}
@@ -775,7 +757,8 @@ func TestShouldReadStdinForPipe(t *testing.T) {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := &db.MemoryRepository{}
-	authContext := types.AuthContext{TenantID: types.DefaultTenantID, SubjectType: types.AuthSubjectAdmin, ActorName: "seed", Role: "admin"}
+	authContext := types.AuthContext{TenantID: types.DefaultTenantID, UserID: "usr_seed", SubjectType: types.AuthSubjectUserSession, ActorName: "seed", Role: "admin"}
+	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, TenantID: types.DefaultTenantID, Email: "seed@example.com", DisplayName: "Seed", Role: "admin"})
 	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
 	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use", "keys:read", "keys:write"}); err != nil {
 		t.Fatal(err)

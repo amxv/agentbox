@@ -268,19 +268,35 @@ func (m *MemoryRepository) PostMessage(_ context.Context, tenantID string, threa
 	return message, nil
 }
 
-func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
+func (m *MemoryRepository) CreateAPIKey(_ context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
 	now := isoMillis(time.Now())
-	var keyUserID *string
-	if strings.TrimSpace(userID) != "" {
-		keyUserID = &userID
+	if strings.TrimSpace(userID) == "" {
+		return types.APIKey{}, errors.New("user ID is required")
+	}
+	userExists := false
+	for _, user := range m.Users {
+		if user.ID == userID {
+			userExists = true
+			break
+		}
+	}
+	if !userExists {
+		m.Users = append(m.Users, types.User{
+			ID:          userID,
+			TenantID:    types.DefaultTenantID,
+			Email:       userID + "@example.invalid",
+			DisplayName: userID,
+			Role:        "member",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		})
 	}
 	created := types.APIKey{
 		ID:          "key_" + uuid.NewString(),
-		TenantID:    tenantOf(tenantID),
-		UserID:      keyUserID,
+		UserID:      userID,
 		Name:        name,
-		Key:         key,
-		KeyMasked:   maskSecret(key),
+		Purpose:     purpose,
+		KeyMasked:   maskSecret(tokenPrefix),
 		TokenPrefix: tokenPrefix,
 		TokenHash:   tokenHash,
 		Scopes:      append([]string(nil), scopes...),
@@ -288,7 +304,8 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, user
 		UpdatedAt:   now,
 	}
 	for i := range m.APIKeys {
-		if tenantOf(m.APIKeys[i].TenantID) == tenantOf(tenantID) && strings.EqualFold(m.APIKeys[i].Name, name) && m.APIKeys[i].RevokedAt == nil {
+		if m.APIKeys[i].UserID == userID && strings.EqualFold(m.APIKeys[i].Name, name) && m.APIKeys[i].RevokedAt == nil {
+			created.ID = m.APIKeys[i].ID
 			created.CreatedAt = m.APIKeys[i].CreatedAt
 			m.APIKeys[i] = created
 			return created, nil
@@ -301,10 +318,10 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, tenantID string, user
 	return created, nil
 }
 
-func (m *MemoryRepository) ListAPIKeys(_ context.Context, tenantID string) ([]types.APIKey, error) {
+func (m *MemoryRepository) ListAPIKeys(_ context.Context, userID string) ([]types.APIKey, error) {
 	keys := []types.APIKey{}
 	for _, key := range m.APIKeys {
-		if tenantOf(key.TenantID) == tenantOf(tenantID) && key.RevokedAt == nil {
+		if key.UserID == userID && key.RevokedAt == nil {
 			keys = append(keys, key)
 		}
 	}
@@ -314,10 +331,10 @@ func (m *MemoryRepository) ListAPIKeys(_ context.Context, tenantID string) ([]ty
 	return keys, nil
 }
 
-func (m *MemoryRepository) RevokeAPIKey(_ context.Context, tenantID string, name string) (bool, error) {
+func (m *MemoryRepository) RevokeAPIKey(_ context.Context, userID string, name string) (bool, error) {
 	now := isoMillis(time.Now())
 	for i, key := range m.APIKeys {
-		if tenantOf(key.TenantID) == tenantOf(tenantID) && strings.EqualFold(key.Name, name) && key.RevokedAt == nil {
+		if key.UserID == userID && strings.EqualFold(key.Name, name) && key.RevokedAt == nil {
 			m.APIKeys[i].RevokedAt = &now
 			m.APIKeys[i].UpdatedAt = now
 			return true, nil
@@ -326,14 +343,20 @@ func (m *MemoryRepository) RevokeAPIKey(_ context.Context, tenantID string, name
 	return false, nil
 }
 
-func (m *MemoryRepository) FindAPIKeyBySecret(_ context.Context, secret string) (*types.APIKey, error) {
+func (m *MemoryRepository) FindAPIKeyBySecret(_ context.Context, secret string) (*types.APIKey, *types.User, error) {
 	for _, key := range m.APIKeys {
-		if key.RevokedAt == nil && (key.Key == secret || (key.TokenHash != "" && key.TokenHash == hashSecret(secret))) {
-			found := key
-			return &found, nil
+		if key.RevokedAt != nil || (key.Key != secret && (key.TokenHash == "" || key.TokenHash != hashSecret(secret))) {
+			continue
+		}
+		for _, user := range m.Users {
+			if user.ID == key.UserID && user.DisabledAt == nil {
+				found := key
+				foundUser := user
+				return &found, &foundUser, nil
+			}
 		}
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (m *MemoryRepository) MarkAPIKeyUsed(_ context.Context, keyID string) error {
@@ -438,7 +461,7 @@ func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID str
 	email = strings.TrimSpace(email)
 	displayName = strings.TrimSpace(displayName)
 	for i := range m.Users {
-		if tenantOf(m.Users[i].TenantID) == tenantOf(tenantID) && strings.EqualFold(m.Users[i].Email, email) {
+		if strings.EqualFold(m.Users[i].Email, email) {
 			m.Users[i].DisplayName = displayName
 			if passwordHash != nil {
 				m.Users[i].PasswordHash = passwordHash
@@ -463,32 +486,22 @@ func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID str
 	return user, nil
 }
 
-func (m *MemoryRepository) FindUserByEmail(_ context.Context, tenantID string, email string) (*types.User, error) {
+func (m *MemoryRepository) FindUserByEmail(_ context.Context, _ string, email string) (*types.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	var found *types.User
 	for _, user := range m.Users {
 		if user.DisabledAt != nil || strings.ToLower(strings.TrimSpace(user.Email)) != email {
 			continue
 		}
-		if strings.TrimSpace(tenantID) != "" && tenantOf(user.TenantID) != tenantOf(tenantID) {
-			continue
-		}
-		if found != nil {
-			return nil, errors.New("Multiple users match that email. Specify a tenant.")
-		}
 		copy := user
-		found = &copy
+		return &copy, nil
 	}
-	return found, nil
+	return nil, nil
 }
 
 func (m *MemoryRepository) CreateUserSession(_ context.Context, session types.UserSession) (types.UserSession, error) {
 	now := isoMillis(time.Now())
 	if session.ID == "" {
 		session.ID = "sess_" + uuid.NewString()
-	}
-	if session.TenantID == "" {
-		session.TenantID = types.DefaultTenantID
 	}
 	session.CreatedAt = now
 	if session.ExpiresAt == "" {
@@ -509,7 +522,7 @@ func (m *MemoryRepository) FindUserSessionBySecretHash(_ context.Context, secret
 			continue
 		}
 		for _, user := range m.Users {
-			if tenantOf(user.TenantID) == tenantOf(session.TenantID) && user.ID == session.UserID && user.DisabledAt == nil {
+			if user.ID == session.UserID && user.DisabledAt == nil {
 				sessionCopy := session
 				userCopy := user
 				return &sessionCopy, &userCopy, nil
@@ -546,9 +559,6 @@ func (m *MemoryRepository) CreateCLILoginCode(_ context.Context, code types.CLIL
 	if code.ID == "" {
 		code.ID = "clicode_" + uuid.NewString()
 	}
-	if code.TenantID == "" {
-		code.TenantID = types.DefaultTenantID
-	}
 	code.CreatedAt = now
 	if code.ExpiresAt == "" {
 		code.ExpiresAt = isoMillis(time.Now().Add(5 * time.Minute))
@@ -570,7 +580,7 @@ func (m *MemoryRepository) ConsumeCLILoginCode(_ context.Context, codeHash strin
 			return nil, nil, nil
 		}
 		for _, user := range m.Users {
-			if tenantOf(user.TenantID) == tenantOf(code.TenantID) && user.ID == code.UserID && user.DisabledAt == nil {
+			if user.ID == code.UserID && user.DisabledAt == nil {
 				m.CLICodes[i].ConsumedAt = &consumedAt
 				code.ConsumedAt = &consumedAt
 				userCopy := user
