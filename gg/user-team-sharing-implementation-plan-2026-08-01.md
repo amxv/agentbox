@@ -360,7 +360,7 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 | Phase | Status | Last commit | Evidence / remaining work |
 |---|---|---|---|
 | 1. Canonical migrations and backup workflow | Code complete | `bfb78c6` | Canonical migrations plus the PostgreSQL/R2 backup preflight, manifest, recovery-copy workflow, fakes, CI integration, and runbook are implemented. Real production backup, restore verification, and count evidence remain reserved for the credentialed local cutover. |
-| 2. Deployment-global users and credentials | Pending | — | No implementation started. |
+| 2. Deployment-global users and credentials | In progress | `5ebe8cc` | Deployment-global email uniqueness, disposable-auth reset, permanent-owner constraints, and idempotent owner persistence bootstrap are implemented. User-owned credential/session/code semantics and all service, HTTP, browser, CLI, and profile changes remain. |
 | 3. User-owned private thread access | Pending | — | No implementation started. |
 | 4. Invitations and zero-team registration | Pending | — | No implementation started. |
 | 5. Owner-managed teams and memberships | Pending | — | No implementation started. |
@@ -404,6 +404,14 @@ YYYY-MM-DD — Phase N / short slice name
 - Validation: `go test ./...`, `go vet ./...`, `go build ./cmd/preflight`, `bun run build:api`, `bun run build:cli`, `bun run typecheck`, `bun run lint`, and `git diff --check` passed. The Zodex machine has neither `TEST_DATABASE_URL` nor `pg_dump`, so PostgreSQL snapshot/migration/archive tests were discovered and skipped locally; `.github/workflows/verify.yml` now supplies PostgreSQL 16 and matching client tools so those tests execute in CI. No production database or R2 credentials were used.
 - Remaining: No Phase 1 code-bearing work. During Phase 15, a credentialed local agent must run the command against production, preserve `database.dump` and `manifest.json` off deployment, require `ready: true`, restore-test the dump, compare real row counts, sample recovery objects, and record the production evidence before cutover.
 - Next: Begin Phase 2 by adding the canonical deployment-global identity migration and domain contracts: globally unique users, one protected permanent owner, user-owned credentials/sessions/login codes, owner bootstrap/recovery, and auth contexts that resolve stable user plus actor identity without granting owner authority to API keys.
+
+2026-08-01 — Phase 2 / permanent owner persistence foundation
+- Status: In progress
+- Commit: `5ebe8cc`
+- Implemented: Added the canonical identity-reset migration that deletes only disposable users, sessions, CLI login codes, and credentials while preserving all content; enforced deployment-wide case-insensitive email uniqueness and at most one owner; added database protection against owner deletion, demotion, role change, or disablement; added `User.IsOwner`; and implemented advisory-lock-serialized, idempotent owner bootstrap in both PostgreSQL and the memory repository, including promotion of a same-email pre-existing account.
+- Validation: `go test ./...`, `go vet ./...`, `bun run build:api`, `bun run build:cli`, and `git diff --check` passed. The PostgreSQL integration suite now proves auth reset, content preservation, one-owner uniqueness, same-account bootstrap idempotency, owner immutability, and deployment-global email uniqueness; it was discovered but skipped on Zodex because `TEST_DATABASE_URL` is unavailable and will execute in the configured PostgreSQL CI job. Memory bootstrap behavior passed locally.
+- Remaining: Convert API keys, sessions, and CLI codes to direct user ownership; make active credential names unique per user; resolve API-key and session authentication to one stable user with distinct actors; expose owner bootstrap/recovery; remove tenant selection from login, `/api/keys`, browser session/UI, CLI login/provisioning, and profiles; and add the required cross-user HTTP/PostgreSQL tests.
+- Next: Implement user-owned credential persistence and authentication first: add credential purpose/actor metadata, make create/list/revoke predicates use `user_id`, join active users during key authentication, remove tenant selection from user/session/code lookups, and prove two users can each own and independently rotate a `chatgpt` credential.
 
 ## Plan Phases
 
