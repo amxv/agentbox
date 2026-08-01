@@ -359,7 +359,7 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 
 | Phase | Status | Last commit | Evidence / remaining work |
 |---|---|---|---|
-| 1. Canonical migrations and backup workflow | Pending | — | No implementation started. |
+| 1. Canonical migrations and backup workflow | In progress | `3cb9265` | Canonical checksum-ledgered migration runner and PostgreSQL CI coverage are implemented; backup/preflight tooling and R2 verification remain. |
 | 2. Deployment-global users and credentials | Pending | — | No implementation started. |
 | 3. User-owned private thread access | Pending | — | No implementation started. |
 | 4. Invitations and zero-team registration | Pending | — | No implementation started. |
@@ -389,7 +389,13 @@ YYYY-MM-DD — Phase N / short slice name
 - Next: <the exact recommended next action for the next agent>
 ```
 
-No implementation checkpoints have been recorded yet.
+2026-08-01 — Phase 1 / canonical migration runner
+- Status: In progress
+- Commit: `3cb9265`
+- Implemented: Embedded the ordered SQL migration files as the sole schema source, added advisory-lock serialization plus `schema_migrations` version/name/checksum tracking and drift detection, switched explicit and startup migration entry points to `Repository.Migrate`, removed schema DDL from the runtime repository interface and every request hot path, added legacy-content/idempotency/drift/hot-path PostgreSQL integration tests, and added a PostgreSQL-backed verification workflow.
+- Validation: `go test ./...` passed; PostgreSQL-specific tests were discovered and skipped because Zodex has no `TEST_DATABASE_URL`; `go vet ./...`, `bun run build:api`, `bun run build:cli`, and `git diff --check` passed. The new CI workflow supplies PostgreSQL and runs the integration tests on the branch.
+- Remaining: Implement the provider-neutral PostgreSQL backup/export plus row-count manifest, extend R2 storage inventory/head/copy capabilities and fakes, verify referenced/missing/orphaned objects, and add repeatability/readiness tests. Real production backup evidence remains a local credentialed verification gate.
+- Next: Extend `AssetStore` and `FakeStore` with exact-key metadata, inventory, and recovery-copy operations, then implement the Phase 1 preflight command and machine-readable manifest around database counts/export and R2 verification.
 
 ## Plan Phases
 
