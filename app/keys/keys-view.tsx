@@ -142,6 +142,7 @@ export function KeysView() {
           </Link>
           <nav className="site-nav" aria-label="Key management navigation">
             <Link className="site-nav__link" href="/threads">Inbox</Link>
+            <Link className="site-nav__link" href="/onboarding">Connect agents</Link>
             <Link className="site-nav__link" href="/">Home</Link>
             {auth && <span className="session-chip">{auth.actor_name}</span>}
             {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
@@ -173,7 +174,7 @@ export function KeysView() {
             <div>
               <p className="section-label">Create</p>
               <h2 id="create-key-title" className="card-title">New API key</h2>
-              <p className="copy">Use clear names like local, chatgpt, codex, claude, or worker-prod. Reusing a name rotates that key inside this tenant.</p>
+              <p className="copy">Use clear names like local, chatgpt, codex, claude, or worker-prod. Reusing a name rotates that credential for your user.</p>
             </div>
             <form className="key-create-form" onSubmit={createKey}>
               <input
