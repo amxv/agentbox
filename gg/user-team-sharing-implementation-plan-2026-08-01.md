@@ -9,6 +9,7 @@
 - **Code inspected:** `cmd/api`, `cmd/migrate`, `internal/agentbox/{types,db,service,httpapi,mcpserver,assets,auth,config,profiles,cli}`, the Next.js routes and dashboard under `app/`, the SQL files under `migrations/`, and the existing Go tests.
 - **Verified baseline:** `go test ./...` passed on the cloned repository before these documentation-only commits.
 - **Not verified from production:** actual PostgreSQL row counts, actual R2 object counts and missing-object state, provider-specific backup facilities, current production environment variables, and whether anything outside this repository calls the legacy admin/tenant endpoints. The rollout phases treat these as pre-cutover facts that must be measured rather than assumed.
+- **Execution model amendment:** implementation is expected to continue across several ChatGPT sessions on the shared branch `feat/user-team-sharing` using the Zodex remote machine. Those agents must implement all code, migrations, tests, UI, CLI, MCP, documentation, and credential-free runbooks. They must not perform production database/R2 backup, Vercel deployment, live migration, or production credential setup because the Zodex machine does not have those credentials. A later credentialed local agent performs the live verification and cutover after the branch is code-complete.
 
 ## State of Current System
 
@@ -294,6 +295,97 @@ Credentials, sessions, tenant records, and CLI profile metadata are deliberately
 29. Runtime repository calls no longer execute schema DDL.
 30. The finished codebase has one authorization model: legacy tenant routes, fields, profile metadata, and compatibility paths are removed.
 
+## Cross-Session Execution Protocol
+
+This blueprint is also the durable handoff record for agents implementing the track across separate ChatGPT sessions. Every implementation agent must follow this protocol before and during work.
+
+### Start-of-session procedure
+
+1. Work only on `feat/user-team-sharing`. Never commit or push this work to `main`.
+2. Open the existing checkout at `/home/zodex-agent/work/agentbox` when present. If it is absent, clone `amxv/agentbox`, fetch the remote branch, and check out `feat/user-team-sharing` tracking `origin/feat/user-team-sharing`.
+3. Inspect `git status` before changing anything. Do not discard, reset, overwrite, or clean work that may belong to another agent. Resolve or preserve any unexpected state before proceeding.
+4. Pull with fast-forward-only semantics. Do not force-push, rewrite shared history, or rebase already-pushed commits on this branch.
+5. Read `docs/user-team-sharing-spec.md` and this blueprint fully, including `Implementation Progress` and `Amendments`.
+6. Inspect the recent branch history and relevant diffs. Treat committed code and the progress ledger as the source of truth for what previous agents actually completed.
+7. Continue the earliest unfinished phase or the explicitly recorded next slice. Do not redo completed work merely because a prior session used a different implementation style.
+
+### Work and checkpoint discipline
+
+- Work in coherent, reviewable slices. A slice may be smaller than a phase when the phase cannot safely fit in one session, but it must leave the branch buildable and must have a clear tested outcome.
+- Run the narrow checks that prove the slice, followed by the appropriate broader regression checks for the touched subsystems. Never mark work complete based only on compilation when the phase requires behavior or authorization evidence.
+- After every completed slice or phase, immediately update `Implementation Progress` in this blueprint with the status, commit, validation performed, remaining work, and the exact next recommended action.
+- Commit the code and progress update together when practical. Push the branch immediately after the commit succeeds. Do not accumulate several completed slices locally before pushing.
+- If interrupted, push the latest coherent checkpoint and record what remains. When partially written code cannot be made coherent, do not commit broken work; instead restore a clean branch state and record the investigation or blocker in the progress log.
+- Amend this plan only when repository evidence invalidates an assumption or changes later phases. Record those changes under `Amendments`; routine implementation choices belong in code and commit messages, not in the amendment log.
+
+### Remote-machine boundary
+
+Shared Zodex agents are responsible for completing every code-bearing part of all phases, including:
+
+- canonical migrations and dry-run/backup tooling;
+- PostgreSQL-backed tests using a credential-free local or CI test database where available;
+- R2 behavior behind fakes or test doubles, plus production-safe commands and runbooks;
+- all Go backend, Next.js dashboard, MCP, CLI, npm package, and documentation changes;
+- final removal of tenant-era code from the feature branch once the replacement path is proven by tests.
+
+Shared Zodex agents must not attempt or claim completion of:
+
+- production PostgreSQL backup or row-count verification;
+- production R2 inventory, backup, deletion, or object verification;
+- production Vercel deployment or environment-variable changes;
+- creation or rotation of real production owner, ChatGPT, Claude, or local credentials;
+- the live maintenance window and production cutover.
+
+Those live actions are a final local-agent gate. When every code-bearing task is complete, Phase 14 should be marked `Code complete — local verification required`, with the exact production runbook and commands ready for the credentialed local agent.
+
+### Shared-branch safety
+
+- Prefer additive commits and normal `git push` to `origin feat/user-team-sharing`.
+- Never use `git push --force`, destructive resets, broad cleanup commands, or branch deletion.
+- Before each push, verify the current branch name and inspect the outgoing commits.
+- Keep secrets, copied MCP URLs, production tokens, database URLs, and environment dumps out of source files, commits, test fixtures, and command output.
+- When a long-running Zodex command returns a `session_handle`, poll it with `write_stdin`; do not start a duplicate build, test, or push command.
+- Always provide an explicit repository `workdir` to Zodex commands. Use delayed polling for long Go/Next.js builds rather than frequent repeated checks.
+
+## Implementation Progress
+
+### Phase status
+
+Allowed statuses are `Pending`, `In progress`, `Code complete`, `Code complete — local verification required`, and `Complete`.
+
+| Phase | Status | Last commit | Evidence / remaining work |
+|---|---|---|---|
+| 1. Canonical migrations and backup workflow | Pending | — | No implementation started. |
+| 2. Deployment-global users and credentials | Pending | — | No implementation started. |
+| 3. User-owned private thread access | Pending | — | No implementation started. |
+| 4. Invitations and zero-team registration | Pending | — | No implementation started. |
+| 5. Owner-managed teams and memberships | Pending | — | No implementation started. |
+| 6. Onboarding and connector setup | Pending | — | No implementation started. |
+| 7. Team sharing and effective access | Pending | — | No implementation started. |
+| 8. Public sharing and public page | Pending | — | No implementation started. |
+| 9. MCP and CLI visibility operation | Pending | — | No implementation started. |
+| 10. Unified inbox and attribution UX | Pending | — | No implementation started. |
+| 11. Owner user and credential administration | Pending | — | No implementation started. |
+| 12. Disabled-user attachment purge | Pending | — | No implementation started. |
+| 13. Owner-only web content viewer | Pending | — | No implementation started. |
+| 14. Final code cutover and tenant removal | Pending | — | Live production execution is reserved for a credentialed local agent. |
+
+### Checkpoint log
+
+Append one entry immediately after every pushed slice or phase using this shape:
+
+```text
+YYYY-MM-DD — Phase N / short slice name
+- Status: In progress | Code complete | Code complete — local verification required | Complete
+- Commit: <short SHA>
+- Implemented: <observable outcome>
+- Validation: <tests/checks actually run and their result>
+- Remaining: <specific unfinished work or “None for this slice”>
+- Next: <the exact recommended next action for the next agent>
+```
+
+No implementation checkpoints have been recorded yet.
+
 ## Plan Phases
 
 The sequence intentionally adds and proves the new path before changing production semantics. Every phase ends with a buildable, testable system. The tenant path remains only as temporary migration scaffolding until the explicit final removal phase.
@@ -333,6 +425,8 @@ Establish one ordered migration runner backed by a `schema_migrations` ledger. T
 Create a production preflight/backup command under `cmd/` or the CLI's deployment-admin area that produces a machine-readable manifest before any new-schema cutover. It must capture PostgreSQL table counts for threads, messages, assets, and pending uploads; export a recoverable database backup using an explicit provider-neutral mechanism; enumerate every `assets.storage_key`; verify each referenced R2 object exists; record size/ETag where available; and copy or otherwise back up those objects to a distinct recovery prefix or bucket. Missing objects and orphan rows must make the preflight non-successful while still producing a report.
 
 Do not rename existing R2 keys. Do not mutate production content in this phase. The output must be repeatable, timestamped, and safe to rerun.
+
+On the shared Zodex branch, implement and test this workflow without production credentials. Use test databases, `assets.FakeStore`, and credential-free fixtures to prove the manifest, failure, retry, and idempotency behavior. Do not run or claim a real production backup from Zodex; record that live evidence as a local verification gate.
 
 Add PostgreSQL-backed migration tests that start from representative legacy schemas, apply migrations once and twice, and verify the ledger and content are unchanged on retry. Add CI capable of running those tests against a real PostgreSQL service.
 
@@ -976,17 +1070,18 @@ Keep normal `/api/threads`, MCP, CLI, and user dashboard routes on `ThreadAccess
 
 #### What to do
 
-Run the verified production backup/preflight and record its manifest outside the deployment being migrated. Pause writes for the planned maintenance window. Create/bootstrap the permanent owner, apply the final content migration, assign every legacy thread to that owner privately, and verify all row counts, message ordering, attachment references, and R2 objects against the preflight manifest before reopening writes.
+Complete the feature branch's final code cutover first. Implement the final content migration, owner-bootstrap/recovery path, production preflight/runbook, and every smoke-check command so they can be exercised against credential-free test infrastructure. Assign representative legacy fixtures to the permanent owner privately and prove preservation of IDs, order, attachment references, and author snapshots. Delete all legacy tenant authorization and compatibility code from the feature branch once the replacement path is proven. Remove tenant selectors, tenant DTO fields, tenant provisioning/admin endpoints, `agentbox init`, `agentbox provision tenant`, admin-key key creation, old profile metadata, direct `R2_PUBLIC_BASE_URL` behavior, and tests/docs that assert the old model.
 
-Recreate owner browser login and ChatGPT/Claude/local credentials under the new model. Existing credentials and CLI profiles are intentionally invalidated. Exercise dashboard, MCP, CLI, uploads, downloads, public links, invitation registration, teams, disablement, purge staging, and owner-only browsing in production smoke checks.
+The shared Zodex agents stop at `Code complete — local verification required`. They must not run the production backup, pause writes, migrate the live database, access live R2, deploy Vercel, or create real credentials.
 
-After the new path is proven, delete all legacy tenant authorization and compatibility code. Drop tenant foreign keys/columns/tables/indexes only after the content backfill and application cutover no longer read them. Remove tenant selectors, tenant DTO fields, tenant provisioning/admin endpoints, `agentbox init`, `agentbox provision tenant`, admin-key key creation, old profile metadata, direct `R2_PUBLIC_BASE_URL` behavior, and tests/docs that assert the old model.
+The credentialed local-agent gate then runs the verified production backup/preflight and stores its manifest outside the deployment being migrated; pauses writes for the planned maintenance window; creates/bootstrap the permanent owner; applies the final content migration; verifies row counts, message ordering, attachment references, and R2 objects; deploys the new backend/dashboard; recreates owner browser login and ChatGPT/Claude/local credentials; performs the production smoke matrix; and reopens writes only after every preservation check passes. Existing credentials and CLI profiles are intentionally invalidated.
 
 Retain `AGENTBOX_ADMIN_KEY` only if the final owner-bootstrap/recovery design still requires it; document its narrow role. End with one schema runner, one user/team authorization model, and one set of public contracts. Do not leave a feature flag or fallback that can reactivate tenant-wide access.
 
 #### Validation strategy
 
-- Pre- and post-cutover manifests must match for threads, messages, asset rows, IDs, order, and referenced objects; any mismatch blocks reopening writes.
+- Credential-free tests on the feature branch must prove the final legacy-fixture migration, tenant removal, owner backfill, and generated cutover runbook before local handoff.
+- During the later local-agent gate, pre- and post-cutover production manifests must match for threads, messages, asset rows, IDs, order, and referenced objects; any mismatch blocks reopening writes.
 - Every migrated thread must appear as a private owner thread and remain readable with its attachments.
 - Old API keys, sessions, and CLI profiles must fail; newly created owner credentials must work.
 - Repository-wide searches and schema inspection must find no runtime tenant authorization fields/routes/queries or request-path `EnsureSchema` calls.
@@ -1001,4 +1096,9 @@ Retain `AGENTBOX_ADMIN_KEY` only if the final owner-bootstrap/recovery design st
 
 ## Amendments
 
-None yet.
+### 2026-08-01 — Cross-session implementation and credentialed rollout boundary
+
+- **Plan previously assumed:** implementation and the live production cutover could be completed by the same execution environment.
+- **Actually found:** implementation will continue across multiple ChatGPT sessions on a shared Zodex branch, while the Zodex machine has no production PostgreSQL, R2, Vercel, or application credentials.
+- **Decision:** shared agents implement and push every code-bearing task, maintain the in-plan progress ledger, and prepare credential-free tests plus a complete production runbook. A later local agent with credentials performs live backup, deployment, migration, credential recreation, and production verification.
+- **Later phases changed:** Phase 1 records production backup as a local verification gate after tooling is code-complete; Phase 14 separates feature-branch code completion from the credentialed production cutover and may be marked `Code complete — local verification required` before live execution.
