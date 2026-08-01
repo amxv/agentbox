@@ -41,6 +41,7 @@ type Repository interface {
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
 	UpsertTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error)
 	GetTenant(ctx context.Context, idOrSlug string) (*types.Tenant, error)
+	BootstrapOwner(ctx context.Context, email string, displayName string, passwordHash string) (types.User, error)
 	UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error)
 	FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error)
 	CreateUserSession(ctx context.Context, session types.UserSession) (types.UserSession, error)

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"agentbox/internal/agentbox/config"
+	"agentbox/internal/agentbox/types"
 	migrationfiles "agentbox/migrations"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -38,6 +40,19 @@ func TestMigrateLegacySchemaIsIdempotentAndPreservesContent(t *testing.T) {
 	for _, statement := range legacyStatements {
 		if _, err := repository.pool.Exec(ctx, statement); err != nil {
 			t.Fatalf("seed legacy schema: %v", err)
+		}
+	}
+	if _, err := repository.pool.Exec(ctx, migrations[4].SQL); err != nil {
+		t.Fatalf("apply legacy auth migration %s: %v", migrations[4].Name, err)
+	}
+	legacyAuthStatements := []string{
+		`insert into users (id, tenant_id, email, display_name, password_hash, role) values ('usr_legacy', 'ten_default', 'legacy@example.com', 'Legacy User', 'hash', 'admin')`,
+		`insert into user_sessions (id, tenant_id, user_id, secret_hash, expires_at) values ('sess_legacy', 'ten_default', 'usr_legacy', 'session-hash', now() + interval '1 hour')`,
+		`insert into cli_login_codes (id, tenant_id, user_id, code_hash, state_hash, redirect_uri, expires_at) values ('code_legacy', 'ten_default', 'usr_legacy', 'code-hash', 'state-hash', 'http://127.0.0.1:8080/callback', now() + interval '1 hour')`,
+	}
+	for _, statement := range legacyAuthStatements {
+		if _, err := repository.pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed disposable legacy auth: %v", err)
 		}
 	}
 
@@ -85,13 +100,21 @@ from schema_migrations
 		t.Fatalf("legacy content changed: body=%q asset=%q pending=%q", messageBody, storageKey, pendingStorageKey)
 	}
 
-	var keyID string
-	var tokenHash string
-	if err := repository.pool.QueryRow(ctx, `select id, token_hash from api_keys where name = 'legacy'`).Scan(&keyID, &tokenHash); err != nil {
+	var usersCount int
+	var sessionsCount int
+	var codesCount int
+	var activeKeyCount int
+	if err := repository.pool.QueryRow(ctx, `
+select
+  (select count(*) from users),
+  (select count(*) from user_sessions),
+  (select count(*) from cli_login_codes),
+  (select count(*) from api_keys)
+`).Scan(&usersCount, &sessionsCount, &codesCount, &activeKeyCount); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(keyID, "key_") || len(tokenHash) != 64 {
-		t.Fatalf("legacy key was not migrated: id=%q hash=%q", keyID, tokenHash)
+	if usersCount != 0 || sessionsCount != 0 || codesCount != 0 || activeKeyCount != 0 {
+		t.Fatalf("legacy authentication data was retained: users=%d sessions=%d codes=%d api_keys=%d", usersCount, sessionsCount, codesCount, activeKeyCount)
 	}
 
 	if err := repository.Migrate(ctx); err != nil {
@@ -106,6 +129,59 @@ from schema_migrations
 	}
 	if secondLedgerSnapshot != firstLedgerSnapshot {
 		t.Fatalf("migration retry changed ledger\nfirst:  %s\nsecond: %s", firstLedgerSnapshot, secondLedgerSnapshot)
+	}
+}
+
+func TestBootstrapOwnerIsUniqueIdempotentAndProtected(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := repository.BootstrapOwner(ctx, "owner@example.com", "Original Owner", "hash-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.IsOwner || first.Role != "admin" || first.TenantID != types.DefaultTenantID {
+		t.Fatalf("unexpected owner: %#v", first)
+	}
+
+	second, err := repository.BootstrapOwner(ctx, "OWNER@example.com", "Updated Owner", "hash-two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.DisplayName != "Updated Owner" || second.PasswordHash == nil || *second.PasswordHash != "hash-two" {
+		t.Fatalf("owner bootstrap was not idempotent: first=%#v second=%#v", first, second)
+	}
+
+	if _, err := repository.BootstrapOwner(ctx, "other@example.com", "Other", "hash-three"); !errors.Is(err, ErrOwnerAlreadyExists) {
+		t.Fatalf("second owner error = %v, want ErrOwnerAlreadyExists", err)
+	}
+
+	var ownerCount int
+	if err := repository.pool.QueryRow(ctx, `select count(*) from users where is_owner`).Scan(&ownerCount); err != nil {
+		t.Fatal(err)
+	}
+	if ownerCount != 1 {
+		t.Fatalf("owner count = %d, want 1", ownerCount)
+	}
+
+	for name, statement := range map[string]string{
+		"demote":  `update users set is_owner = false where id = $1`,
+		"disable": `update users set disabled_at = now() where id = $1`,
+		"role":    `update users set role = 'member' where id = $1`,
+		"delete":  `delete from users where id = $1`,
+	} {
+		if _, err := repository.pool.Exec(ctx, statement, first.ID); err == nil {
+			t.Fatalf("%s owner mutation unexpectedly succeeded", name)
+		}
+	}
+
+	if _, err := repository.UpsertTenant(ctx, types.Tenant{ID: "ten_other", Slug: "other", Name: "Other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.UpsertProvisionedUser(ctx, "ten_other", "owner@example.com", "Duplicate", nil, "member"); err == nil {
+		t.Fatal("deployment-global email uniqueness was not enforced")
 	}
 }
 

@@ -16,6 +16,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
+
+const ownerBootstrapAdvisoryLockID int64 = 0x4167656e744f776e
+
 type Repository struct {
 	pool *pgxpool.Pool
 }
@@ -477,6 +481,93 @@ where id = $1 or slug = $1
 	return &tenant, nil
 }
 
+func (r *Repository) BootstrapOwner(ctx context.Context, email string, displayName string, passwordHash string) (types.User, error) {
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if email == "" || displayName == "" || passwordHash == "" {
+		return types.User{}, errors.New("owner email, display name, and password hash are required")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.User{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, ownerBootstrapAdvisoryLockID); err != nil {
+		return types.User{}, fmt.Errorf("lock owner bootstrap: %w", err)
+	}
+
+	owner, err := scanUser(tx.QueryRow(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+from users
+where is_owner
+for update
+`))
+	if err == nil {
+		if !strings.EqualFold(owner.Email, email) {
+			return types.User{}, ErrOwnerAlreadyExists
+		}
+		owner, err = scanUser(tx.QueryRow(ctx, `
+update users
+set display_name = $1,
+    password_hash = $2,
+    role = 'admin',
+    disabled_at = null,
+    updated_at = now()
+where id = $3
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+`, displayName, passwordHash, owner.ID))
+		if err != nil {
+			return types.User{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return types.User{}, err
+		}
+		return owner, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return types.User{}, err
+	}
+
+	existing, err := scanUser(tx.QueryRow(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+from users
+where lower(email) = lower($1)
+for update
+`, email))
+	if err == nil {
+		owner, err = scanUser(tx.QueryRow(ctx, `
+update users
+set display_name = $1,
+    password_hash = $2,
+    role = 'admin',
+    is_owner = true,
+    disabled_at = null,
+    updated_at = now()
+where id = $3
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+`, displayName, passwordHash, existing.ID))
+		if err != nil {
+			return types.User{}, err
+		}
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		owner, err = scanUser(tx.QueryRow(ctx, `
+insert into users (id, tenant_id, email, display_name, password_hash, role, is_owner)
+values ($1, $2, $3, $4, $5, 'admin', true)
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+`, "usr_"+uuid.NewString(), types.DefaultTenantID, email, displayName, passwordHash))
+		if err != nil {
+			return types.User{}, err
+		}
+	} else {
+		return types.User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.User{}, err
+	}
+	return owner, nil
+}
+
 func (r *Repository) UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
 	row := r.pool.QueryRow(ctx, `
 insert into users (id, tenant_id, email, display_name, password_hash, role)
@@ -488,14 +579,14 @@ set
   role = excluded.role,
   updated_at = now(),
   disabled_at = null
-returning id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 `, "usr_"+uuid.NewString(), tenantID, strings.TrimSpace(email), strings.TrimSpace(displayName), passwordHash, role)
 	return scanUser(row)
 }
 
 func (r *Repository) FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error) {
 	rows, err := r.pool.Query(ctx, `
-select id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
+select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 from users
 where disabled_at is null
   and lower(email) = lower($1)
@@ -556,6 +647,7 @@ select
   u.display_name,
   u.password_hash,
   u.role,
+  u.is_owner,
   u.created_at,
   u.updated_at,
   u.disabled_at
@@ -629,7 +721,7 @@ returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_a
 		return nil, nil, err
 	}
 	user, err := scanUser(tx.QueryRow(ctx, `
-select id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
+select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 from users
 where tenant_id = $1 and id = $2 and disabled_at is null
 `, code.TenantID, code.UserID))
@@ -771,7 +863,7 @@ func scanUser(row threadScanner) (types.User, error) {
 	var updatedAt time.Time
 	var disabledAt *time.Time
 	user := types.User{}
-	err := row.Scan(&user.ID, &user.TenantID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.Role, &createdAt, &updatedAt, &disabledAt)
+	err := row.Scan(&user.ID, &user.TenantID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.Role, &user.IsOwner, &createdAt, &updatedAt, &disabledAt)
 	user.CreatedAt = isoMillis(createdAt)
 	user.UpdatedAt = isoMillis(updatedAt)
 	if disabledAt != nil {
@@ -826,6 +918,7 @@ func scanUserSessionAndUser(row threadScanner) (types.UserSession, types.User, e
 		&user.DisplayName,
 		&user.PasswordHash,
 		&user.Role,
+		&user.IsOwner,
 		&userCreatedAt,
 		&userUpdatedAt,
 		&disabledAt,

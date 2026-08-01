@@ -42,6 +42,7 @@ type User struct {
 	DisplayName  string  `json:"display_name"`
 	PasswordHash *string `json:"-"`
 	Role         string  `json:"role"`
+	IsOwner      bool    `json:"is_owner"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	DisabledAt   *string `json:"disabled_at,omitempty"`

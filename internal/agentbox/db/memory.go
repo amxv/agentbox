@@ -387,6 +387,52 @@ func (m *MemoryRepository) GetTenant(_ context.Context, idOrSlug string) (*types
 	return nil, nil
 }
 
+func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displayName string, passwordHash string) (types.User, error) {
+	now := isoMillis(time.Now())
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if email == "" || displayName == "" || passwordHash == "" {
+		return types.User{}, errors.New("owner email, display name, and password hash are required")
+	}
+	for i := range m.Users {
+		if m.Users[i].IsOwner {
+			if !strings.EqualFold(m.Users[i].Email, email) {
+				return types.User{}, ErrOwnerAlreadyExists
+			}
+			m.Users[i].DisplayName = displayName
+			m.Users[i].PasswordHash = &passwordHash
+			m.Users[i].Role = "admin"
+			m.Users[i].DisabledAt = nil
+			m.Users[i].UpdatedAt = now
+			return m.Users[i], nil
+		}
+	}
+	for i := range m.Users {
+		if strings.EqualFold(m.Users[i].Email, email) {
+			m.Users[i].DisplayName = displayName
+			m.Users[i].PasswordHash = &passwordHash
+			m.Users[i].Role = "admin"
+			m.Users[i].IsOwner = true
+			m.Users[i].DisabledAt = nil
+			m.Users[i].UpdatedAt = now
+			return m.Users[i], nil
+		}
+	}
+	owner := types.User{
+		ID:           "usr_" + uuid.NewString(),
+		TenantID:     types.DefaultTenantID,
+		Email:        email,
+		DisplayName:  displayName,
+		PasswordHash: &passwordHash,
+		Role:         "admin",
+		IsOwner:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	m.Users = append(m.Users, owner)
+	return owner, nil
+}
+
 func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
 	now := isoMillis(time.Now())
 	email = strings.TrimSpace(email)
