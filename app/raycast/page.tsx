@@ -120,7 +120,7 @@ export default function RaycastPage() {
           <aside>
             <p className={styles.sectionLabel}>02 / Local installation</p>
             <h2>Give Raycast its own named seat.</h2>
-            <p>Create a tenant-scoped Raycast identity, load the extension, and paste the URL and key into Raycast preferences.</p>
+            <p>Create a user-owned Raycast credential, load the extension, and paste the URL and key into Raycast preferences.</p>
             <PublicCopyButton className={styles.copyGuide} sourceUrl="/raycast.md" label="Copy entire guide" copiedLabel="Guide copied" />
           </aside>
           <div className={styles.installSteps}>

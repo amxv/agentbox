@@ -25,11 +25,6 @@ type cliLoginExchangeResponse struct {
 		Secret string `json:"key"`
 		Masked string `json:"key_masked"`
 	} `json:"api_key"`
-	Tenant struct {
-		ID   string `json:"id"`
-		Slug string `json:"slug"`
-		Name string `json:"name"`
-	} `json:"tenant"`
 	User struct {
 		ID          string `json:"id"`
 		Email       string `json:"email"`
@@ -48,7 +43,7 @@ func (r *Runner) runLogin(args []string, globalProfileName string) error {
 	fs := newFlagSet("login")
 	baseURL := fs.String("base-url", "", "Agentbox dashboard/base URL")
 	profileName := fs.String("profile-name", defaultString(globalProfileName, "local"), "stored profile name")
-	keyName := fs.String("key-name", "", "tenant API key name for this CLI")
+	keyName := fs.String("key-name", "", "user credential name for this CLI")
 	noOpen := fs.Bool("no-open", false, "print the login URL instead of opening a browser")
 	timeoutSeconds := fs.Int("timeout", 180, "seconds to wait for browser login")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
@@ -125,15 +120,12 @@ func (r *Runner) runLogin(args []string, globalProfileName string) error {
 		return errors.New("CLI login exchange did not return an API key.")
 	}
 	store, err := profiles.SaveProfile(profiles.Profile{
-		Name:       profile,
-		BaseURL:    resolvedBaseURL,
-		APIKey:     exchanged.APIKey.Secret,
-		TenantID:   exchanged.Tenant.ID,
-		TenantSlug: exchanged.Tenant.Slug,
-		TenantName: exchanged.Tenant.Name,
-		UserID:     exchanged.User.ID,
-		KeyName:    exchanged.APIKey.Name,
-		AuthType:   defaultString(exchanged.AuthType, "api_key"),
+		Name:     profile,
+		BaseURL:  resolvedBaseURL,
+		APIKey:   exchanged.APIKey.Secret,
+		UserID:   exchanged.User.ID,
+		KeyName:  exchanged.APIKey.Name,
+		AuthType: defaultString(exchanged.AuthType, "api_key"),
 	}, true)
 	if err != nil {
 		return err
@@ -143,7 +135,6 @@ func (r *Runner) runLogin(args []string, globalProfileName string) error {
 		"base_url":       resolvedBaseURL,
 		"config_path":    profiles.DefaultConfigPath(),
 		"active_profile": nullString(store.ActiveProfileName),
-		"tenant":         exchanged.Tenant,
 		"user":           exchanged.User,
 		"api_key_name":   exchanged.APIKey.Name,
 		"api_key_masked": exchanged.APIKey.Masked,
@@ -153,7 +144,6 @@ func (r *Runner) runLogin(args []string, globalProfileName string) error {
 		return printJSON(r.Stdout, output)
 	}
 	fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", profile, profiles.DefaultConfigPath())
-	fmt.Fprintf(r.Stdout, "Tenant: %s (%s)\n", exchanged.Tenant.Name, exchanged.Tenant.ID)
 	userLabel := exchanged.User.Email
 	if strings.TrimSpace(userLabel) == "" {
 		userLabel = exchanged.User.ID

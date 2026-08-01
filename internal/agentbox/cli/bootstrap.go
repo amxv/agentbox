@@ -186,112 +186,16 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 			"source":         cfg.Source,
 			"key_name":       key.Name,
 			"key_masked":     key.KeyMasked,
-			"tenant":         tenantMetadata(cfg.Profile),
 			"mcp_url":        endpoint.String(),
 			"mcp_url_masked": profiles.SanitizeURL(endpoint.String()),
 			"steps":          steps,
 		})
 	}
 	fmt.Fprintf(r.Stdout, "Profile: %s (%s)\n", cfg.ProfileName, cfg.Source)
-	if cfg.Profile.TenantSlug != "" || cfg.Profile.TenantID != "" {
-		fmt.Fprintf(r.Stdout, "Tenant: %s\n", tenantLabel(cfg.Profile))
-	}
+
 	fmt.Fprintf(r.Stdout, "Created ChatGPT API key %q. Store this secret now: %s\n", key.Name, key.Secret)
 	fmt.Fprintf(r.Stdout, "MCP URL: %s\n\n", endpoint.String())
 	printNumberedSteps(r.Stdout, "ChatGPT setup:", steps)
-	return nil
-}
-
-func (r *Runner) runProvision(args []string, profileName string) error {
-	if len(args) == 0 || args[0] != "tenant" {
-		return errors.New(`Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key]`)
-	}
-	fs := newFlagSet("provision tenant")
-	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
-	tenantSlug := fs.String("tenant-slug", "", "tenant slug")
-	tenantName := fs.String("tenant-name", "", "tenant display name")
-	userEmail := fs.String("user-email", "", "initial tenant admin email")
-	userName := fs.String("user-name", "", "initial tenant admin display name")
-	password := fs.String("password", "", "initial password; if omitted, a setup token is returned")
-	createCLIKey := fs.Bool("create-cli-key", false, "create an initial tenant-scoped API key and save a CLI profile")
-	keyName := fs.String("key-name", "cli", "initial API key name")
-	provisionProfileName := fs.String("profile-name", "", "stored profile name for --create-cli-key")
-	jsonOut := fs.Bool("json", false, "print raw JSON")
-	if err := parseFlags(fs, args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("Usage: agentbox provision tenant [options]")
-	}
-	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-	if err != nil {
-		return err
-	}
-	payload, _ := json.Marshal(map[string]any{
-		"tenant_slug": strings.TrimSpace(*tenantSlug),
-		"tenant_name": strings.TrimSpace(*tenantName),
-		"user_email":  strings.TrimSpace(*userEmail),
-		"user_name":   strings.TrimSpace(*userName),
-		"password":    *password,
-		"create_key":  *createCLIKey,
-		"key_name":    strings.TrimSpace(*keyName),
-	})
-	var result remoteProvisionTenantResult
-	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/tenants", http.MethodPost, bytes.NewReader(payload), &result); err != nil {
-		return err
-	}
-	profileSaved := ""
-	if *createCLIKey && result.APIKey.Secret != "" {
-		profileSaved = strings.TrimSpace(*provisionProfileName)
-		if profileSaved == "" {
-			profileSaved = result.Tenant.Slug
-		}
-		if profileSaved == "" {
-			profileSaved = "local"
-		}
-		if _, err := profiles.SaveProfile(profiles.Profile{
-			Name:       profileSaved,
-			BaseURL:    resolvedBaseURL,
-			APIKey:     result.APIKey.Secret,
-			TenantID:   result.Tenant.ID,
-			TenantSlug: result.Tenant.Slug,
-			TenantName: result.Tenant.Name,
-			UserID:     result.User.ID,
-			KeyName:    result.APIKey.Name,
-			AuthType:   "api_key",
-		}, true); err != nil {
-			return err
-		}
-	}
-	if *jsonOut {
-		output := map[string]any{
-			"tenant":       result.Tenant,
-			"user":         result.User,
-			"profile_name": profileSaved,
-		}
-		if result.SetupToken != "" {
-			output["setup_token"] = result.SetupToken
-		}
-		if result.APIKey.Secret != "" {
-			output["api_key"] = result.APIKey
-		}
-		return printJSON(r.Stdout, output)
-	}
-	fmt.Fprintf(r.Stdout, "Provisioned tenant %q (%s).\n", result.Tenant.Name, result.Tenant.ID)
-	fmt.Fprintf(r.Stdout, "Provisioned admin user %s.\n", result.User.Email)
-	if result.SetupToken != "" {
-		fmt.Fprintf(r.Stdout, "Setup token: %s\n", result.SetupToken)
-		fmt.Fprintln(r.Stdout, "Use this token as the initial password and rotate it after first sign-in.")
-	}
-	if result.APIKey.Secret != "" {
-		fmt.Fprintf(r.Stdout, "Created API key %q.\n", result.APIKey.Name)
-		fmt.Fprintf(r.Stdout, "Secret: %s\n", result.APIKey.Secret)
-		if profileSaved != "" {
-			fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", profileSaved, profiles.DefaultConfigPath())
-		}
-		fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
-	}
 	return nil
 }
 
@@ -416,7 +320,6 @@ type remoteTenant struct {
 
 type remoteUser struct {
 	ID          string `json:"id"`
-	TenantID    string `json:"tenant_id"`
 	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
 	Role        string `json:"role"`
@@ -515,7 +418,6 @@ func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
 	result := map[string]any{
 		"profile":             cfg.ProfileName,
 		"source":              cfg.Source,
-		"tenant":              tenantMetadata(cfg.Profile),
 		"key_name":            key.Name,
 		"key":                 key.Secret,
 		"key_masked":          key.KeyMasked,
@@ -528,9 +430,7 @@ func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
 		return printJSON(r.Stdout, result)
 	}
 	fmt.Fprintf(r.Stdout, "Created Raycast API key %q.\n", key.Name)
-	if cfg.Profile.TenantSlug != "" || cfg.Profile.TenantID != "" {
-		fmt.Fprintf(r.Stdout, "Tenant: %s\n", tenantLabel(cfg.Profile))
-	}
+
 	fmt.Fprintln(r.Stdout, "Raycast preferences:")
 	fmt.Fprintf(r.Stdout, "Agentbox URL: %s\n", strings.TrimRight(cfg.BaseURL, "/"))
 	fmt.Fprintf(r.Stdout, "Agentbox API Key: %s\n", key.Secret)
@@ -776,31 +676,6 @@ func printNumberedSteps(output io.Writer, title string, steps []string) {
 	for i, step := range steps {
 		fmt.Fprintf(output, "%d. %s\n", i+1, step)
 	}
-}
-
-func tenantMetadata(profile profiles.Profile) map[string]any {
-	return map[string]any{
-		"id":   profile.TenantID,
-		"slug": profile.TenantSlug,
-		"name": profile.TenantName,
-	}
-}
-
-func tenantLabel(profile profiles.Profile) string {
-	parts := []string{}
-	if profile.TenantName != "" {
-		parts = append(parts, profile.TenantName)
-	}
-	if profile.TenantSlug != "" {
-		parts = append(parts, "slug "+profile.TenantSlug)
-	}
-	if profile.TenantID != "" {
-		parts = append(parts, "id "+profile.TenantID)
-	}
-	if len(parts) == 0 {
-		return "unknown"
-	}
-	return strings.Join(parts, ", ")
 }
 
 func promptRequired(reader *bufio.Reader, output io.Writer, label string) (string, error) {

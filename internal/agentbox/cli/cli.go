@@ -170,8 +170,6 @@ func (r *Runner) run(args []string) error {
 		return r.runMCPURL(cmdArgs, *profileName)
 	case "init":
 		return r.runInit(cmdArgs, *profileName)
-	case "provision":
-		return r.runProvision(cmdArgs, *profileName)
 	case "owner":
 		return r.runOwner(cmdArgs, *profileName)
 	case "connect":
@@ -211,11 +209,10 @@ Options:
 
 Commands:
   profiles                inspect and manage CLI profiles
-  login                   sign in through the browser and save a tenant-scoped profile
+  login                   sign in through the browser and save a user-owned profile
   doctor                  check profile, API, MCP, and attachment access
   mcp-url                 print the full MCP URL for the selected profile
   init                    save a local profile and optionally verify it
-  provision               create tenants and admin users with the deployment admin key
   owner                   issue one-time owner bootstrap or recovery links
   connect                 print ChatGPT MCP setup instructions
   raycast-key             create a Raycast API key and print preferences
@@ -248,28 +245,25 @@ Commands:
   show [name]             show the resolved profile`,
 		"login": `Usage: agentbox login [--base-url <url>] [--profile-name <name>] [--key-name <name>] [--no-open] [--timeout <seconds>] [--json]
 
-Open browser-based Agentbox auth, exchange the one-time CLI code for a tenant-scoped API key, and save a local profile.`,
+Open browser-based Agentbox auth, exchange the one-time CLI code for a user-owned credential, and save a local profile.`,
 		"doctor": `Usage: agentbox doctor [--json]
 
 Check profile, health, authenticated API access, signed download URLs, and MCP URL generation.`,
 		"mcp-url": `Usage: agentbox mcp-url [--json]
 
-Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized diagnostics and tenant metadata when available.`,
+Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized user and actor diagnostics when available.`,
 		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--api-key <existing-user-key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
 
 Use an existing user credential with keys:write scope to create local and ChatGPT credentials for that same user, save the local credential as the active profile, and optionally run doctor.`,
-		"provision": `Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key] [--key-name cli] [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--json]
-
-Create or update a tenant and initial tenant admin user through the deployment-owner admin API. No public signup endpoint is exposed.`,
 		"owner": `Usage: agentbox owner setup-token [--base-url <url>] [--app-url <url>] [--admin-key <key>] [--expires 30m] [--json]
 
 Issue a short-lived, one-time browser link that creates the permanent deployment owner or recovers that same owner account. The deployment secret is sent only to the backend and is never embedded in the browser URL.`,
 		"connect": `Usage: agentbox connect chatgpt [--json]
 
-Create a tenant-scoped ChatGPT key, then print the MCP URL and ChatGPT app setup steps. Store the printed MCP URL securely because it includes the key.`,
+Create a user-owned ChatGPT credential, then print the MCP URL and ChatGPT app setup steps. Store the printed MCP URL securely because it includes the key.`,
 		"raycast-key": `Usage: agentbox raycast-key [--json]
 
-Create a tenant-scoped Raycast key and print the Agentbox URL and API key preferences.`,
+Create a user-owned Raycast credential and print the Agentbox URL and API key preferences.`,
 		"deploy": `Usage: agentbox deploy vercel
 
 Print the Vercel commands for deploying the backend and optional dashboard. This command does not mutate Vercel projects or env vars.`,
@@ -458,22 +452,11 @@ func (r *Runner) runMCPURL(args []string, profileName string) error {
 			"profile":        cfg.ProfileName,
 			"source":         cfg.Source,
 		}
-		if cfg.Profile.TenantID != "" || cfg.Profile.TenantSlug != "" || cfg.Profile.TenantName != "" {
-			output["tenant"] = map[string]any{
-				"id":   cfg.Profile.TenantID,
-				"slug": cfg.Profile.TenantSlug,
-				"name": cfg.Profile.TenantName,
-			}
-		}
 		var me struct {
 			Auth types.AuthContext `json:"auth"`
 		}
-		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.TenantID != "" {
+		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil {
 			output["auth"] = me.Auth
-			output["tenant"] = map[string]any{
-				"id":   me.Auth.TenantID,
-				"slug": me.Auth.TenantSlug,
-			}
 		}
 		return printJSON(r.Stdout, output)
 	}
@@ -499,22 +482,6 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 	add("profile", "pass", fmt.Sprintf("%s (%s)", cfg.ProfileName, cfg.Source))
 	add("base URL", "pass", cfg.BaseURL)
 	add("API key", "pass", fmt.Sprintf("Profile %s includes key %s", cfg.ProfileName, profiles.MaskSecret(cfg.APIKey)))
-	if cfg.Profile.TenantID != "" || cfg.Profile.TenantSlug != "" || cfg.Profile.UserID != "" {
-		parts := []string{}
-		if cfg.Profile.TenantName != "" {
-			parts = append(parts, cfg.Profile.TenantName)
-		}
-		if cfg.Profile.TenantSlug != "" {
-			parts = append(parts, "slug "+cfg.Profile.TenantSlug)
-		}
-		if cfg.Profile.TenantID != "" {
-			parts = append(parts, "id "+cfg.Profile.TenantID)
-		}
-		if cfg.Profile.UserID != "" {
-			parts = append(parts, "user "+cfg.Profile.UserID)
-		}
-		add("profile tenant", "pass", strings.Join(parts, ", "))
-	}
 
 	healthURL, _ := url.JoinPath(strings.TrimRight(cfg.BaseURL, "/"), "/api/health")
 	if res, err := r.HTTPClient.Get(healthURL); err != nil {
@@ -536,21 +503,16 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 		add("authenticated API", "pass", fmt.Sprintf("%d thread(s) visible", len(listed.Threads)))
 		var me struct {
 			Auth struct {
-				TenantID   string `json:"tenant_id"`
-				TenantSlug string `json:"tenant_slug"`
-				UserID     string `json:"user_id"`
-				ActorName  string `json:"actor_name"`
+				UserID    string `json:"user_id"`
+				ActorName string `json:"actor_name"`
 			} `json:"auth"`
 		}
-		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.TenantID != "" {
-			detail := me.Auth.TenantID
-			if me.Auth.TenantSlug != "" {
-				detail += " (" + me.Auth.TenantSlug + ")"
+		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.UserID != "" {
+			detail := "user " + me.Auth.UserID
+			if me.Auth.ActorName != "" {
+				detail += " (" + me.Auth.ActorName + ")"
 			}
-			if me.Auth.UserID != "" {
-				detail += ", user " + me.Auth.UserID
-			}
-			add("resolved tenant", "pass", detail)
+			add("resolved user", "pass", detail)
 		}
 		asset, err := r.findRecentAsset(listed.Threads, profileName)
 		if err != nil {

@@ -51,8 +51,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/me", s.authMe)
 	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
 	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
-	s.mux.HandleFunc("/api/admin/tenants", s.adminTenants)
-	s.mux.HandleFunc("/api/admin/tenants/", s.adminTenantSubroutes)
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
 	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
 	s.mux.HandleFunc("/api/admin/owner/setup-token", s.adminOwnerSetupToken)
@@ -301,14 +299,11 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
-		TenantID string `json:"tenant_id"`
 	}
 	if err := parseJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// tenant_id is intentionally accepted as a legacy no-op so old clients cannot
-	// influence deployment-global account selection during the transition.
 	authContext, secret, err := s.service.Login(r.Context(), "", input.Email, input.Password)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -398,7 +393,6 @@ func (s *Server) authCLIExchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"api_key":   apiKeyResponse(result.APIKey),
 		"key":       apiKeyResponse(result.APIKey),
-		"tenant":    result.Tenant,
 		"user":      result.User,
 		"auth_type": result.AuthType,
 	})
@@ -476,117 +470,6 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
-}
-
-func (s *Server) adminTenants(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	if !method(w, r, http.MethodPost) {
-		return
-	}
-	var input struct {
-		TenantSlug string `json:"tenant_slug"`
-		TenantName string `json:"tenant_name"`
-		UserEmail  string `json:"user_email"`
-		UserName   string `json:"user_name"`
-		Password   string `json:"password"`
-		CreateKey  bool   `json:"create_key"`
-		KeyName    string `json:"key_name"`
-	}
-	if err := parseJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	result, err := s.service.ProvisionTenant(r.Context(), service.ProvisionTenantParams{
-		TenantSlug: input.TenantSlug,
-		TenantName: input.TenantName,
-		UserEmail:  input.UserEmail,
-		UserName:   input.UserName,
-		Password:   input.Password,
-		CreateKey:  input.CreateKey,
-		KeyName:    input.KeyName,
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, provisionTenantResponse(result))
-}
-
-func (s *Server) adminTenantSubroutes(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	rest := strings.TrimPrefix(r.URL.Path, "/api/admin/tenants/")
-	tenantID, tail, ok := splitFirst(rest)
-	if !ok || tenantID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	switch tail {
-	case "users":
-		s.adminTenantUsers(w, r, tenantID)
-	case "keys":
-		s.adminTenantKeys(w, r, tenantID)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func (s *Server) adminTenantUsers(w http.ResponseWriter, r *http.Request, tenantID string) {
-	if !method(w, r, http.MethodPost) {
-		return
-	}
-	var input struct {
-		Email       string `json:"email"`
-		UserEmail   string `json:"user_email"`
-		DisplayName string `json:"display_name"`
-		UserName    string `json:"user_name"`
-		Password    string `json:"password"`
-		Role        string `json:"role"`
-	}
-	if err := parseJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	email := firstNonEmpty(input.Email, input.UserEmail)
-	displayName := firstNonEmpty(input.DisplayName, input.UserName)
-	user, setupToken, err := s.service.ProvisionUser(r.Context(), service.ProvisionUserParams{
-		TenantIDOrSlug: tenantID,
-		Email:          email,
-		DisplayName:    displayName,
-		Password:       input.Password,
-		Role:           input.Role,
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	response := map[string]any{"user": user}
-	if setupToken != "" {
-		response["setup_token"] = setupToken
-	}
-	writeJSON(w, http.StatusCreated, response)
-}
-
-func (s *Server) adminTenantKeys(w http.ResponseWriter, r *http.Request, tenantID string) {
-	if !method(w, r, http.MethodPost) {
-		return
-	}
-	var input struct {
-		Name string `json:"name"`
-	}
-	if err := parseJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	key, err := s.service.ProvisionTenantAPIKey(r.Context(), tenantID, input.Name)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"key": apiKeyResponse(key)})
 }
 
 func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
@@ -987,6 +870,18 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (*types.Aut
 		return nil, false
 	}
 	return authContext, true
+}
+
+func (s *Server) requireOwnerBrowser(w http.ResponseWriter, r *http.Request) *types.AuthContext {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return nil
+	}
+	if authContext.SubjectType != types.AuthSubjectUserSession || !authContext.IsOwner {
+		writeCodedError(w, http.StatusForbidden, "OWNER_BROWSER_REQUIRED", "Permanent owner browser session is required.")
+		return nil
+	}
+	return authContext
 }
 
 func (s *Server) sessionCookieName() string {

@@ -1,3 +1,5 @@
+> **Superseded for `feat/user-team-sharing`.** Do not run the tenant provisioning commands in this historical document. Use [`public/setup-self-host.md`](../public/setup-self-host.md), [`docs/owner-setup.md`](owner-setup.md), [`docs/user-invitations.md`](user-invitations.md), and [`docs/deployment-global-identity.md`](deployment-global-identity.md) instead.
+
 # Agentbox Go Rollout
 
 This document is the rollout checklist for the split-runtime Agentbox port.

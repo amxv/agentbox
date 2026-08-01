@@ -82,11 +82,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			if activeName, ok := active.(string); ok && profileName == activeName {
 				prefix = "*"
 			}
-			tenant := ""
-			if slug, _ := profile["tenant_slug"].(string); slug != "" {
-				tenant = "\t" + slug
-			}
-			fmt.Fprintf(r.Stdout, "%s %s\t%s\t%s%s\n", prefix, profileName, profileBaseURL, profileSource, tenant)
+			fmt.Fprintf(r.Stdout, "%s %s\t%s\t%s\n", prefix, profileName, profileBaseURL, profileSource)
 		}
 		return nil
 	}
@@ -185,9 +181,6 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			"api_key_masked": profiles.MaskSecret(resolved.APIKey),
 			"source":         resolved.Source,
 			"config_path":    profiles.DefaultConfigPath(),
-			"tenant_id":      nullString(resolved.TenantID),
-			"tenant_slug":    nullString(resolved.TenantSlug),
-			"tenant_name":    nullString(resolved.TenantName),
 			"user_id":        nullString(resolved.UserID),
 			"key_name":       nullString(resolved.KeyName),
 			"auth_type":      nullString(resolved.AuthType),
@@ -195,11 +188,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 		if *jsonOut {
 			return printJSON(r.Stdout, result)
 		}
-		tenant := defaultString(resolved.TenantSlug, resolved.TenantID)
-		if tenant == "" {
-			tenant = "unknown-tenant"
-		}
-		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\t%s\n", resolved.Name, resolved.BaseURL, resolved.Source, tenant, profiles.MaskSecret(resolved.APIKey))
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\n", resolved.Name, resolved.BaseURL, resolved.Source, profiles.MaskSecret(resolved.APIKey))
 		return nil
 	default:
 		return fmt.Errorf("Unknown profiles command %q.", subcmd)
@@ -243,15 +232,6 @@ func profileStoreResult(key string, value string, store profiles.Store) map[stri
 
 func profileListing(profile profiles.Profile, source string) map[string]any {
 	listed := map[string]any{"name": profile.Name, "base_url": profile.BaseURL, "source": source}
-	if profile.TenantID != "" {
-		listed["tenant_id"] = profile.TenantID
-	}
-	if profile.TenantSlug != "" {
-		listed["tenant_slug"] = profile.TenantSlug
-	}
-	if profile.TenantName != "" {
-		listed["tenant_name"] = profile.TenantName
-	}
 	if profile.UserID != "" {
 		listed["user_id"] = profile.UserID
 	}

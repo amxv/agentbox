@@ -154,9 +154,9 @@ export function KeysView() {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Tenant admin tools</p>
+              <p className="section-label">User credentials</p>
               <h1 className="dashboard-title">API keys</h1>
-              <p className="dashboard-copy">Create tenant-scoped agent credentials, review active keys, and revoke access from your signed-in tenant.</p>
+              <p className="dashboard-copy">Create credentials for your account, review active actor keys, and revoke each integration independently.</p>
             </div>
             {auth && (
               <div className="card">

@@ -1,6 +1,6 @@
 # Agentbox self-host setup
 
-Agentbox is one tenant-scoped shared inbox. Humans in the Next.js dashboard, MCP hosts, CLI agents, Raycast, scripts, and CI all read and write the same threads, messages, and files.
+Agentbox is one deployment-global service with users, user-owned credentials, and a unified accessible inbox. Humans in the Next.js dashboard, MCP hosts, CLI agents, Raycast, scripts, and CI all use the same backend.
 
 The Go backend is the required core service. Every other surface is a client of that same service.
 
@@ -32,7 +32,7 @@ R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
 R2_BUCKET=<your-r2-bucket>
 ```
 
-Threads, messages, tenants, users, API-key metadata, and attachment metadata live in Postgres. File bytes live in R2 and transfer directly through signed URLs.
+Threads, messages, users, credential metadata, and attachment metadata live in Postgres. File bytes live in R2 and transfer directly through signed URLs.
 
 ## 3. Create the deployment admin key
 
@@ -41,7 +41,7 @@ openssl rand -hex 32
 export AGENTBOX_ADMIN_KEY="<generated-admin-key>"
 ```
 
-The deployment admin key is used for provisioning and deployment-level administration. Do not reuse it as a daily actor key.
+The deployment admin key is used only to issue one-time permanent-owner setup or recovery links. Do not reuse it as a daily actor key.
 
 ## 4. Configure the Go backend project
 
@@ -107,7 +107,12 @@ historical content or attribution.
 
 See `docs/user-invitations.md` for the transactional and authorization guarantees.
 
-## 7. Deploy the human dashboard
+Account login is deployment-global. Users sign in with email and password only;
+there is no tenant selector. Local CLI profiles likewise contain no tenant ID or
+slug. The former `agentbox provision tenant` and `/api/admin/tenants` paths are
+retired. See `docs/deployment-global-identity.md`.
+
+## 8. Deploy the human dashboard
 
 ```bash
 vercel link --yes --project agentbox
@@ -118,7 +123,7 @@ vercel --prod --yes -A deploy/vercel/dashboard/vercel.json
 
 The dashboard project needs `AGENTBOX_BACKEND_URL` so same-origin `/api/*` requests proxy to the Go backend.
 
-## 8. Add named identities
+## 9. Add named identities
 
 ```bash
 agentbox login --base-url https://youragentbox.vercel.app --profile-name prod
@@ -130,7 +135,7 @@ agentbox raycast-key
 
 Use names that make the thread readable, such as `chatgpt`, `claude-web`, `codex-local`, `raycast`, `human-ashray`, and `ci-release`.
 
-## 9. Connect ChatGPT and other MCP hosts
+## 10. Connect ChatGPT and other MCP hosts
 
 ```bash
 agentbox connect chatgpt
@@ -143,7 +148,7 @@ In ChatGPT:
 3. Turn on developer mode.
 4. Create an app.
 5. Select no auth.
-6. Paste the tenant-scoped MCP URL printed by the CLI.
+6. Paste the user-owned MCP URL printed by the CLI.
 
 Current MCP tools:
 
@@ -155,7 +160,7 @@ Current MCP tools:
 
 Every MCP tool reads or writes the same shared inbox used by all other surfaces.
 
-## 10. Connect Raycast on macOS
+## 11. Connect Raycast on macOS
 
 ```bash
 agentbox raycast-key
@@ -172,7 +177,7 @@ Configure Raycast preferences:
 - **Agentbox API Key:** the actor key printed by `agentbox raycast-key`
 - **Attachment Download Folder:** optional; defaults to `~/Downloads/Agentbox`
 
-## 11. Verify the shared loop
+## 12. Verify the shared loop
 
 ```bash
 curl https://youragentbox.vercel.app/api/health

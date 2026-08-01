@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -80,37 +81,47 @@ func TestGoWrittenProfileShapeIsTypeScriptCompatible(t *testing.T) {
 	}
 }
 
-func TestProfileMetadataRoundTripsAndOldShapesStillParse(t *testing.T) {
+func TestUserMetadataRoundTripsAndLegacyTenantFieldsAreIgnored(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTBOX_CONFIG_DIR", dir)
 	if _, err := SaveProfile(Profile{
-		Name:       "tenant",
-		BaseURL:    "https://example.com/",
-		APIKey:     "secret",
-		TenantID:   "ten_acme",
-		TenantSlug: "acme",
-		TenantName: "Acme",
-		UserID:     "usr_123",
-		KeyName:    "cli-workstation",
-		AuthType:   "api_key",
+		Name:     "user",
+		BaseURL:  "https://example.com/",
+		APIKey:   "secret",
+		UserID:   "usr_123",
+		KeyName:  "cli-workstation",
+		AuthType: "api_key",
 	}, true); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := Resolve("tenant")
+	resolved, err := Resolve("user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.TenantID != "ten_acme" || resolved.TenantSlug != "acme" || resolved.TenantName != "Acme" || resolved.UserID != "usr_123" || resolved.KeyName != "cli-workstation" || resolved.AuthType != "api_key" {
+	if resolved.UserID != "usr_123" || resolved.KeyName != "cli-workstation" || resolved.AuthType != "api_key" {
 		t.Fatalf("resolved metadata = %#v", resolved.Profile)
 	}
 
-	parsed, err := ParseProfilesConfig(`[{"name":"old","base_url":"https://old.example.com","api_key":"old-key"}]`)
+	parsed, err := ParseProfilesConfig(`[{"name":"old","base_url":"https://old.example.com","api_key":"old-key","tenant_id":"ten_old","tenant_slug":"old","tenant_name":"Old"}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed) != 1 || parsed[0].Name != "old" || parsed[0].TenantID != "" {
+	if len(parsed) != 1 || parsed[0].Name != "old" || parsed[0].UserID != "" {
 		t.Fatalf("parsed old shape = %#v", parsed)
 	}
+	bytes, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"tenant_id", "tenant_slug", "tenant_name"} {
+		if stringContains(bytes, forbidden) {
+			t.Fatalf("written profile retained legacy field %q: %s", forbidden, bytes)
+		}
+	}
+}
+
+func stringContains(value []byte, needle string) bool {
+	return strings.Contains(string(value), needle)
 }
 
 func TestEnvProfilePrecedenceAndLegacyFallback(t *testing.T) {

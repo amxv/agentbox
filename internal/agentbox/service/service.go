@@ -462,7 +462,6 @@ type CLILoginExchangeResult struct {
 	ProfileName string       `json:"profile_name,omitempty"`
 	BaseURL     string       `json:"base_url,omitempty"`
 	APIKey      types.APIKey `json:"api_key"`
-	Tenant      types.Tenant `json:"tenant"`
 	User        types.User   `json:"user"`
 	AuthType    string       `json:"auth_type"`
 }
@@ -492,54 +491,7 @@ type ProvisionUserParams struct {
 }
 
 func (s *Service) ProvisionTenant(ctx context.Context, params ProvisionTenantParams) (ProvisionTenantResult, error) {
-	slug, err := normalizeTenantSlug(params.TenantSlug)
-	if err != nil {
-		return ProvisionTenantResult{}, err
-	}
-	name := strings.TrimSpace(params.TenantName)
-	if name == "" {
-		name = slug
-	}
-	tenant, err := s.repo.UpsertTenant(ctx, types.Tenant{
-		ID:   tenantIDForSlug(slug),
-		Slug: slug,
-		Name: name,
-	})
-	if err != nil {
-		return ProvisionTenantResult{}, err
-	}
-	user, setupToken, err := s.provisionUser(ctx, tenant.ID, ProvisionUserParams{
-		Email:       params.UserEmail,
-		DisplayName: params.UserName,
-		Password:    params.Password,
-		Role:        firstNonEmpty(params.UserRole, "admin"),
-	})
-	if err != nil {
-		return ProvisionTenantResult{}, err
-	}
-	result := ProvisionTenantResult{Tenant: tenant, User: user, SetupToken: setupToken}
-	if params.CreateKey {
-		keyName := strings.TrimSpace(params.KeyName)
-		if keyName == "" {
-			keyName = "cli"
-		}
-		key, err := s.CreateAPIKeyWithScopes(ctx, types.AuthContext{
-			TenantID:        tenant.ID,
-			TenantSlug:      tenant.Slug,
-			UserID:          user.ID,
-			UserDisplayName: user.DisplayName,
-			SubjectType:     types.AuthSubjectUserSession,
-			ActorID:         user.ID,
-			ActorName:       user.DisplayName,
-			Role:            user.Role,
-			IsOwner:         user.IsOwner,
-		}, keyName, cliAPIKeyScopes())
-		if err != nil {
-			return ProvisionTenantResult{}, err
-		}
-		result.APIKey = &key
-	}
-	return result, nil
+	return ProvisionTenantResult{}, CodedError{Code: "LEGACY_TENANT_PROVISIONING_DISABLED", Message: "Tenant provisioning is disabled. Create users only through owner invitations."}
 }
 
 func (s *Service) IssueOwnerSetupToken(ctx context.Context, ttl time.Duration) (OwnerSetupTokenResult, error) {
@@ -672,7 +624,7 @@ func (s *Service) RegisterWithSignupInvitation(ctx context.Context, token string
 		displayName,
 		passwordHash,
 		hashSecret(sessionSecret),
-		time.Now().UTC().Add(s.cfg.SessionTTL),
+		time.Now().UTC().Add(30*24*time.Hour),
 	)
 	if errors.Is(err, types.ErrSignupInvitationInvalid) {
 		return types.AuthContext{}, "", types.User{}, CodedError{Code: "INVALID_INVITATION", Message: "Invitation is invalid, expired, revoked, or already used.", Err: err}
@@ -721,18 +673,7 @@ func (s *Service) SetUserDisabled(ctx context.Context, authContext types.AuthCon
 }
 
 func (s *Service) ProvisionUser(ctx context.Context, params ProvisionUserParams) (types.User, string, error) {
-	tenantIDOrSlug := strings.TrimSpace(params.TenantIDOrSlug)
-	if tenantIDOrSlug == "" {
-		return types.User{}, "", CodedError{Code: "INVALID_ARGUMENT", Message: "tenant_id is required."}
-	}
-	tenant, err := s.repo.GetTenant(ctx, tenantIDOrSlug)
-	if err != nil {
-		return types.User{}, "", err
-	}
-	if tenant == nil {
-		return types.User{}, "", CodedError{Code: "TENANT_NOT_FOUND", Message: "Tenant not found."}
-	}
-	return s.provisionUser(ctx, tenant.ID, params)
+	return types.User{}, "", CodedError{Code: "LEGACY_TENANT_PROVISIONING_DISABLED", Message: "Tenant provisioning is disabled. Create users only through owner invitations."}
 }
 
 func (s *Service) ProvisionTenantAPIKey(ctx context.Context, tenantIDOrSlug string, name string) (types.APIKey, error) {
@@ -983,7 +924,6 @@ func (s *Service) ExchangeCLILogin(ctx context.Context, code string, state strin
 	}
 	return CLILoginExchangeResult{
 		APIKey:   key,
-		Tenant:   *tenant,
 		User:     *user,
 		AuthType: "api_key",
 	}, nil

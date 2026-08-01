@@ -312,7 +312,7 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 	reqMe := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	reqMe.AddCookie(sessionCookie)
 	server.ServeHTTP(me, reqMe)
-	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"actor_name":"Alice Admin"`) || !strings.Contains(me.Body.String(), `"tenant_id":"ten_a"`) {
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"actor_name":"Alice Admin"`) || !strings.Contains(me.Body.String(), ``) {
 		t.Fatalf("me status=%d body=%s", me.Code, me.Body.String())
 	}
 
@@ -421,7 +421,7 @@ func TestAuthMeSupportsAPIKeyAndAliasWithoutLeakingSecret(t *testing.T) {
 			t.Fatalf("%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
 		}
 		body := recorder.Body.String()
-		if !strings.Contains(body, `"tenant_id":"ten_acme"`) ||
+		if !strings.Contains(body, ``) ||
 			!strings.Contains(body, `"tenant_slug":"acme"`) ||
 			!strings.Contains(body, `"subject_type":"api_key"`) ||
 			!strings.Contains(body, `"actor_name":"raycast"`) ||
@@ -453,7 +453,7 @@ func TestHTTPUserCredentialsAreIsolatedAndRotatable(t *testing.T) {
 	login := func(email string) *http.Cookie {
 		t.Helper()
 		recorder := httptest.NewRecorder()
-		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"tenant_id":"ten_ignored","email":"`+email+`","password":"let-me-in"}`)))
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"`+email+`","password":"let-me-in"}`)))
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("login %s status=%d body=%s", email, recorder.Code, recorder.Body.String())
 		}
@@ -569,7 +569,7 @@ func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
 	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
 
 	login := httptest.NewRecorder()
-	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"tenant_id":"ten_acme","email":"admin@example.com","password":"let-me-in"}`)))
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"admin@example.com","password":"let-me-in"}`)))
 	if login.Code != http.StatusOK {
 		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
 	}
@@ -608,13 +608,12 @@ func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
 			Name   string `json:"name"`
 			Secret string `json:"key"`
 		} `json:"api_key"`
-		Tenant types.Tenant `json:"tenant"`
-		User   types.User   `json:"user"`
+		User types.User `json:"user"`
 	}
 	if err := json.Unmarshal(exchange.Body.Bytes(), &exchanged); err != nil {
 		t.Fatal(err)
 	}
-	if exchanged.APIKey.Name != "cli-test" || exchanged.APIKey.Secret == "" || exchanged.Tenant.ID != "ten_acme" || exchanged.Tenant.Slug != "acme" || exchanged.User.ID != "usr_acme" {
+	if exchanged.APIKey.Name != "cli-test" || exchanged.APIKey.Secret == "" || exchanged.User.ID != "usr_acme" {
 		t.Fatalf("exchanged = %#v", exchanged)
 	}
 	if len(repo.APIKeys) != 1 || repo.APIKeys[0].UserID != "usr_acme" {
@@ -949,109 +948,6 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 	server.ServeHTTP(revokedInspectResponse, httptest.NewRequest(http.MethodPost, "/api/auth/invitations/inspect", bytes.NewReader(revokedInspectBody)))
 	if revokedInspectResponse.Code != http.StatusBadRequest || !strings.Contains(revokedInspectResponse.Body.String(), "INVALID_INVITATION") {
 		t.Fatalf("revoked inspect status=%d body=%s", revokedInspectResponse.Code, revokedInspectResponse.Body.String())
-	}
-}
-
-func TestAdminTenantProvisioningAuthorizationAndIdempotency(t *testing.T) {
-	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
-	server := NewServer(config.Config{AdminKey: "adm"}, svc)
-
-	unauthorized := httptest.NewRecorder()
-	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{"tenant_slug":"acme"}`)))
-	if unauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{
-		"tenant_slug":"acme",
-		"tenant_name":"Acme",
-		"user_email":"admin@example.com",
-		"user_name":"Acme Admin",
-		"password":"secret-password",
-		"create_key":true,
-		"key_name":"workstation"
-	}`))
-	req.Header.Set("x-agentbox-admin-key", "adm")
-	first := httptest.NewRecorder()
-	server.ServeHTTP(first, req)
-	if first.Code != http.StatusCreated {
-		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
-	}
-	var firstPayload struct {
-		Tenant types.Tenant `json:"tenant"`
-		User   types.User   `json:"user"`
-		APIKey struct {
-			Name   string `json:"name"`
-			Secret string `json:"key"`
-		} `json:"api_key"`
-	}
-	if err := json.Unmarshal(first.Body.Bytes(), &firstPayload); err != nil {
-		t.Fatal(err)
-	}
-	if firstPayload.Tenant.ID != "ten_acme" || firstPayload.User.Email != "admin@example.com" || firstPayload.User.PasswordHash != nil || firstPayload.APIKey.Secret == "" {
-		t.Fatalf("first payload = %#v", firstPayload)
-	}
-	if len(repo.Users) != 1 || repo.Users[0].PasswordHash == nil || *repo.Users[0].PasswordHash == "secret-password" {
-		t.Fatalf("stored user = %#v", repo.Users)
-	}
-
-	normalKeyReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{"tenant_slug":"other"}`))
-	normalKeyReq.Header.Set("authorization", "Bearer "+firstPayload.APIKey.Secret)
-	normalKeyAttempt := httptest.NewRecorder()
-	server.ServeHTTP(normalKeyAttempt, normalKeyReq)
-	if normalKeyAttempt.Code != http.StatusUnauthorized {
-		t.Fatalf("normal key provisioning status=%d body=%s", normalKeyAttempt.Code, normalKeyAttempt.Body.String())
-	}
-
-	secondReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants", strings.NewReader(`{
-		"tenant_slug":"acme",
-		"tenant_name":"Acme",
-		"user_email":"admin@example.com",
-		"user_name":"Acme Admin",
-		"password":"secret-password",
-		"create_key":true,
-		"key_name":"workstation"
-	}`))
-	secondReq.Header.Set("x-agentbox-admin-key", "adm")
-	second := httptest.NewRecorder()
-	server.ServeHTTP(second, secondReq)
-	if second.Code != http.StatusCreated {
-		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
-	}
-	if len(repo.Tenants) != 1 || len(repo.Users) != 1 || len(repo.APIKeys) != 1 {
-		t.Fatalf("repo counts tenants=%d users=%d keys=%d", len(repo.Tenants), len(repo.Users), len(repo.APIKeys))
-	}
-}
-
-func TestAdminTenantUserAndKeyRoutes(t *testing.T) {
-	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
-	server := NewServer(config.Config{AdminKey: "adm"}, svc)
-	if _, err := svc.ProvisionTenant(t.Context(), service.ProvisionTenantParams{
-		TenantSlug: "acme",
-		TenantName: "Acme",
-		UserEmail:  "admin@example.com",
-		UserName:   "Acme Admin",
-		Password:   "secret-password",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	userReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants/acme/users", strings.NewReader(`{"email":"second@example.com","display_name":"Second Admin","role":"admin"}`))
-	userReq.Header.Set("x-agentbox-admin-key", "adm")
-	userRes := httptest.NewRecorder()
-	server.ServeHTTP(userRes, userReq)
-	if userRes.Code != http.StatusCreated || !strings.Contains(userRes.Body.String(), `"setup_token":"setup_`) {
-		t.Fatalf("user status=%d body=%s", userRes.Code, userRes.Body.String())
-	}
-
-	keyReq := httptest.NewRequest(http.MethodPost, "/api/admin/tenants/acme/keys", strings.NewReader(`{"name":"raycast"}`))
-	keyReq.Header.Set("x-agentbox-admin-key", "adm")
-	keyRes := httptest.NewRecorder()
-	server.ServeHTTP(keyRes, keyReq)
-	if keyRes.Code != http.StatusBadRequest || !strings.Contains(keyRes.Body.String(), "LEGACY_TENANT_KEY_DISABLED") {
-		t.Fatalf("legacy tenant key status=%d body=%s", keyRes.Code, keyRes.Body.String())
 	}
 }
 
@@ -1425,4 +1321,18 @@ func testUser(tenantID string, userID string, email string, displayName string, 
 func dbHashForTest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func TestLegacyTenantProvisioningRoutesAreRetired(t *testing.T) {
+	repository := &db.MemoryRepository{}
+	server := NewServer(config.Config{AdminKey: "deployment-secret"}, service.New(repository, &assets.FakeStore{}))
+	for _, path := range []string{"/api/admin/tenants", "/api/admin/tenants/default", "/api/admin/tenants/default/users"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"name":"legacy"}`))
+		request.Header.Set("x-agentbox-admin-key", "deployment-secret")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("legacy tenant route %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"agentbox/internal/agentbox/assets"
+	authpkg "agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/httpapi"
@@ -47,7 +48,7 @@ func TestCLIHelpOutput(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"--help"}, []string{"Usage: agentbox [options] <command>", "Commands:", "mcp-url"}},
+		{[]string{"--help"}, []string{"Usage: agentbox [options] <command>", "Commands:", "mcp-url", "owner"}},
 		{[]string{"-h"}, []string{"Usage: agentbox [options] <command>", "profiles"}},
 		{[]string{"profiles", "--help"}, []string{"Usage: agentbox profiles [options] [command]", "add <name>"}},
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
@@ -55,10 +56,9 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"init", "--help"}, []string{"Usage: agentbox init", "existing user credential"}},
 		{[]string{"owner", "--help"}, []string{"Usage: agentbox owner setup-token", "permanent deployment owner"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
-		{[]string{"provision", "--help"}, []string{"Usage: agentbox provision tenant", "deployment-owner admin API"}},
-		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "tenant-scoped API key"}},
-		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "tenant metadata"}},
-		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "tenant-scoped ChatGPT key"}},
+		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "user-owned credential"}},
+		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "user and actor diagnostics"}},
+		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "user-owned ChatGPT credential"}},
 		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key", "Raycast"}},
 		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "signed-in profile's user"}},
 		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "signed-in profile's user"}},
@@ -578,13 +578,11 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	server := newTestServer(t)
 	defer server.Close()
 	if _, err := profiles.SaveProfile(profiles.Profile{
-		Name:       "tenant",
-		BaseURL:    server.URL,
-		APIKey:     "dev-key",
-		TenantID:   types.DefaultTenantID,
-		TenantSlug: "default",
-		KeyName:    "dev",
-		AuthType:   "api_key",
+		Name:     "tenant",
+		BaseURL:  server.URL,
+		APIKey:   "dev-key",
+		KeyName:  "dev",
+		AuthType: "api_key",
 	}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -636,78 +634,25 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	}
 }
 
-func TestCLIProvisionTenantCreatesProfile(t *testing.T) {
+func TestCLILoginSavesUserProfile(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
-	server := newTestServer(t)
-	defer server.Close()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
-
-	if code := runner.Run([]string{
-		"provision", "tenant",
-		"--base-url", server.URL,
-		"--admin-key", "adm",
-		"--tenant-slug", "acme",
-		"--tenant-name", "Acme",
-		"--user-email", "admin@example.com",
-		"--user-name", "Acme Admin",
-		"--password", "secret-password",
-		"--create-cli-key",
-		"--key-name", "workstation",
-		"--profile-name", "acme-prod",
-		"--json",
-	}); code != 0 {
-		t.Fatalf("provision tenant failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
-	}
-	var payload struct {
-		Tenant struct {
-			ID   string `json:"id"`
-			Slug string `json:"slug"`
-		} `json:"tenant"`
-		User struct {
-			Email string `json:"email"`
-			Role  string `json:"role"`
-		} `json:"user"`
-		APIKey struct {
-			Name   string `json:"name"`
-			Secret string `json:"key"`
-		} `json:"api_key"`
-		ProfileName string `json:"profile_name"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Tenant.ID != "ten_acme" || payload.Tenant.Slug != "acme" || payload.User.Email != "admin@example.com" || payload.User.Role != "admin" {
-		t.Fatalf("payload = %#v", payload)
-	}
-	if payload.APIKey.Name != "workstation" || payload.APIKey.Secret == "" || payload.ProfileName != "acme-prod" {
-		t.Fatalf("api/profile payload = %#v", payload)
-	}
-	resolved, err := profiles.Resolve("acme-prod")
+	passwordHash, err := authpkg.HashPassword("secret-password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey != payload.APIKey.Secret {
-		t.Fatalf("resolved profile = %#v payload key=%q", resolved, payload.APIKey.Secret)
+	user := types.User{
+		ID:           "usr_acme",
+		TenantID:     types.DefaultTenantID,
+		Email:        "admin@example.com",
+		DisplayName:  "Acme Admin",
+		PasswordHash: &passwordHash,
+		Role:         "member",
 	}
-}
-
-func TestCLILoginSavesTenantProfile(t *testing.T) {
-	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
-	repo := &db.MemoryRepository{}
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+		Users:   []types.User{user},
+	}
 	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
-	provisioned, err := svc.ProvisionTenant(t.Context(), service.ProvisionTenantParams{
-		TenantSlug: "acme",
-		TenantName: "Acme",
-		UserEmail:  "admin@example.com",
-		UserName:   "Acme Admin",
-		Password:   "secret-password",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	apiServer := httpapi.NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -715,12 +660,13 @@ func TestCLILoginSavesTenantProfile(t *testing.T) {
 			state := req.URL.Query().Get("state")
 			redirectURI := req.URL.Query().Get("redirect_uri")
 			result, err := svc.AuthorizeCLILogin(req.Context(), types.AuthContext{
-				TenantID:    provisioned.Tenant.ID,
-				TenantSlug:  provisioned.Tenant.Slug,
-				UserID:      provisioned.User.ID,
+				TenantID:    types.DefaultTenantID,
+				UserID:      user.ID,
 				SubjectType: types.AuthSubjectUserSession,
-				ActorName:   provisioned.User.DisplayName,
-				Role:        provisioned.User.Role,
+				ActorID:     "sess_browser",
+				ActorName:   user.DisplayName,
+				SessionID:   "sess_browser",
+				Role:        user.Role,
 			}, state, redirectURI)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -763,9 +709,10 @@ func TestCLILoginSavesTenantProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.TenantID != "ten_acme" || resolved.TenantSlug != "acme" || resolved.TenantName != "Acme" || resolved.UserID != provisioned.User.ID || resolved.KeyName != "cli-test" || resolved.AuthType != "api_key" {
+	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.UserID != user.ID || resolved.KeyName != "cli-test" || resolved.AuthType != "api_key" {
 		t.Fatalf("resolved profile = %#v", resolved)
 	}
+
 	out.Reset()
 	stderr.Reset()
 	if code := runner.Run([]string{"--profile", "acme-prod", "list", "--json"}); code != 0 {
@@ -805,7 +752,6 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	textType := "text/plain"
 	if _, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, authContext, "seed asset", nil, []types.NewAsset{{
-		TenantID:   types.DefaultTenantID,
 		StorageKey: "agentbox/ten_default/seed/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,

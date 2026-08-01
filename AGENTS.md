@@ -174,6 +174,18 @@ Disabling a user revokes browser sessions, API credentials, and pending CLI
 login codes in the same transaction while preserving content and attribution.
 Re-enabling does not restore old credentials. See `docs/user-invitations.md`.
 
+## Deployment-global Login
+
+Login is deployment-global and accepts only email and password. Do not add a
+tenant selector to browser, CLI, API, or profile contracts. Saved CLI profiles
+must not contain `tenant_id` or `tenant_slug`.
+
+The legacy `/api/admin/tenants` provisioning surface and
+`agentbox provision tenant` command are retired. Normal users can be created
+only through owner-issued invitations; the permanent owner can be established
+or recovered only through the one-time operator token flow. See
+`docs/deployment-global-identity.md`.
+
 ## Deploy Dashboard
 
 The dashboard project is `agentbox`.

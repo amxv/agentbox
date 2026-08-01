@@ -14,7 +14,6 @@ export function LoginView() {
   const next = searchParams.get("next") || "/threads";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [tenantID, setTenantID] = useState("");
   const [loading, setLoading] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +31,11 @@ export function LoginView() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setLoading(true); setError(null);
     try {
-      const response = await fetch("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password, tenant_id: tenantID.trim() || undefined }) });
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       router.replace(next);
@@ -55,17 +58,16 @@ export function LoginView() {
         </section>
         <div className={styles.cardWrap}>
           <form className={styles.card} onSubmit={submit}>
-            <div className={styles.cardTop}><span>Tenant access</span><span>Read + write</span></div>
+            <div className={styles.cardTop}><span>Account access</span><span>Read + write</span></div>
             <h2>Sign in to Agentbox.</h2>
-            <p className={styles.cardCopy}>Use the human account provisioned by your deployment admin. Public signup is intentionally disabled.</p>
+            <p className={styles.cardCopy}>Use the account created through your owner-issued invitation. Public signup without an invitation is disabled.</p>
             <div className={styles.fields}>
               <label className={styles.label}>Email<input autoComplete="email" autoFocus className={styles.input} value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="you@example.com" type="email"/></label>
               <label className={styles.label}>Password<input autoComplete="current-password" className={styles.input} value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="Password" type="password"/></label>
-              <label className={styles.label}>Tenant ID<input className={styles.input} value={tenantID} onChange={(e)=>setTenantID(e.target.value)} placeholder="Optional unless your email belongs to multiple tenants" type="text"/></label>
             </div>
             {error && <div className={styles.error}><strong>Could not sign in.</strong><span>{error}</span></div>}
             <button className={styles.submit} type="submit" disabled={loading || checkingSession || !email.trim() || !password}>{loading ? "Signing in…" : checkingSession ? "Checking session…" : "Enter the shared inbox"}</button>
-            <p className={styles.note}>Your browser session identifies you as a human actor inside the tenant. Agent and extension identities remain separate and revocable.</p>
+            <p className={styles.note}>Your browser session identifies you as the human actor for this account. Agent and extension credentials remain separate and revocable.</p>
           </form>
         </div>
       </main>

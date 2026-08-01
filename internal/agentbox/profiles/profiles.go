@@ -13,15 +13,12 @@ import (
 )
 
 type Profile struct {
-	Name       string `json:"name"`
-	BaseURL    string `json:"base_url"`
-	APIKey     string `json:"api_key"`
-	TenantID   string `json:"tenant_id,omitempty"`
-	TenantSlug string `json:"tenant_slug,omitempty"`
-	TenantName string `json:"tenant_name,omitempty"`
-	UserID     string `json:"user_id,omitempty"`
-	KeyName    string `json:"key_name,omitempty"`
-	AuthType   string `json:"auth_type,omitempty"`
+	Name     string `json:"name"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	UserID   string `json:"user_id,omitempty"`
+	KeyName  string `json:"key_name,omitempty"`
+	AuthType string `json:"auth_type,omitempty"`
 }
 
 type Store struct {
@@ -94,14 +91,11 @@ func SaveProfile(profile Profile, activate bool) (Store, error) {
 		return Store{}, err
 	}
 	normalized, ok := normalizeProfile(profile.Name, map[string]any{
-		"base_url":    profile.BaseURL,
-		"api_key":     profile.APIKey,
-		"tenant_id":   profile.TenantID,
-		"tenant_slug": profile.TenantSlug,
-		"tenant_name": profile.TenantName,
-		"user_id":     profile.UserID,
-		"key_name":    profile.KeyName,
-		"auth_type":   profile.AuthType,
+		"base_url":  profile.BaseURL,
+		"api_key":   profile.APIKey,
+		"user_id":   profile.UserID,
+		"key_name":  profile.KeyName,
+		"auth_type": profile.AuthType,
 	})
 	if !ok {
 		normalized = profile
@@ -274,9 +268,6 @@ func writeStore(store Store) error {
 			"base_url": profile.BaseURL,
 			"api_key":  profile.APIKey,
 		}
-		setOptionalField(record, "tenant_id", profile.TenantID)
-		setOptionalField(record, "tenant_slug", profile.TenantSlug)
-		setOptionalField(record, "tenant_name", profile.TenantName)
 		setOptionalField(record, "user_id", profile.UserID)
 		setOptionalField(record, "key_name", profile.KeyName)
 		setOptionalField(record, "auth_type", profile.AuthType)
@@ -333,15 +324,12 @@ func normalizeProfile(name string, record map[string]any) (Profile, bool) {
 		return Profile{}, false
 	}
 	return Profile{
-		Name:       name,
-		BaseURL:    trimURL(baseURL),
-		APIKey:     strings.TrimSpace(apiKey),
-		TenantID:   strings.TrimSpace(stringField(record, "tenant_id", "tenantId")),
-		TenantSlug: strings.TrimSpace(stringField(record, "tenant_slug", "tenantSlug")),
-		TenantName: strings.TrimSpace(stringField(record, "tenant_name", "tenantName")),
-		UserID:     strings.TrimSpace(stringField(record, "user_id", "userId")),
-		KeyName:    strings.TrimSpace(stringField(record, "key_name", "keyName")),
-		AuthType:   strings.TrimSpace(stringField(record, "auth_type", "authType")),
+		Name:     name,
+		BaseURL:  trimURL(baseURL),
+		APIKey:   strings.TrimSpace(apiKey),
+		UserID:   strings.TrimSpace(stringField(record, "user_id", "userId")),
+		KeyName:  strings.TrimSpace(stringField(record, "key_name", "keyName")),
+		AuthType: strings.TrimSpace(stringField(record, "auth_type", "authType")),
 	}, true
 }
 

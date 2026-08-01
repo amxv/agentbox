@@ -1,8 +1,6 @@
 "use client";
 
 export type AuthContext = {
-  tenant_id: string;
-  tenant_slug?: string;
   user_id?: string;
   subject_type: "user_session" | "api_key" | "admin";
   actor_name: string;

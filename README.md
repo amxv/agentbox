@@ -86,7 +86,7 @@ Agentbox includes a simple browser viewer for inspecting threads and attachments
 https://your-agentbox.vercel.app/threads
 ```
 
-Create the first tenant admin with `agentbox provision tenant`, then sign in at `/login` with that tenant admin email and password or setup token. Browser requests use the first-party session cookie and tenant-scoped `/api/threads` and `/api/keys` routes; the deployment admin key is only for provisioning and should not be stored in the dashboard. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
+Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no tenant selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
 
 ## API
 
@@ -152,23 +152,17 @@ AGENTBOX_MAX_FILE_SIZE_BYTES
 R2_PUBLIC_BASE_URL
 ```
 
-API keys are tenant-scoped, hashed in Postgres, and shown only once on creation. After the backend is deployed and migrated, provision a tenant and initial admin user:
+Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
 
 ```bash
-agentbox provision tenant \
-  --base-url https://youragentbox.vercel.app \
+agentbox owner setup-token \
+  --base-url https://youragentbox-api.vercel.app \
+  --app-url https://youragentbox.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --tenant-slug default \
-  --tenant-name Default \
-  --user-email you@example.com \
-  --user-name "Your Name" \
-  --password "$AGENTBOX_INITIAL_PASSWORD" \
-  --create-cli-key \
-  --key-name local \
-  --profile-name prod
+  --expires 30m
 ```
 
-Use `agentbox login` for browser-assisted profile creation on other machines. With a logged-in tenant profile, `agentbox keys create|list|revoke`, `agentbox raycast-key`, and `agentbox connect chatgpt` use tenant-scoped key routes. `agentbox init` and `/api/admin/keys` remain legacy compatibility paths for existing single-tenant setups; prefer provisioning plus login for new deployments.
+Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. Tenant provisioning and tenant metadata in CLI profiles are retired.
 
 ## Docs
 

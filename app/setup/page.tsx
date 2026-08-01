@@ -34,7 +34,7 @@ const chapters = [
       },
       {
         title: "Create the deployment admin key",
-        body: "This credential exists for provisioning and deployment-level administration. Daily users, agents, Raycast, and scripts should receive separate tenant-scoped identities.",
+        body: "This credential exists only to issue one-time permanent-owner setup or recovery links. Daily users and integrations use separate user-owned credentials.",
         code: "openssl rand -hex 32\nexport AGENTBOX_ADMIN_KEY=\"<generated-admin-key>\""
       }
     ]
@@ -48,7 +48,7 @@ const chapters = [
       {
         title: "Configure the backend project",
         body: "Link the Vercel backend project and add the required production environment values.",
-        code: "vercel link --yes --project agentbox-go\nvercel env add DATABASE_URL production\nvercel env add AGENTBOX_ADMIN_KEY production\nvercel env add R2_ACCOUNT_ID production\nvercel env add R2_ACCESS_KEY_ID production\nvercel env add R2_SECRET_ACCESS_KEY production\nvercel env add R2_BUCKET production\nvercel env add AGENTBOX_ENV production"
+        code: "vercel link --yes --project agentbox-go\nvercel env add DATABASE_URL production\nvercel env add AGENTBOX_ADMIN_KEY production\nvercel env add APP_PUBLIC_URL production\nvercel env add R2_ACCOUNT_ID production\nvercel env add R2_ACCESS_KEY_ID production\nvercel env add R2_SECRET_ACCESS_KEY production\nvercel env add R2_BUCKET production\nvercel env add AGENTBOX_ENV production"
       },
       {
         title: "Deploy and migrate",
@@ -56,9 +56,13 @@ const chapters = [
         code: "vercel --prod --yes -A deploy/vercel/backend/vercel.json\nbun run db:migrate"
       },
       {
-        title: "Provision the first tenant and human",
-        body: "Create the tenant, initial tenant admin, and a tenant-scoped CLI identity. The resulting profile becomes your first authenticated seat at the shared inbox.",
-        code: "agentbox provision tenant \\\n  --base-url https://youragentbox.vercel.app \\\n  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\n  --tenant-slug default \\\n  --tenant-name Default \\\n  --user-email you@example.com \\\n  --user-name \"Your Name\" \\\n  --create-cli-key \\\n  --key-name local \\\n  --profile-name prod\n\nagentbox doctor\nagentbox list"
+        title: "Create the permanent owner",
+        body: "Issue a short-lived browser link from a trusted shell. Open it once to create the permanent owner, then invite every additional user from the owner dashboard.",
+        code: "agentbox owner setup-token \\\
+  --base-url https://youragentbox-api.vercel.app \\\
+  --app-url https://youragentbox.vercel.app \\\
+  --admin-key \"$AGENTBOX_ADMIN_KEY\" \\\
+  --expires 30m"
       }
     ]
   },
@@ -70,7 +74,7 @@ const chapters = [
     steps: [
       {
         title: "Deploy the human dashboard",
-        body: "The Next.js dashboard can create threads, reply, upload files, inspect history, and manage tenant-scoped keys through the same backend.",
+        body: "The Next.js dashboard can create threads, reply, upload files, inspect history, manage user-owned credentials, and provide owner-only user administration.",
         code: "vercel link --yes --project agentbox\nvercel env rm AGENTBOX_BACKEND_URL production --yes\nprintf 'https://youragentbox.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production\nvercel --prod --yes -A deploy/vercel/dashboard/vercel.json"
       },
       {
@@ -80,7 +84,7 @@ const chapters = [
       },
       {
         title: "Connect MCP participants",
-        body: "Generate a tenant-scoped MCP URL for ChatGPT. The same endpoint works with Claude custom connectors and other MCP-capable hosts.",
+        body: "Generate a dedicated user-owned MCP URL for ChatGPT. The same endpoint works with Claude custom connectors and other MCP-capable hosts using separate credentials.",
         code: "agentbox connect chatgpt\n\n# ChatGPT:\n# Apps → Advanced settings → developer mode\n# Create app → no auth → paste the printed MCP URL"
       },
       {
@@ -92,7 +96,7 @@ const chapters = [
   }
 ];
 
-const requiredEnv = ["DATABASE_URL", "AGENTBOX_ADMIN_KEY", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "AGENTBOX_ENV=production"];
+const requiredEnv = ["DATABASE_URL", "AGENTBOX_ADMIN_KEY", "APP_PUBLIC_URL", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "AGENTBOX_ENV=production"];
 const optionalEnv = ["AGENTBOX_ALLOWED_ORIGINS", "AGENTBOX_AUTO_MIGRATE", "AGENTBOX_DB_POOL_SIZE", "AGENTBOX_MAX_FILE_SIZE_BYTES", "R2_PUBLIC_BASE_URL"];
 
 const checks = [
@@ -140,7 +144,7 @@ export default function SetupPage() {
           <div className={styles.heroCopy}>
             <p className={styles.eyebrow}>Agentbox / Operator&apos;s manual / Revision 03</p>
             <h1>Run the shared dispatch on your own infrastructure.</h1>
-            <p>Deploy the Agentbox core once, then let humans, MCP hosts, CLI agents, Raycast, scripts, and CI enter through the interface that fits them. They all read and write the same tenant-scoped inbox.</p>
+            <p>Deploy the Agentbox core once, then let humans and their independently attributable credentials enter through the interface that fits them. Every user receives one unified accessible inbox.</p>
             <div className={styles.actions}>
               <a className={styles.primaryAction} href="#manual">Open the manual</a>
               <a className={styles.secondaryAction} href="/setup-self-host.md">Open Markdown guide ↗</a>
