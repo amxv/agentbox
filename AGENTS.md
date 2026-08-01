@@ -114,6 +114,10 @@ This runs:
 go run ./cmd/migrate
 ```
 
+The ordered SQL files under `migrations/` are embedded in the Go binary and are
+the canonical schema history. Applied versions and checksums are recorded in
+`schema_migrations`. Normal repository requests never execute schema DDL.
+
 Do not rely on `AGENTBOX_AUTO_MIGRATE=true` for production by default.
 
 ## Deploy Dashboard

@@ -103,7 +103,7 @@ The dashboard uses `/login`, an HTTP-only session cookie, and tenant-scoped `/ap
 
 ## Migrations
 
-The checked-in schema is `migrations/0001_init.sql`, and the Go repository applies the same idempotent schema through `Repository.EnsureSchema`.
+The checked-in ordered SQL files under `migrations/` are the canonical schema history. `Repository.Migrate` applies them under an advisory lock and records each version and checksum in `schema_migrations`. Runtime repository operations do not execute DDL.
 
 Run migrations from a trusted environment with backend env vars loaded:
 

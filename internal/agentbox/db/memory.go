@@ -23,10 +23,6 @@ type MemoryRepository struct {
 	CLICodes []types.CLILoginCode
 }
 
-func (m *MemoryRepository) EnsureSchema(context.Context) error {
-	return nil
-}
-
 func (m *MemoryRepository) ListThreads(_ context.Context, tenantID string, limit int) ([]types.Thread, error) {
 	threads := []types.Thread{}
 	for _, thread := range m.Threads {

@@ -42,238 +42,7 @@ func (r *Repository) Close() {
 	}
 }
 
-func (r *Repository) EnsureSchema(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, `
-create extension if not exists pgcrypto;
-
-create table if not exists tenants (
-  id text primary key,
-  slug text not null unique,
-  name text not null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-insert into tenants (id, slug, name)
-values ('ten_default', 'default', 'Default')
-on conflict (id) do nothing;
-
-create table if not exists users (
-  id text primary key,
-  tenant_id text not null references tenants(id) on delete cascade,
-  email text not null,
-  display_name text not null,
-  password_hash text,
-  role text not null default 'member',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  disabled_at timestamptz
-);
-
-create table if not exists user_sessions (
-  id text primary key,
-  tenant_id text not null references tenants(id) on delete cascade,
-  user_id text not null references users(id) on delete cascade,
-  secret_hash text not null unique,
-  created_at timestamptz not null default now(),
-  last_used_at timestamptz,
-  expires_at timestamptz not null,
-  revoked_at timestamptz
-);
-
-create table if not exists cli_login_codes (
-  id text primary key,
-  tenant_id text not null references tenants(id) on delete cascade,
-  user_id text not null references users(id) on delete cascade,
-  code_hash text not null unique,
-  state_hash text not null,
-  redirect_uri text not null,
-  created_at timestamptz not null default now(),
-  expires_at timestamptz not null,
-  consumed_at timestamptz
-);
-
-create table if not exists threads (
-  id text primary key,
-  tenant_id text not null default 'ten_default' references tenants(id),
-  title text not null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  created_by text not null,
-  created_by_user_id text,
-  created_by_key_id text
-);
-
-create table if not exists messages (
-  id text primary key,
-  tenant_id text not null default 'ten_default' references tenants(id),
-  thread_id text not null references threads(id) on delete cascade,
-  author text not null,
-  body text not null,
-  body_content_type text,
-  created_at timestamptz not null default now(),
-  created_by_user_id text,
-  created_by_key_id text
-);
-
-alter table messages add column if not exists body_content_type text;
-
-create table if not exists assets (
-  id text primary key,
-  tenant_id text not null default 'ten_default' references tenants(id),
-  message_id text not null references messages(id) on delete cascade,
-  storage_key text not null,
-  file_name text not null,
-  mime_type text,
-  size_bytes integer not null,
-  public_url text,
-  created_at timestamptz not null default now(),
-  created_by text not null,
-  created_by_user_id text,
-  created_by_key_id text
-);
-
-create table if not exists api_keys (
-  id text primary key,
-  tenant_id text not null default 'ten_default' references tenants(id),
-  user_id text references users(id),
-  name text not null,
-  key_value text,
-  token_prefix text not null,
-  token_hash text not null unique,
-  scopes text[] not null default array['threads:read','threads:write','assets:read','assets:write','mcp:use'],
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  last_used_at timestamptz,
-  revoked_at timestamptz
-);
-
-create table if not exists pending_uploads (
-  id text primary key,
-  tenant_id text not null default 'ten_default' references tenants(id),
-  thread_id text not null references threads(id) on delete cascade,
-  storage_key text not null unique,
-  file_name text not null,
-  mime_type text,
-  size_bytes integer not null,
-  public_url text,
-  created_at timestamptz not null default now(),
-  expires_at timestamptz not null,
-  created_by text not null,
-  created_by_user_id text,
-  created_by_key_id text,
-  consumed_at timestamptz
-);
-
-alter table threads add column if not exists tenant_id text;
-alter table threads add column if not exists created_by_user_id text;
-alter table threads add column if not exists created_by_key_id text;
-update threads set tenant_id = 'ten_default' where tenant_id is null;
-alter table threads alter column tenant_id set default 'ten_default';
-alter table threads alter column tenant_id set not null;
-
-alter table messages add column if not exists tenant_id text;
-alter table messages add column if not exists created_by_user_id text;
-alter table messages add column if not exists created_by_key_id text;
-update messages m set tenant_id = coalesce(t.tenant_id, 'ten_default') from threads t where m.thread_id = t.id and m.tenant_id is null;
-update messages set tenant_id = 'ten_default' where tenant_id is null;
-alter table messages alter column tenant_id set default 'ten_default';
-alter table messages alter column tenant_id set not null;
-
-alter table assets add column if not exists tenant_id text;
-alter table assets add column if not exists created_by_user_id text;
-alter table assets add column if not exists created_by_key_id text;
-update assets a set tenant_id = coalesce(m.tenant_id, 'ten_default') from messages m where a.message_id = m.id and a.tenant_id is null;
-update assets set tenant_id = 'ten_default' where tenant_id is null;
-alter table assets alter column tenant_id set default 'ten_default';
-alter table assets alter column tenant_id set not null;
-
-alter table pending_uploads add column if not exists tenant_id text;
-alter table pending_uploads add column if not exists created_by_user_id text;
-alter table pending_uploads add column if not exists created_by_key_id text;
-update pending_uploads p set tenant_id = coalesce(t.tenant_id, 'ten_default') from threads t where p.thread_id = t.id and p.tenant_id is null;
-update pending_uploads set tenant_id = 'ten_default' where tenant_id is null;
-alter table pending_uploads alter column tenant_id set default 'ten_default';
-alter table pending_uploads alter column tenant_id set not null;
-
-alter table api_keys add column if not exists id text;
-alter table api_keys add column if not exists tenant_id text;
-alter table api_keys add column if not exists user_id text;
-alter table api_keys add column if not exists key_value text;
-alter table api_keys add column if not exists token_prefix text;
-alter table api_keys add column if not exists token_hash text;
-alter table api_keys add column if not exists scopes text[] not null default array['threads:read','threads:write','assets:read','assets:write','mcp:use'];
-alter table api_keys add column if not exists last_used_at timestamptz;
-alter table api_keys add column if not exists revoked_at timestamptz;
-update api_keys
-set
-  id = coalesce(id, 'key_' || replace(gen_random_uuid()::text, '-', '')),
-  tenant_id = coalesce(tenant_id, 'ten_default'),
-  token_prefix = coalesce(token_prefix, left(key_value, 8)),
-  token_hash = coalesce(token_hash, encode(digest(key_value, 'sha256'), 'hex'))
-where id is null or tenant_id is null or token_prefix is null or token_hash is null;
-alter table api_keys alter column id set not null;
-alter table api_keys alter column tenant_id set default 'ten_default';
-alter table api_keys alter column tenant_id set not null;
-alter table api_keys alter column token_prefix set not null;
-alter table api_keys alter column token_hash set not null;
-alter table api_keys alter column key_value drop not null;
-
-do $$
-declare
-  pk_name text;
-begin
-  select conname into pk_name
-  from pg_constraint
-  where conrelid = 'api_keys'::regclass and contype = 'p';
-
-  if pk_name is not null then
-    if not exists (
-      select 1
-      from pg_attribute a
-      join pg_constraint c on c.conrelid = a.attrelid and a.attnum = any(c.conkey)
-      where c.conrelid = 'api_keys'::regclass
-        and c.contype = 'p'
-        and a.attname = 'id'
-    ) then
-      execute format('alter table api_keys drop constraint %I', pk_name);
-    end if;
-  end if;
-
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid = 'api_keys'::regclass and contype = 'p'
-  ) then
-    alter table api_keys add constraint api_keys_pkey primary key (id);
-  end if;
-end $$;
-
-create index if not exists threads_updated_at_idx on threads(updated_at desc);
-create index if not exists messages_thread_created_idx on messages(thread_id, created_at asc);
-create index if not exists assets_message_id_idx on assets(message_id);
-create index if not exists pending_uploads_thread_idx on pending_uploads(thread_id, created_at desc);
-create unique index if not exists users_tenant_email_idx on users (tenant_id, lower(email));
-create index if not exists users_tenant_id_idx on users (tenant_id);
-create index if not exists user_sessions_tenant_user_idx on user_sessions (tenant_id, user_id);
-create index if not exists user_sessions_expires_idx on user_sessions (expires_at);
-create index if not exists cli_login_codes_tenant_user_idx on cli_login_codes (tenant_id, user_id);
-create index if not exists cli_login_codes_expires_idx on cli_login_codes (expires_at);
-create unique index if not exists api_keys_token_hash_idx on api_keys (token_hash);
-create unique index if not exists api_keys_tenant_active_name_idx on api_keys (tenant_id, lower(name)) where revoked_at is null;
-create index if not exists api_keys_tenant_id_idx on api_keys (tenant_id);
-create index if not exists api_keys_user_id_idx on api_keys (user_id);
-create index if not exists threads_tenant_updated_idx on threads (tenant_id, updated_at desc);
-create index if not exists messages_tenant_thread_created_idx on messages (tenant_id, thread_id, created_at asc);
-create index if not exists assets_tenant_message_id_idx on assets (tenant_id, message_id);
-create index if not exists pending_uploads_tenant_thread_idx on pending_uploads (tenant_id, thread_id, created_at desc);
-`)
-	return err
-}
-
 func (r *Repository) ListThreads(ctx context.Context, tenantID string, limit int) ([]types.Thread, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, title, created_at, updated_at, created_by, created_by_user_id, created_by_key_id
 from threads
@@ -298,9 +67,6 @@ limit $2
 }
 
 func (r *Repository) SearchThreads(ctx context.Context, tenantID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	var createdBy any
 	if params.CreatedBy != nil && *params.CreatedBy != "" {
 		createdBy = *params.CreatedBy
@@ -365,9 +131,6 @@ limit $5
 }
 
 func (r *Repository) CreateThread(ctx context.Context, tenantID string, title string, auth types.AuthContext) (types.Thread, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.Thread{}, err
-	}
 	id := "thr_" + uuid.NewString()
 	row := r.pool.QueryRow(ctx, `
 insert into threads (id, tenant_id, title, created_by, created_by_user_id, created_by_key_id)
@@ -378,9 +141,6 @@ returning id, tenant_id, title, created_at, updated_at, created_by, created_by_u
 }
 
 func (r *Repository) CreateThreadWithMessage(ctx context.Context, tenantID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.Thread{}, types.Message{}, err
-	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return types.Thread{}, types.Message{}, err
@@ -417,9 +177,6 @@ returning id, tenant_id, thread_id, author, body, body_content_type, created_at,
 }
 
 func (r *Repository) GetThread(ctx context.Context, tenantID string, threadID string) (*types.ThreadWithMessages, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	thread, err := scanThread(r.pool.QueryRow(ctx, `
 select id, tenant_id, title, created_at, updated_at, created_by, created_by_user_id, created_by_key_id
 from threads
@@ -492,9 +249,6 @@ order by created_at asc
 }
 
 func (r *Repository) GetAsset(ctx context.Context, tenantID string, assetID string) (*types.Asset, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	asset, err := scanAsset(r.pool.QueryRow(ctx, `
 select id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url, created_at, created_by, created_by_user_id, created_by_key_id
 from assets
@@ -510,9 +264,6 @@ where tenant_id = $1 and id = $2
 }
 
 func (r *Repository) CreatePendingUpload(ctx context.Context, upload types.PendingUpload) (types.PendingUpload, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.PendingUpload{}, err
-	}
 	return scanPendingUpload(r.pool.QueryRow(ctx, `
 insert into pending_uploads (id, tenant_id, thread_id, storage_key, file_name, mime_type, size_bytes, public_url, expires_at, created_by, created_by_user_id, created_by_key_id)
 values ($1, coalesce(nullif($2, ''), 'ten_default'), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -521,9 +272,6 @@ returning id, tenant_id, thread_id, storage_key, file_name, mime_type, size_byte
 }
 
 func (r *Repository) GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	if len(uploadIDs) == 0 {
 		return []types.PendingUpload{}, nil
 	}
@@ -556,9 +304,6 @@ func (r *Repository) MarkPendingUploadsConsumed(ctx context.Context, tenantID st
 	if len(uploadIDs) == 0 {
 		return nil
 	}
-	if err := r.EnsureSchema(ctx); err != nil {
-		return err
-	}
 	_, err := r.pool.Exec(ctx, `
 update pending_uploads
 set consumed_at = now()
@@ -573,9 +318,6 @@ where tenant_id = $1
 }
 
 func (r *Repository) PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.Message{}, err
-	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return types.Message{}, err
@@ -619,9 +361,6 @@ returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_byt
 }
 
 func (r *Repository) CreateAPIKey(ctx context.Context, tenantID string, userID string, name string, key string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.APIKey{}, err
-	}
 	id := "key_" + uuid.NewString()
 	var keyUserID *string
 	if strings.TrimSpace(userID) != "" {
@@ -659,9 +398,6 @@ where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null
 }
 
 func (r *Repository) ListAPIKeys(ctx context.Context, tenantID string) ([]types.APIKey, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 from api_keys
@@ -685,9 +421,6 @@ order by name asc
 }
 
 func (r *Repository) RevokeAPIKey(ctx context.Context, tenantID string, name string) (bool, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return false, err
-	}
 	tag, err := r.pool.Exec(ctx, `update api_keys set revoked_at = now(), updated_at = now() where tenant_id = $1 and lower(name) = lower($2) and revoked_at is null`, tenantID, name)
 	if err != nil {
 		return false, err
@@ -696,9 +429,6 @@ func (r *Repository) RevokeAPIKey(ctx context.Context, tenantID string, name str
 }
 
 func (r *Repository) FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	found, err := scanAPIKey(r.pool.QueryRow(ctx, `
 select id, tenant_id, user_id, name, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 from api_keys
@@ -717,17 +447,11 @@ func (r *Repository) MarkAPIKeyUsed(ctx context.Context, keyID string) error {
 	if keyID == "" {
 		return nil
 	}
-	if err := r.EnsureSchema(ctx); err != nil {
-		return err
-	}
 	_, err := r.pool.Exec(ctx, `update api_keys set last_used_at = now() where id = $1 and revoked_at is null`, keyID)
 	return err
 }
 
 func (r *Repository) UpsertTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.Tenant{}, err
-	}
 	row := r.pool.QueryRow(ctx, `
 insert into tenants (id, slug, name)
 values ($1, $2, $3)
@@ -739,9 +463,6 @@ returning id, slug, name, created_at, updated_at
 }
 
 func (r *Repository) GetTenant(ctx context.Context, idOrSlug string) (*types.Tenant, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	tenant, err := scanTenant(r.pool.QueryRow(ctx, `
 select id, slug, name, created_at, updated_at
 from tenants
@@ -757,9 +478,6 @@ where id = $1 or slug = $1
 }
 
 func (r *Repository) UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.User{}, err
-	}
 	row := r.pool.QueryRow(ctx, `
 insert into users (id, tenant_id, email, display_name, password_hash, role)
 values ($1, $2, $3, $4, $5, $6)
@@ -776,9 +494,6 @@ returning id, tenant_id, email, display_name, password_hash, role, created_at, u
 }
 
 func (r *Repository) FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, err
-	}
 	rows, err := r.pool.Query(ctx, `
 select id, tenant_id, email, display_name, password_hash, role, created_at, updated_at, disabled_at
 from users
@@ -813,9 +528,6 @@ limit 2
 }
 
 func (r *Repository) CreateUserSession(ctx context.Context, session types.UserSession) (types.UserSession, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.UserSession{}, err
-	}
 	id := session.ID
 	if id == "" {
 		id = "sess_" + uuid.NewString()
@@ -828,9 +540,6 @@ returning id, tenant_id, user_id, secret_hash, created_at, last_used_at, expires
 }
 
 func (r *Repository) FindUserSessionBySecretHash(ctx context.Context, secretHash string) (*types.UserSession, *types.User, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, nil, err
-	}
 	row := r.pool.QueryRow(ctx, `
 select
   s.id,
@@ -871,9 +580,6 @@ func (r *Repository) MarkUserSessionUsed(ctx context.Context, sessionID string) 
 	if sessionID == "" {
 		return nil
 	}
-	if err := r.EnsureSchema(ctx); err != nil {
-		return err
-	}
 	_, err := r.pool.Exec(ctx, `update user_sessions set last_used_at = now() where id = $1 and revoked_at is null`, sessionID)
 	return err
 }
@@ -882,17 +588,11 @@ func (r *Repository) RevokeUserSession(ctx context.Context, sessionID string) er
 	if sessionID == "" {
 		return nil
 	}
-	if err := r.EnsureSchema(ctx); err != nil {
-		return err
-	}
 	_, err := r.pool.Exec(ctx, `update user_sessions set revoked_at = now() where id = $1 and revoked_at is null`, sessionID)
 	return err
 }
 
 func (r *Repository) CreateCLILoginCode(ctx context.Context, code types.CLILoginCode) (types.CLILoginCode, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return types.CLILoginCode{}, err
-	}
 	id := code.ID
 	if id == "" {
 		id = "clicode_" + uuid.NewString()
@@ -905,9 +605,6 @@ returning id, tenant_id, user_id, code_hash, state_hash, redirect_uri, created_a
 }
 
 func (r *Repository) ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error) {
-	if err := r.EnsureSchema(ctx); err != nil {
-		return nil, nil, err
-	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, nil, err

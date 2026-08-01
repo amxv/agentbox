@@ -33,7 +33,7 @@ func main() {
 	}
 
 	if cfg.AutoMigrate {
-		if err := opened.EnsureSchema(context.Background()); err != nil {
+		if err := opened.Migrate(context.Background()); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -76,7 +76,7 @@ func validateRuntimeConfig(cfg config.Config) error {
 type repositoryWithClose interface {
 	service.Repository
 	Close()
-	EnsureSchema(context.Context) error
+	Migrate(context.Context) error
 }
 
 func openRepository(ctx context.Context, cfg config.Config) (repositoryWithClose, error) {

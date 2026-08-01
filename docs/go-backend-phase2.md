@@ -4,7 +4,7 @@ Phase 2 adds the Go module and backend core while the TypeScript API remains the
 
 ## Migration Entrypoint Strategy
 
-The Go repository ports the current idempotent `ensureSchema` behavior as `Repository.EnsureSchema(ctx)`. The migration entrypoint is now:
+The migration entrypoint is:
 
 ```bash
 bun run db:migrate
@@ -16,9 +16,7 @@ which runs:
 go run ./cmd/migrate
 ```
 
-The Go API can still run schema creation at startup when `AGENTBOX_AUTO_MIGRATE=true`, but production rollout should prefer the explicit migration command.
-
-This preserves the current lazy-schema compatibility path while giving rollout a non-server migration command.
+The Go API can still apply migrations at startup when `AGENTBOX_AUTO_MIGRATE=true`, but production rollout should prefer the explicit migration command. The ordered files under `migrations/` are embedded into the binary, recorded in `schema_migrations` with checksums, and are the sole schema source. Repository request methods do not run DDL.
 
 ## Vercel Upload Behavior
 

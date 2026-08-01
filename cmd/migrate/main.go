@@ -19,8 +19,8 @@ func main() {
 	}
 	defer repo.Close()
 
-	if err := repo.EnsureSchema(ctx); err != nil {
+	if err := repo.Migrate(ctx); err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Agentbox schema is ready.")
+	log.Println("Agentbox migrations are up to date.")
 }

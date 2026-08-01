@@ -24,7 +24,6 @@ var ErrAPIKeyNotFound = errors.New("API key not found.")
 var ErrInvalidLogin = errors.New("Invalid email or password.")
 
 type Repository interface {
-	EnsureSchema(ctx context.Context) error
 	ListThreads(ctx context.Context, tenantID string, limit int) ([]types.Thread, error)
 	SearchThreads(ctx context.Context, tenantID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
 	CreateThread(ctx context.Context, tenantID string, title string, auth types.AuthContext) (types.Thread, error)
