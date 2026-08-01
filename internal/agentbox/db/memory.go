@@ -35,10 +35,19 @@ type memorySignupInvitation struct {
 	TokenHash  string
 }
 
-func (m *MemoryRepository) ListThreads(_ context.Context, tenantID string, limit int) ([]types.Thread, error) {
+func (m *MemoryRepository) ResolveThreadAccess(_ context.Context, userID string, threadID string) (*types.ThreadAccess, error) {
+	for _, thread := range m.Threads {
+		if thread.ID == threadID {
+			return normalMemoryThreadAccess(thread, userID), nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) ListThreads(_ context.Context, userID string, limit int) ([]types.Thread, error) {
 	threads := []types.Thread{}
 	for _, thread := range m.Threads {
-		if tenantOf(thread.TenantID) == tenantOf(tenantID) {
+		if normalMemoryThreadAccess(thread, userID) != nil {
 			threads = append(threads, thread)
 		}
 	}
@@ -51,7 +60,7 @@ func (m *MemoryRepository) ListThreads(_ context.Context, tenantID string, limit
 	return threads, nil
 }
 
-func (m *MemoryRepository) SearchThreads(_ context.Context, tenantID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
 	query := strings.ToLower(strings.TrimSpace(params.Query))
 	results := []types.SearchThreadResult{}
 	threads := append([]types.Thread(nil), m.Threads...)
@@ -59,7 +68,7 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, tenantID string, par
 		return threads[i].UpdatedAt > threads[j].UpdatedAt
 	})
 	for _, thread := range threads {
-		if tenantOf(thread.TenantID) != tenantOf(tenantID) {
+		if normalMemoryThreadAccess(thread, userID) == nil {
 			continue
 		}
 		if params.CreatedBy != nil && *params.CreatedBy != "" && thread.CreatedBy != *params.CreatedBy {
@@ -74,7 +83,7 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, tenantID string, par
 		matchedBody := ""
 		titleMatches := strings.Contains(strings.ToLower(thread.Title), query)
 		for _, message := range m.Messages {
-			if tenantOf(message.TenantID) != tenantOf(tenantID) || message.ThreadID != thread.ID {
+			if message.ThreadID != thread.ID {
 				continue
 			}
 			messageCount++
@@ -92,6 +101,7 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, tenantID string, par
 		results = append(results, types.SearchThreadResult{
 			ID:                 thread.ID,
 			TenantID:           firstNonEmptyString(thread.TenantID, types.DefaultTenantID),
+			OwnerUserID:        thread.OwnerUserID,
 			Title:              thread.Title,
 			CreatedAt:          thread.CreatedAt,
 			UpdatedAt:          thread.UpdatedAt,
@@ -107,65 +117,76 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, tenantID string, par
 	return results, nil
 }
 
-func (m *MemoryRepository) CreateThread(_ context.Context, tenantID string, title string, auth types.AuthContext) (types.Thread, error) {
+func (m *MemoryRepository) CreateThread(_ context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error) {
 	now := isoMillis(time.Now())
 	thread := types.Thread{
-		ID:              "thr_" + uuid.NewString(),
-		TenantID:        tenantOf(tenantID),
-		Title:           title,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		CreatedBy:       auth.ActorName,
-		CreatedByUserID: optionalString(auth.UserID),
-		CreatedByKeyID:  optionalString(auth.KeyID),
+		ID:                       "thr_" + uuid.NewString(),
+		TenantID:                 types.DefaultTenantID,
+		OwnerUserID:              userID,
+		Title:                    title,
+		CreatedAt:                now,
+		UpdatedAt:                now,
+		CreatedBy:                auth.ActorName,
+		CreatedByUserID:          optionalString(auth.UserID),
+		CreatedByKeyID:           optionalString(auth.KeyID),
+		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
+		CreatedByActorName:       optionalString(auth.ActorName),
 	}
 	m.Threads = append(m.Threads, thread)
 	return thread, nil
 }
 
-func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, tenantID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error) {
+func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error) {
 	now := isoMillis(time.Now())
 	thread := types.Thread{
-		ID:              "thr_" + uuid.NewString(),
-		TenantID:        tenantOf(tenantID),
-		Title:           title,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		CreatedBy:       auth.ActorName,
-		CreatedByUserID: optionalString(auth.UserID),
-		CreatedByKeyID:  optionalString(auth.KeyID),
+		ID:                       "thr_" + uuid.NewString(),
+		TenantID:                 types.DefaultTenantID,
+		OwnerUserID:              userID,
+		Title:                    title,
+		CreatedAt:                now,
+		UpdatedAt:                now,
+		CreatedBy:                auth.ActorName,
+		CreatedByUserID:          optionalString(auth.UserID),
+		CreatedByKeyID:           optionalString(auth.KeyID),
+		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
+		CreatedByActorName:       optionalString(auth.ActorName),
 	}
 	message := types.Message{
-		ID:              "msg_" + uuid.NewString(),
-		TenantID:        thread.TenantID,
-		ThreadID:        thread.ID,
-		Author:          auth.ActorName,
-		Body:            body,
-		BodyContentType: bodyContentType,
-		CreatedAt:       now,
-		Assets:          []types.Asset{},
-		CreatedByUserID: optionalString(auth.UserID),
-		CreatedByKeyID:  optionalString(auth.KeyID),
+		ID:                       "msg_" + uuid.NewString(),
+		TenantID:                 thread.TenantID,
+		ThreadID:                 thread.ID,
+		Author:                   auth.ActorName,
+		Body:                     body,
+		BodyContentType:          bodyContentType,
+		CreatedAt:                now,
+		Assets:                   []types.Asset{},
+		CreatedByUserID:          optionalString(auth.UserID),
+		CreatedByKeyID:           optionalString(auth.KeyID),
+		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
+		CreatedByActorName:       optionalString(auth.ActorName),
 	}
 	m.Threads = append(m.Threads, thread)
 	m.Messages = append(m.Messages, message)
 	return thread, message, nil
 }
 
-func (m *MemoryRepository) GetThread(_ context.Context, tenantID string, threadID string) (*types.ThreadWithMessages, error) {
+func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID string) (*types.ThreadWithMessages, error) {
 	for _, thread := range m.Threads {
-		if tenantOf(thread.TenantID) != tenantOf(tenantID) || thread.ID != threadID {
+		if thread.ID != threadID || normalMemoryThreadAccess(thread, userID) == nil {
 			continue
 		}
 		messages := []types.Message{}
 		for _, message := range m.Messages {
-			if tenantOf(message.TenantID) != tenantOf(tenantID) || message.ThreadID != threadID {
+			if message.ThreadID != threadID {
 				continue
 			}
 			assets := []types.Asset{}
 			for _, asset := range m.Assets {
-				if tenantOf(asset.TenantID) == tenantOf(tenantID) && asset.MessageID == message.ID {
-					assets = append(assets, asset)
+				if asset.MessageID == message.ID {
+					copy := asset
+					copy.PublicURL = nil
+					copy.DownloadURL = nil
+					assets = append(assets, copy)
 				}
 			}
 			message.Assets = assets
@@ -179,20 +200,38 @@ func (m *MemoryRepository) GetThread(_ context.Context, tenantID string, threadI
 	return nil, nil
 }
 
-func (m *MemoryRepository) GetAsset(_ context.Context, tenantID string, assetID string) (*types.Asset, error) {
+func (m *MemoryRepository) GetAsset(_ context.Context, userID string, assetID string) (*types.Asset, error) {
 	for _, asset := range m.Assets {
-		if tenantOf(asset.TenantID) == tenantOf(tenantID) && asset.ID == assetID {
-			return &asset, nil
+		if asset.ID != assetID {
+			continue
+		}
+		for _, message := range m.Messages {
+			if message.ID != asset.MessageID {
+				continue
+			}
+			for _, thread := range m.Threads {
+				if thread.ID == message.ThreadID && normalMemoryThreadAccess(thread, userID) != nil {
+					copy := asset
+					copy.PublicURL = nil
+					copy.DownloadURL = nil
+					return &copy, nil
+				}
+			}
 		}
 	}
 	return nil, nil
 }
 
-func (m *MemoryRepository) CreatePendingUpload(_ context.Context, upload types.PendingUpload) (types.PendingUpload, error) {
+func (m *MemoryRepository) CreatePendingUpload(_ context.Context, userID string, upload types.PendingUpload) (types.PendingUpload, error) {
+	access, _ := m.ResolveThreadAccess(context.Background(), userID, upload.ThreadID)
+	if access == nil {
+		return types.PendingUpload{}, types.ErrThreadNotFound
+	}
 	now := isoMillis(time.Now())
 	if upload.TenantID == "" {
 		upload.TenantID = types.DefaultTenantID
 	}
+	upload.PublicURL = nil
 	upload.CreatedAt = now
 	if upload.ExpiresAt == "" {
 		upload.ExpiresAt = isoMillis(time.Now().Add(15 * time.Minute))
@@ -201,78 +240,90 @@ func (m *MemoryRepository) CreatePendingUpload(_ context.Context, upload types.P
 	return upload, nil
 }
 
-func (m *MemoryRepository) GetPendingUploads(_ context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error) {
+func (m *MemoryRepository) GetPendingUploads(_ context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error) {
 	wanted := map[string]bool{}
 	for _, id := range uploadIDs {
 		wanted[id] = true
 	}
 	uploads := []types.PendingUpload{}
 	for _, upload := range m.Pending {
-		if tenantOf(upload.TenantID) == tenantOf(tenantID) && upload.ThreadID == threadID && pendingUploadOwnedBy(upload, owner) && wanted[upload.ID] {
+		if upload.ThreadID == threadID && pendingUploadOwnedBy(upload, actor) && wanted[upload.ID] {
+			access, _ := m.ResolveThreadAccess(context.Background(), userID, threadID)
+			if access == nil {
+				continue
+			}
 			uploads = append(uploads, upload)
 		}
 	}
 	return uploads, nil
 }
 
-func (m *MemoryRepository) MarkPendingUploadsConsumed(_ context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error {
+func (m *MemoryRepository) MarkPendingUploadsConsumed(_ context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) error {
 	wanted := map[string]bool{}
 	for _, id := range uploadIDs {
 		wanted[id] = true
 	}
 	now := isoMillis(time.Now())
+	access, _ := m.ResolveThreadAccess(context.Background(), userID, threadID)
+	if access == nil {
+		return types.ErrThreadNotFound
+	}
 	for i := range m.Pending {
-		if tenantOf(m.Pending[i].TenantID) == tenantOf(tenantID) && m.Pending[i].ThreadID == threadID && pendingUploadOwnedBy(m.Pending[i], owner) && wanted[m.Pending[i].ID] {
+		if m.Pending[i].ThreadID == threadID && pendingUploadOwnedBy(m.Pending[i], actor) && wanted[m.Pending[i].ID] {
 			m.Pending[i].ConsumedAt = &now
 		}
 	}
 	return nil
 }
 
-func (m *MemoryRepository) PostMessage(_ context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
+func (m *MemoryRepository) PostMessage(_ context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
 	var threadIndex = -1
 	for i, thread := range m.Threads {
-		if tenantOf(thread.TenantID) == tenantOf(tenantID) && thread.ID == threadID {
+		if thread.ID == threadID && normalMemoryThreadAccess(thread, userID) != nil {
 			threadIndex = i
 			break
 		}
 	}
 	if threadIndex < 0 {
-		return types.Message{}, errors.New("Thread not found.")
+		return types.Message{}, types.ErrThreadNotFound
 	}
 
 	now := isoMillis(time.Now())
 	message := types.Message{
-		ID:              "msg_" + uuid.NewString(),
-		TenantID:        firstNonEmptyString(m.Threads[threadIndex].TenantID, types.DefaultTenantID),
-		ThreadID:        threadID,
-		Author:          auth.ActorName,
-		Body:            body,
-		BodyContentType: bodyContentType,
-		CreatedAt:       now,
-		Assets:          []types.Asset{},
-		CreatedByUserID: optionalString(auth.UserID),
-		CreatedByKeyID:  optionalString(auth.KeyID),
+		ID:                       "msg_" + uuid.NewString(),
+		TenantID:                 firstNonEmptyString(m.Threads[threadIndex].TenantID, types.DefaultTenantID),
+		ThreadID:                 threadID,
+		Author:                   auth.ActorName,
+		Body:                     body,
+		BodyContentType:          bodyContentType,
+		CreatedAt:                now,
+		Assets:                   []types.Asset{},
+		CreatedByUserID:          optionalString(auth.UserID),
+		CreatedByKeyID:           optionalString(auth.KeyID),
+		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
+		CreatedByActorName:       optionalString(auth.ActorName),
 	}
 	m.Messages = append(m.Messages, message)
 	m.Threads[threadIndex].UpdatedAt = isoMillis(time.Now())
 
 	for _, asset := range newAssets {
 		createdAsset := types.Asset{
-			ID:              "asset_" + uuid.NewString(),
-			TenantID:        firstNonEmptyString(asset.TenantID, message.TenantID),
-			MessageID:       message.ID,
-			StorageKey:      asset.StorageKey,
-			FileName:        asset.FileName,
-			Filename:        asset.FileName,
-			MimeType:        asset.MimeType,
-			SizeBytes:       asset.SizeBytes,
-			PublicURL:       asset.PublicURL,
-			DownloadURL:     asset.PublicURL,
-			CreatedAt:       now,
-			CreatedBy:       auth.ActorName,
-			CreatedByUserID: optionalString(auth.UserID),
-			CreatedByKeyID:  optionalString(auth.KeyID),
+			ID:                       "asset_" + uuid.NewString(),
+			TenantID:                 message.TenantID,
+			MessageID:                message.ID,
+			StorageKey:               asset.StorageKey,
+			FileName:                 asset.FileName,
+			Filename:                 asset.FileName,
+			MimeType:                 asset.MimeType,
+			SizeBytes:                asset.SizeBytes,
+			PublicURL:                nil,
+			DownloadURL:              nil,
+			CreatedAt:                now,
+			CreatedBy:                auth.ActorName,
+			CreatedByUserID:          optionalString(auth.UserID),
+			CreatedByKeyID:           optionalString(auth.KeyID),
+			CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
+			CreatedByActorName:       optionalString(auth.ActorName),
 		}
 		m.Assets = append(m.Assets, createdAsset)
 		message.Assets = append(message.Assets, createdAsset)
@@ -439,6 +490,7 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 			m.Users[i].Role = "admin"
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
+			m.assignLegacyThreadsToOwner(m.Users[i].ID)
 			return m.Users[i], nil
 		}
 	}
@@ -450,6 +502,7 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 			m.Users[i].IsOwner = true
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
+			m.assignLegacyThreadsToOwner(m.Users[i].ID)
 			return m.Users[i], nil
 		}
 	}
@@ -465,6 +518,7 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 		UpdatedAt:    now,
 	}
 	m.Users = append(m.Users, owner)
+	m.assignLegacyThreadsToOwner(owner.ID)
 	return owner, nil
 }
 
@@ -546,6 +600,7 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 			m.Users[i].Role = "admin"
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
+			m.assignLegacyThreadsToOwner(m.Users[i].ID)
 			return m.Users[i], nil
 		}
 	}
@@ -557,6 +612,7 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 			m.Users[i].IsOwner = true
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
+			m.assignLegacyThreadsToOwner(m.Users[i].ID)
 			return m.Users[i], nil
 		}
 	}
@@ -572,7 +628,16 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 		UpdatedAt:    now,
 	}
 	m.Users = append(m.Users, owner)
+	m.assignLegacyThreadsToOwner(owner.ID)
 	return owner, nil
+}
+
+func (m *MemoryRepository) assignLegacyThreadsToOwner(ownerUserID string) {
+	for i := range m.Threads {
+		if strings.TrimSpace(m.Threads[i].OwnerUserID) == "" {
+			m.Threads[i].OwnerUserID = ownerUserID
+		}
+	}
 }
 
 func (m *MemoryRepository) CreateSignupInvitation(_ context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error) {
@@ -877,14 +942,25 @@ func tenantOf(value string) string {
 }
 
 func pendingUploadOwnedBy(upload types.PendingUpload, owner types.AuthContext) bool {
-	if upload.CreatedBy != owner.ActorName {
+	if strings.TrimSpace(owner.UserID) == "" || upload.CreatedByUserID == nil || *upload.CreatedByUserID != owner.UserID {
 		return false
 	}
-	if owner.UserID != "" && (upload.CreatedByUserID == nil || *upload.CreatedByUserID != owner.UserID) {
-		return false
+	if strings.TrimSpace(owner.KeyID) == "" {
+		return upload.CreatedByKeyID == nil || strings.TrimSpace(*upload.CreatedByKeyID) == ""
 	}
-	if owner.KeyID != "" && (upload.CreatedByKeyID == nil || *upload.CreatedByKeyID != owner.KeyID) {
-		return false
+	return upload.CreatedByKeyID != nil && *upload.CreatedByKeyID == owner.KeyID
+}
+
+// normalMemoryThreadAccess mirrors the SQL normalThreadAccessPredicate. Phase 7
+// must widen both implementations together when team sharing is introduced.
+func normalMemoryThreadAccess(thread types.Thread, userID string) *types.ThreadAccess {
+	if strings.TrimSpace(userID) == "" || thread.OwnerUserID != userID {
+		return nil
 	}
-	return true
+	return &types.ThreadAccess{
+		ThreadID:    thread.ID,
+		OwnerUserID: thread.OwnerUserID,
+		UserID:      userID,
+		IsOwner:     true,
+	}
 }

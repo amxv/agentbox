@@ -37,13 +37,13 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 		return types.NewAsset{}, errTooLarge(limit)
 	}
 	fileName := SanitizeFilename(params.FileName)
-	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
+	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
 	asset := types.NewAsset{
 		StorageKey: storageKey,
 		FileName:   fileName,
 		MimeType:   InferMimeType(fileName, params.MimeType),
 		SizeBytes:  int64(len(params.Bytes)),
-		PublicURL:  PublicURLForKey(f.PublicBaseURL, storageKey),
+		PublicURL:  nil,
 	}
 	f.Uploads = append(f.Uploads, asset)
 	return asset, nil
@@ -128,7 +128,7 @@ func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params Pres
 		return types.PresignedUpload{}, errTooLarge(limit)
 	}
 	fileName := SanitizeFilename(params.FileName)
-	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
@@ -140,7 +140,7 @@ func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params Pres
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  params.SizeBytes,
-		PublicURL:  PublicURLForKey(f.PublicBaseURL, storageKey),
+		PublicURL:  nil,
 		UploadURL:  "https://r2-upload.test/" + storageKey,
 		ExpiresIn:  900,
 		RequiredHeaders: map[string]string{
@@ -165,7 +165,7 @@ func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params Signe
 	return u.String(), nil
 }
 
-func (f *FakeStore) UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (types.NewAsset, error) {
+func (f *FakeStore) UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (types.NewAsset, error) {
 	file, err := NormalizeChatGPTFileInput(input)
 	if err != nil {
 		return types.NewAsset{}, err
@@ -175,7 +175,7 @@ func (f *FakeStore) UploadChatGPTFile(ctx context.Context, tenantID string, thre
 		fileName = *file.FileName
 	}
 	return f.UploadAssetBytes(ctx, UploadBytesParams{
-		TenantID:    tenantID,
+		UserID:      userID,
 		ThreadID:    threadID,
 		MessageHint: file.FileID,
 		Bytes:       []byte("fake-chatgpt-file"),

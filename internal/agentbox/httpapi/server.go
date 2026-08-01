@@ -762,7 +762,7 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := numberQuery(r, "expires_in", 300)
 	safeExpires := validate.ClampSignedURLExpiry(expires)
-	downloadURL, err := s.service.SignedAssetDownloadURL(r.Context(), *authContext, *asset, safeExpires)
+	downloadURL, err := s.service.SignedAssetDownloadURL(r.Context(), *authContext, asset.ID, safeExpires)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -1140,7 +1140,7 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 			if isImage {
 				expires = 900
 			}
-			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset, expires)
+			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset.ID, expires)
 			if err != nil {
 				return viewerThread{}, err
 			}

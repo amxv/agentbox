@@ -64,6 +64,25 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 		t.Fatalf("browser and credential actors collapsed: session=%#v key=%#v", sessionAuth, credentialAuth)
 	}
 
+	thread, err := svc.CreateThread(context.Background(), sessionAuth, "Shared user identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.OwnerUserID != sessionAuth.UserID || thread.CreatedByUserDisplayName == nil || *thread.CreatedByUserDisplayName != "Owner Person" || thread.CreatedByActorName == nil || *thread.CreatedByActorName != "Web dashboard" {
+		t.Fatalf("unexpected thread ownership or snapshots: %#v", thread)
+	}
+	message, err := svc.PostMessage(context.Background(), *credentialAuth, PostMessageParams{ThreadID: thread.ID, Body: "from connector"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.CreatedByUserID == nil || *message.CreatedByUserID != sessionAuth.UserID || message.CreatedByKeyID == nil || *message.CreatedByKeyID != credential.ID || message.CreatedByUserDisplayName == nil || *message.CreatedByUserDisplayName != "Owner Person" || message.CreatedByActorName == nil || *message.CreatedByActorName != "chatgpt" {
+		t.Fatalf("unexpected connector attribution: %#v", message)
+	}
+	shared, err := svc.GetThread(context.Background(), sessionAuth, thread.ID)
+	if err != nil || len(shared.Messages) != 1 || shared.Messages[0].ID != message.ID {
+		t.Fatalf("same user actors did not share thread access: thread=%#v err=%v", shared, err)
+	}
+
 	disabledAt := "2026-08-01T00:00:00.000Z"
 	repo.Users[0].DisabledAt = &disabledAt
 	if authenticated, err := svc.AuthenticateSession(context.Background(), sessionSecret); err != nil || authenticated != nil {
@@ -319,14 +338,18 @@ func TestServiceThreadAndMessageFlow(t *testing.T) {
 	}
 }
 
-func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
+func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
-	tenantA := testAuth("ten_a", "shared")
-	tenantB := testAuth("ten_b", "shared")
+	tenantA := testAuth(types.DefaultTenantID, "shared")
+	tenantA.UserID = "usr_a"
+	tenantA.UserDisplayName = "User A"
+	tenantB := testAuth(types.DefaultTenantID, "shared")
+	tenantB.UserID = "usr_b"
+	tenantB.UserDisplayName = "User B"
 	repo.Users = append(repo.Users,
-		types.User{ID: tenantA.UserID, TenantID: "ten_a", Email: "a@example.com", DisplayName: "User A", Role: "member"},
-		types.User{ID: tenantB.UserID, TenantID: "ten_b", Email: "b@example.com", DisplayName: "User B", Role: "member"},
+		types.User{ID: tenantA.UserID, TenantID: types.DefaultTenantID, Email: "a@example.com", DisplayName: "User A", Role: "member"},
+		types.User{ID: tenantB.UserID, TenantID: types.DefaultTenantID, Email: "b@example.com", DisplayName: "User B", Role: "member"},
 	)
 
 	keyA, err := svc.CreateAPIKey(context.Background(), tenantA, "shared")
@@ -352,7 +375,7 @@ func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authA == nil || authA.TenantID != "ten_a" || authA.ActorName != "shared" || authB == nil || authB.TenantID != "ten_b" {
+	if authA == nil || authA.UserID != tenantA.UserID || authA.ActorName != "shared" || authB == nil || authB.UserID != tenantB.UserID {
 		t.Fatalf("auth contexts: %#v %#v", authA, authB)
 	}
 
@@ -390,7 +413,7 @@ func TestServiceTenantIsolationAndAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revokedA != nil || stillB == nil || stillB.TenantID != "ten_b" {
+	if revokedA != nil || stillB == nil || stillB.UserID != tenantB.UserID {
 		t.Fatalf("revoke result revokedA=%#v stillB=%#v", revokedA, stillB)
 	}
 }
@@ -447,7 +470,7 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	assertScopeDenied("upload intent", err)
 	_, err = svc.GetAsset(context.Background(), *restrictedAuth, message.Assets[0].ID)
 	assertScopeDenied("get asset", err)
-	_, err = svc.SignedAssetDownloadURL(context.Background(), *restrictedAuth, message.Assets[0], 300)
+	_, err = svc.SignedAssetDownloadURL(context.Background(), *restrictedAuth, message.Assets[0].ID, 300)
 	assertScopeDenied("sign asset", err)
 
 	scopedKey, err := svc.CreateAPIKeyWithScopes(context.Background(), adminAuth, "worker", []string{"threads:read", "threads:write", "assets:read", "assets:write"})
@@ -470,7 +493,7 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	if _, err := svc.GetAsset(context.Background(), *scopedAuth, message.Assets[0].ID); err != nil {
 		t.Fatalf("scoped get asset failed: %v", err)
 	}
-	if _, err := svc.SignedAssetDownloadURL(context.Background(), *scopedAuth, message.Assets[0], 300); err != nil {
+	if _, err := svc.SignedAssetDownloadURL(context.Background(), *scopedAuth, message.Assets[0].ID, 300); err != nil {
 		t.Fatalf("scoped sign asset failed: %v", err)
 	}
 	if _, err := svc.CreatePresignedUploads(context.Background(), *scopedAuth, thread.ID, []types.UploadIntentFile{{FileName: "next.txt"}}); err != nil {

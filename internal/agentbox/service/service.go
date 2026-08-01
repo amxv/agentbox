@@ -19,21 +19,22 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrThreadNotFound = errors.New("Thread not found.")
+var ErrThreadNotFound = types.ErrThreadNotFound
 var ErrAPIKeyNotFound = errors.New("API key not found.")
 var ErrInvalidLogin = errors.New("Invalid email or password.")
 
 type Repository interface {
-	ListThreads(ctx context.Context, tenantID string, limit int) ([]types.Thread, error)
-	SearchThreads(ctx context.Context, tenantID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
-	CreateThread(ctx context.Context, tenantID string, title string, auth types.AuthContext) (types.Thread, error)
-	CreateThreadWithMessage(ctx context.Context, tenantID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
-	GetThread(ctx context.Context, tenantID string, threadID string) (*types.ThreadWithMessages, error)
-	GetAsset(ctx context.Context, tenantID string, assetID string) (*types.Asset, error)
-	CreatePendingUpload(ctx context.Context, upload types.PendingUpload) (types.PendingUpload, error)
-	GetPendingUploads(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) ([]types.PendingUpload, error)
-	MarkPendingUploadsConsumed(ctx context.Context, tenantID string, threadID string, uploadIDs []string, owner types.AuthContext) error
-	PostMessage(ctx context.Context, tenantID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
+	ResolveThreadAccess(ctx context.Context, userID string, threadID string) (*types.ThreadAccess, error)
+	ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error)
+	SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
+	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
+	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
+	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
+	GetAsset(ctx context.Context, userID string, assetID string) (*types.Asset, error)
+	CreatePendingUpload(ctx context.Context, userID string, upload types.PendingUpload) (types.PendingUpload, error)
+	GetPendingUploads(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error)
+	MarkPendingUploadsConsumed(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) error
+	PostMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
 	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
 	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
@@ -77,7 +78,7 @@ func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit
 	if limit == 0 {
 		limit = 50
 	}
-	return s.repo.ListThreads(ctx, auth.TenantID, limit)
+	return s.repo.ListThreads(ctx, auth.UserID, limit)
 }
 
 func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
@@ -110,7 +111,7 @@ func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, par
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "updated_after must be an RFC3339 timestamp."}
 		}
 	}
-	return s.repo.SearchThreads(ctx, auth.TenantID, params)
+	return s.repo.SearchThreads(ctx, auth.UserID, params)
 }
 
 func (s *Service) CreateThread(ctx context.Context, auth types.AuthContext, title string) (types.Thread, error) {
@@ -120,7 +121,7 @@ func (s *Service) CreateThread(ctx context.Context, auth types.AuthContext, titl
 	if err := validate.CreateThreadTitle(title); err != nil {
 		return types.Thread{}, err
 	}
-	return s.repo.CreateThread(ctx, auth.TenantID, title, auth)
+	return s.repo.CreateThread(ctx, auth.UserID, title, auth)
 }
 
 func (s *Service) CreateThreadWithMessage(ctx context.Context, auth types.AuthContext, title string, body string, bodyContentType *string) (types.Thread, types.Message, error) {
@@ -134,14 +135,14 @@ func (s *Service) CreateThreadWithMessage(ctx context.Context, auth types.AuthCo
 	if err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
-	return s.repo.CreateThreadWithMessage(ctx, auth.TenantID, title, auth, body, &resolvedContentType)
+	return s.repo.CreateThreadWithMessage(ctx, auth.UserID, title, auth, body, &resolvedContentType)
 }
 
 func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadWithMessages, error) {
 	if err := requireScope(auth, "threads:read"); err != nil {
 		return nil, err
 	}
-	thread, err := s.repo.GetThread(ctx, auth.TenantID, threadID)
+	thread, err := s.repo.GetThread(ctx, auth.UserID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +156,7 @@ func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID 
 	if err := requireScope(auth, "assets:read"); err != nil {
 		return nil, err
 	}
-	return s.repo.GetAsset(ctx, auth.TenantID, assetID)
+	return s.repo.GetAsset(ctx, auth.UserID, assetID)
 }
 
 func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, params PostMessageParams) (types.Message, error) {
@@ -170,7 +171,7 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
 	}
-	thread, err := s.repo.GetThread(ctx, auth.TenantID, params.ThreadID)
+	thread, err := s.repo.GetThread(ctx, auth.UserID, params.ThreadID)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -183,11 +184,10 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 	}
 	newAssets := []types.NewAsset{}
 	if params.File != nil {
-		asset, err := s.assets.UploadChatGPTFile(ctx, auth.TenantID, params.ThreadID, *params.File)
+		asset, err := s.assets.UploadChatGPTFile(ctx, auth.UserID, params.ThreadID, *params.File)
 		if err != nil {
 			return types.Message{}, err
 		}
-		asset.TenantID = auth.TenantID
 		newAssets = append(newAssets, asset)
 	}
 	if len(params.UploadedAssets) > 0 {
@@ -197,7 +197,7 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 		}
 		newAssets = append(newAssets, assets...)
 	}
-	message, err := s.repo.PostMessage(ctx, auth.TenantID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
+	message, err := s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -206,7 +206,7 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 		for _, uploaded := range params.UploadedAssets {
 			ids = append(ids, strings.TrimSpace(uploaded.UploadID))
 		}
-		if err := s.repo.MarkPendingUploadsConsumed(ctx, auth.TenantID, params.ThreadID, ids, auth); err != nil {
+		if err := s.repo.MarkPendingUploadsConsumed(ctx, auth.UserID, params.ThreadID, ids, auth); err != nil {
 			return types.Message{}, err
 		}
 	}
@@ -225,7 +225,7 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthConte
 	if err := validate.PostMessage(params.ThreadID); err != nil {
 		return types.Message{}, err
 	}
-	thread, err := s.repo.GetThread(ctx, auth.TenantID, params.ThreadID)
+	thread, err := s.repo.GetThread(ctx, auth.UserID, params.ThreadID)
 	if err != nil {
 		return types.Message{}, err
 	}
@@ -239,7 +239,7 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthConte
 	newAssets := []types.NewAsset{}
 	if len(params.Bytes) > 0 || params.FileName != "" {
 		asset, err := s.assets.UploadAssetBytes(ctx, assets.UploadBytesParams{
-			TenantID: auth.TenantID,
+			UserID:   auth.UserID,
 			ThreadID: params.ThreadID,
 			Bytes:    params.Bytes,
 			FileName: params.FileName,
@@ -248,10 +248,9 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthConte
 		if err != nil {
 			return types.Message{}, err
 		}
-		asset.TenantID = auth.TenantID
 		newAssets = append(newAssets, asset)
 	}
-	return s.repo.PostMessage(ctx, auth.TenantID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
+	return s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
 }
 
 func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthContext, threadID string, files []types.UploadIntentFile) ([]types.PresignedUpload, error) {
@@ -264,7 +263,7 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 	if err := validate.PostMessage(threadID); err != nil {
 		return nil, err
 	}
-	thread, err := s.repo.GetThread(ctx, auth.TenantID, threadID)
+	thread, err := s.repo.GetThread(ctx, auth.UserID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +287,7 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 		}
 		uploadID := "upl_" + uuid.NewString()
 		presigned, err := s.assets.CreatePresignedAssetUploadURL(ctx, assets.PresignedUploadParams{
-			TenantID:         auth.TenantID,
+			UserID:           auth.UserID,
 			ThreadID:         threadID,
 			UploadID:         uploadID,
 			FileName:         file.FileName,
@@ -300,20 +299,24 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 			return nil, err
 		}
 		expiresAt := time.Now().UTC().Add(time.Duration(presigned.ExpiresIn) * time.Second).Format("2006-01-02T15:04:05.000Z")
-		if _, err := s.repo.CreatePendingUpload(ctx, types.PendingUpload{
-			ID:              presigned.UploadID,
-			TenantID:        auth.TenantID,
-			ThreadID:        threadID,
-			StorageKey:      presigned.StorageKey,
-			FileName:        presigned.FileName,
-			MimeType:        presigned.MimeType,
-			SizeBytes:       presigned.SizeBytes,
-			PublicURL:       presigned.PublicURL,
-			ExpiresAt:       expiresAt,
-			CreatedBy:       auth.ActorName,
-			CreatedByUserID: optionalString(auth.UserID),
-			CreatedByKeyID:  optionalString(auth.KeyID),
+		if _, err := s.repo.CreatePendingUpload(ctx, auth.UserID, types.PendingUpload{
+			ID:                       presigned.UploadID,
+			ThreadID:                 threadID,
+			StorageKey:               presigned.StorageKey,
+			FileName:                 presigned.FileName,
+			MimeType:                 presigned.MimeType,
+			SizeBytes:                presigned.SizeBytes,
+			PublicURL:                presigned.PublicURL,
+			ExpiresAt:                expiresAt,
+			CreatedBy:                auth.ActorName,
+			CreatedByUserID:          optionalString(auth.UserID),
+			CreatedByKeyID:           optionalString(auth.KeyID),
+			CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
+			CreatedByActorName:       optionalString(auth.ActorName),
 		}); err != nil {
+			if errors.Is(err, types.ErrThreadNotFound) {
+				return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+			}
 			return nil, err
 		}
 		uploads = append(uploads, presigned)
@@ -337,7 +340,7 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 	if len(ids) == 0 {
 		return []types.NewAsset{}, nil
 	}
-	pending, err := s.repo.GetPendingUploads(ctx, auth.TenantID, threadID, ids, auth)
+	pending, err := s.repo.GetPendingUploads(ctx, auth.UserID, threadID, ids, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +362,6 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload has expired."}
 		}
 		assets = append(assets, types.NewAsset{
-			TenantID:   auth.TenantID,
 			StorageKey: upload.StorageKey,
 			FileName:   upload.FileName,
 			MimeType:   upload.MimeType,
@@ -370,9 +372,16 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 	return assets, nil
 }
 
-func (s *Service) SignedAssetDownloadURL(ctx context.Context, auth types.AuthContext, asset types.Asset, expiresInSeconds int) (string, error) {
+func (s *Service) SignedAssetDownloadURL(ctx context.Context, auth types.AuthContext, assetID string, expiresInSeconds int) (string, error) {
 	if err := requireScope(auth, "assets:read"); err != nil {
 		return "", err
+	}
+	asset, err := s.repo.GetAsset(ctx, auth.UserID, assetID)
+	if err != nil {
+		return "", err
+	}
+	if asset == nil {
+		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset not found."}
 	}
 	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
 		StorageKey:       asset.StorageKey,
@@ -1043,7 +1052,7 @@ func authContextForUserSession(session types.UserSession, user types.User) types
 		UserDisplayName: user.DisplayName,
 		SubjectType:     types.AuthSubjectUserSession,
 		ActorID:         session.ID,
-		ActorName:       user.DisplayName,
+		ActorName:       "Web dashboard",
 		SessionID:       session.ID,
 		Role:            user.Role,
 		IsOwner:         user.IsOwner,
@@ -1087,7 +1096,7 @@ func tenantIDForSlug(slug string) string {
 }
 
 func requireAuthContext(auth types.AuthContext) error {
-	if strings.TrimSpace(auth.TenantID) == "" {
+	if strings.TrimSpace(auth.UserID) == "" {
 		return CodedError{Code: "PERMISSION_DENIED", Message: "Authentication context is required."}
 	}
 	if strings.TrimSpace(auth.ActorName) == "" {

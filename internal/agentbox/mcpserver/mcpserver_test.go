@@ -190,17 +190,17 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	}
 }
 
-func TestMCPToolsUseTenantAuthContext(t *testing.T) {
+func TestMCPToolsUseUserAuthContext(t *testing.T) {
 	ctx := context.Background()
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	authA := types.AuthContext{TenantID: "ten_a", SubjectType: types.AuthSubjectAPIKey, ActorName: "tenant-a", KeyID: "key_a"}
-	authB := types.AuthContext{TenantID: "ten_b", SubjectType: types.AuthSubjectAPIKey, ActorName: "tenant-b", KeyID: "key_b"}
-	threadA, err := svc.CreateThread(ctx, authA, "Tenant A thread")
+	authA := types.AuthContext{TenantID: types.DefaultTenantID, UserID: "usr_a", UserDisplayName: "User A", SubjectType: types.AuthSubjectAPIKey, ActorName: "agent-a", KeyID: "key_a"}
+	authB := types.AuthContext{TenantID: types.DefaultTenantID, UserID: "usr_b", UserDisplayName: "User B", SubjectType: types.AuthSubjectAPIKey, ActorName: "agent-b", KeyID: "key_b"}
+	threadA, err := svc.CreateThread(ctx, authA, "User A thread")
 	if err != nil {
 		t.Fatal(err)
 	}
-	threadB, err := svc.CreateThread(ctx, authB, "Tenant B thread")
+	threadB, err := svc.CreateThread(ctx, authB, "User B thread")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,27 +240,29 @@ func TestMCPToolsUseTenantAuthContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(payload.Threads) != 1 || payload.Threads[0].ID != threadA.ID {
-		t.Fatalf("tenant A list payload = %#v; tenant B thread = %s", payload, threadB.ID)
+		t.Fatalf("user A list payload = %#v; user B thread = %s", payload, threadB.ID)
 	}
 
-	crossTenant, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+	crossUser, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "get_thread",
 		Arguments: map[string]any{"thread_id": threadB.ID},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !crossTenant.IsError {
-		t.Fatalf("expected cross-tenant get_thread to fail, got %#v", crossTenant)
+	if !crossUser.IsError {
+		t.Fatalf("expected cross-user get_thread to fail, got %#v", crossUser)
 	}
 }
 
 func testAuth() types.AuthContext {
 	return types.AuthContext{
-		TenantID:    types.DefaultTenantID,
-		SubjectType: types.AuthSubjectAPIKey,
-		ActorName:   "tester",
-		KeyID:       "key_test",
+		TenantID:        types.DefaultTenantID,
+		UserID:          "usr_test",
+		UserDisplayName: "Test User",
+		SubjectType:     types.AuthSubjectAPIKey,
+		ActorName:       "tester",
+		KeyID:           "key_test",
 	}
 }
 

@@ -225,11 +225,16 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo.Users = append(repo.Users, testUser(types.DefaultTenantID, "usr_viewer", "viewer@example.com", "Viewer Admin", "admin", passwordHash))
-	thread, err := svc.CreateThread(t.Context(), authContext(types.DefaultTenantID, "tester"), "Viewer")
+	viewerAuth := authContext(types.DefaultTenantID, "tester")
+	viewerAuth.UserID = "usr_viewer"
+	viewerAuth.UserDisplayName = "Viewer Admin"
+	thread, err := svc.CreateThread(t.Context(), viewerAuth, "Viewer")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, authContext(types.DefaultTenantID, "author"), "body", nil, []types.NewAsset{{
+	authorAuth := viewerAuth
+	authorAuth.ActorName = "author"
+	if _, err := repo.PostMessage(t.Context(), viewerAuth.UserID, thread.ID, authorAuth, "body", nil, []types.NewAsset{{
 		StorageKey: "agentbox/thread/message/image.png",
 		FileName:   "image.png",
 		MimeType:   &imageType,
@@ -312,7 +317,7 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 	reqMe := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	reqMe.AddCookie(sessionCookie)
 	server.ServeHTTP(me, reqMe)
-	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"actor_name":"Alice Admin"`) || !strings.Contains(me.Body.String(), ``) {
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"user_display_name":"Alice Admin"`) || !strings.Contains(me.Body.String(), `"actor_name":"Web dashboard"`) {
 		t.Fatalf("me status=%d body=%s", me.Code, me.Body.String())
 	}
 
@@ -332,7 +337,7 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Thread.CreatedBy != "Alice Admin" {
+	if created.Thread.CreatedBy != "Web dashboard" {
 		t.Fatalf("created = %#v", created)
 	}
 
@@ -340,7 +345,7 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 	reqPost := httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/messages", strings.NewReader(`{"body":"from session"}`))
 	reqPost.AddCookie(sessionCookie)
 	server.ServeHTTP(post, reqPost)
-	if post.Code != http.StatusCreated || !strings.Contains(post.Body.String(), `"author":"Alice Admin"`) {
+	if post.Code != http.StatusCreated || !strings.Contains(post.Body.String(), `"author":"Web dashboard"`) || !strings.Contains(post.Body.String(), `"created_by_user_display_name":"Alice Admin"`) {
 		t.Fatalf("post status=%d body=%s", post.Code, post.Body.String())
 	}
 
@@ -421,15 +426,15 @@ func TestAuthMeSupportsAPIKeyAndAliasWithoutLeakingSecret(t *testing.T) {
 			t.Fatalf("%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
 		}
 		body := recorder.Body.String()
-		if !strings.Contains(body, ``) ||
-			!strings.Contains(body, `"tenant_slug":"acme"`) ||
+		if !strings.Contains(body, `"user_id":"usr_acme"`) ||
+			!strings.Contains(body, `"user_display_name":"Acme Admin"`) ||
 			!strings.Contains(body, `"subject_type":"api_key"`) ||
 			!strings.Contains(body, `"actor_name":"raycast"`) ||
 			!strings.Contains(body, `"key_id":"`) ||
 			!strings.Contains(body, `"scopes":["threads:read","mcp:use"]`) {
 			t.Fatalf("%s metadata body=%s", path, body)
 		}
-		if strings.Contains(body, key.Key) || strings.Contains(body, key.TokenHash) {
+		if strings.Contains(body, `tenant_id`) || strings.Contains(body, `tenant_slug`) || strings.Contains(body, key.Key) || strings.Contains(body, key.TokenHash) {
 			t.Fatalf("%s leaked secret material: %s", path, body)
 		}
 	}
@@ -1007,7 +1012,7 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if len(intentPayload.Uploads) != 1 || intentPayload.Uploads[0].UploadID == "" || intentPayload.Uploads[0].UploadURL == "" || intentPayload.Uploads[0].StorageKey == "" || intentPayload.Uploads[0].RequiredHeaders["content-type"] != "text/markdown" {
 		t.Fatalf("intent payload = %#v", intentPayload)
 	}
-	if !strings.HasPrefix(intentPayload.Uploads[0].StorageKey, "agentbox/"+types.DefaultTenantID+"/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
+	if !strings.HasPrefix(intentPayload.Uploads[0].StorageKey, "agentbox/usr_user/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
 		t.Fatalf("storage key = %q", intentPayload.Uploads[0].StorageKey)
 	}
 
@@ -1029,19 +1034,23 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if err := json.Unmarshal(post.Body.Bytes(), &posted); err != nil {
 		t.Fatal(err)
 	}
-	if posted.Message.Author != "user" || len(posted.Message.Assets) != 1 || posted.Message.Assets[0].FileName != "note.md" || posted.Message.Assets[0].PublicURL == nil {
+	if posted.Message.Author != "user" || len(posted.Message.Assets) != 1 || posted.Message.Assets[0].FileName != "note.md" || posted.Message.Assets[0].PublicURL != nil {
 		t.Fatalf("posted = %#v", posted)
 	}
 }
 
-func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
+func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	authA := authContext("ten_a", "tenant-a")
-	authB := authContext("ten_b", "tenant-b")
+	authA := authContext(types.DefaultTenantID, "agent-a")
+	authA.UserID = "usr_a"
+	authA.UserDisplayName = "User A"
+	authB := authContext(types.DefaultTenantID, "agent-b")
+	authB.UserID = "usr_b"
+	authB.UserDisplayName = "User B"
 	repo.Users = append(repo.Users,
-		types.User{ID: authA.UserID, TenantID: "ten_a", Email: "a@example.com", DisplayName: "Tenant A", Role: "member"},
-		types.User{ID: authB.UserID, TenantID: "ten_b", Email: "b@example.com", DisplayName: "Tenant B", Role: "member"},
+		types.User{ID: authA.UserID, TenantID: types.DefaultTenantID, Email: "a@example.com", DisplayName: "User A", Role: "member"},
+		types.User{ID: authB.UserID, TenantID: types.DefaultTenantID, Email: "b@example.com", DisplayName: "User B", Role: "member"},
 	)
 	keyA, err := svc.CreateAPIKey(t.Context(), authA, "shared")
 	if err != nil {
@@ -1054,7 +1063,7 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	server := NewServer(config.Config{}, svc)
 
 	createA := httptest.NewRecorder()
-	reqA := httptest.NewRequest(http.MethodPost, "/api/threads", strings.NewReader(`{"title":"Tenant A"}`))
+	reqA := httptest.NewRequest(http.MethodPost, "/api/threads", strings.NewReader(`{"title":"User A private needle"}`))
 	reqA.Header.Set("authorization", "Bearer "+keyA.Key)
 	server.ServeHTTP(createA, reqA)
 	if createA.Code != http.StatusCreated {
@@ -1062,16 +1071,19 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	}
 	var payloadA struct {
 		Thread struct {
-			ID       string `json:"id"`
-			TenantID string `json:"tenant_id"`
+			ID          string `json:"id"`
+			OwnerUserID string `json:"owner_user_id"`
 		} `json:"thread"`
 	}
 	if err := json.Unmarshal(createA.Body.Bytes(), &payloadA); err != nil {
 		t.Fatal(err)
 	}
+	if payloadA.Thread.OwnerUserID != authA.UserID || strings.Contains(createA.Body.String(), `tenant_id`) {
+		t.Fatalf("createA leaked tenant or wrong owner: %s", createA.Body.String())
+	}
 
 	createB := httptest.NewRecorder()
-	server.ServeHTTP(createB, httptest.NewRequest(http.MethodPost, "/api/threads?key="+keyB.Key, strings.NewReader(`{"title":"Tenant B"}`)))
+	server.ServeHTTP(createB, httptest.NewRequest(http.MethodPost, "/api/threads?key="+keyB.Key, strings.NewReader(`{"title":"User B private needle"}`)))
 	if createB.Code != http.StatusCreated {
 		t.Fatalf("createB status=%d body=%s", createB.Code, createB.Body.String())
 	}
@@ -1093,6 +1105,14 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	}
 	if strings.Contains(listA.Body.String(), payloadB.Thread.ID) || !strings.Contains(listA.Body.String(), payloadA.Thread.ID) {
 		t.Fatalf("listA leaked or missed thread: %s", listA.Body.String())
+	}
+
+	searchA := httptest.NewRecorder()
+	reqSearchA := httptest.NewRequest(http.MethodGet, "/api/threads?query=needle", nil)
+	reqSearchA.Header.Set("authorization", "Bearer "+keyA.Key)
+	server.ServeHTTP(searchA, reqSearchA)
+	if searchA.Code != http.StatusOK || strings.Contains(searchA.Body.String(), payloadB.Thread.ID) || !strings.Contains(searchA.Body.String(), payloadA.Thread.ID) {
+		t.Fatalf("searchA leaked or missed thread: status=%d body=%s", searchA.Code, searchA.Body.String())
 	}
 
 	getBWithA := httptest.NewRecorder()
@@ -1120,7 +1140,7 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	}
 
 	intentA := httptest.NewRecorder()
-	reqIntentA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadA.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"tenant-a.txt","size_bytes":1}]}`))
+	reqIntentA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadA.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"user-a.txt","size_bytes":1}]}`))
 	reqIntentA.Header.Set("authorization", "Bearer "+keyA.Key)
 	server.ServeHTTP(intentA, reqIntentA)
 	if intentA.Code != http.StatusCreated {
@@ -1135,7 +1155,7 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	if err := json.Unmarshal(intentA.Body.Bytes(), &intentAPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(intentAPayload.Uploads) != 1 || !strings.HasPrefix(intentAPayload.Uploads[0].StorageKey, "agentbox/ten_a/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
+	if len(intentAPayload.Uploads) != 1 || !strings.HasPrefix(intentAPayload.Uploads[0].StorageKey, "agentbox/"+authA.UserID+"/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
 		t.Fatalf("intentAPayload = %#v", intentAPayload)
 	}
 
@@ -1151,17 +1171,17 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 		t.Fatalf("finalizeAWithB status=%d body=%s", finalizeAWithB.Code, finalizeAWithB.Body.String())
 	}
 
-	messageB := types.Message{ID: "msg_b", TenantID: "ten_b", ThreadID: payloadB.Thread.ID, Author: "tenant-b", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
+	messageB := types.Message{ID: "msg_b", TenantID: types.DefaultTenantID, ThreadID: payloadB.Thread.ID, Author: "agent-b", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
 	repo.Messages = append(repo.Messages, messageB)
 	repo.Assets = append(repo.Assets, types.Asset{
 		ID:         "asset_b",
-		TenantID:   "ten_b",
+		TenantID:   types.DefaultTenantID,
 		MessageID:  messageB.ID,
 		StorageKey: "agentbox/ten_b/thread/file.txt",
 		FileName:   "file.txt",
 		SizeBytes:  1,
 		CreatedAt:  messageB.CreatedAt,
-		CreatedBy:  "tenant-b",
+		CreatedBy:  "agent-b",
 	})
 	downloadBWithA := httptest.NewRecorder()
 	reqDownloadBWithA := httptest.NewRequest(http.MethodGet, "/api/assets/asset_b/download-url", nil)
@@ -1171,17 +1191,17 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 		t.Fatalf("downloadBWithA status=%d body=%s", downloadBWithA.Code, downloadBWithA.Body.String())
 	}
 
-	messageA := types.Message{ID: "msg_a", TenantID: "ten_a", ThreadID: payloadA.Thread.ID, Author: "tenant-a", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
+	messageA := types.Message{ID: "msg_a", TenantID: types.DefaultTenantID, ThreadID: payloadA.Thread.ID, Author: "agent-a", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
 	repo.Messages = append(repo.Messages, messageA)
 	repo.Assets = append(repo.Assets, types.Asset{
 		ID:         "asset_legacy_a",
-		TenantID:   "ten_a",
+		TenantID:   types.DefaultTenantID,
 		MessageID:  messageA.ID,
 		StorageKey: "agentbox/legacy-thread/message/legacy.txt",
 		FileName:   "legacy.txt",
 		SizeBytes:  1,
 		CreatedAt:  messageA.CreatedAt,
-		CreatedBy:  "tenant-a",
+		CreatedBy:  "agent-a",
 	})
 	downloadLegacyA := httptest.NewRecorder()
 	reqDownloadLegacyA := httptest.NewRequest(http.MethodGet, "/api/assets/asset_legacy_a/download-url", nil)
@@ -1190,11 +1210,11 @@ func TestHTTPTenantIsolationAndAuthMethods(t *testing.T) {
 	if downloadLegacyA.Code != http.StatusOK {
 		t.Fatalf("downloadLegacyA status=%d body=%s", downloadLegacyA.Code, downloadLegacyA.Body.String())
 	}
-	if !strings.Contains(downloadLegacyA.Body.String(), "agentbox/legacy-thread/message/legacy.txt") || strings.Contains(downloadLegacyA.Body.String(), "agentbox/ten_a/legacy-thread") {
+	if !strings.Contains(downloadLegacyA.Body.String(), "agentbox%2Flegacy-thread%2Fmessage%2Flegacy.txt") && !strings.Contains(downloadLegacyA.Body.String(), "agentbox/legacy-thread/message/legacy.txt") {
 		t.Fatalf("legacy download rewrote storage key: %s", downloadLegacyA.Body.String())
 	}
 
-	if err := svc.RevokeAPIKey(t.Context(), authContext("ten_a", "tenant-a"), "shared"); err != nil {
+	if err := svc.RevokeAPIKey(t.Context(), authA, "shared"); err != nil {
 		t.Fatal(err)
 	}
 	afterRevokeA := httptest.NewRecorder()
@@ -1217,14 +1237,14 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	adminAuth := authContext(types.DefaultTenantID, "admin")
 	adminAuth.SubjectType = types.AuthSubjectAdmin
 	adminAuth.Role = "admin"
+	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, TenantID: types.DefaultTenantID, Email: "admin@example.com", DisplayName: "Admin", Role: "admin"})
 	thread, err := svc.CreateThread(t.Context(), adminAuth, "Scoped")
 	if err != nil {
 		t.Fatal(err)
 	}
 	textType := "text/plain"
-	message, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, adminAuth, "seed asset", nil, []types.NewAsset{{
-		TenantID:   types.DefaultTenantID,
-		StorageKey: "agentbox/ten_default/scoped/message/seed.txt",
+	message, err := repo.PostMessage(t.Context(), adminAuth.UserID, thread.ID, adminAuth, "seed asset", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + adminAuth.UserID + "/scoped/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,
 		SizeBytes:  int64(len("seed bytes")),

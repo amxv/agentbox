@@ -16,8 +16,15 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `insert into threads (id, tenant_id, owner_user_id, title, created_by) values ('thr_snapshot', 'ten_default', $1, 'Snapshot', 'test')`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	statements := []string{
-		`insert into threads (id, tenant_id, title, created_by) values ('thr_snapshot', 'ten_default', 'Snapshot', 'test')`,
 		`insert into messages (id, tenant_id, thread_id, author, body) values ('msg_snapshot', 'ten_default', 'thr_snapshot', 'test', 'body')`,
 		`insert into assets (id, tenant_id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'ten_default', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`,
 		`insert into pending_uploads (id, tenant_id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'ten_default', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`,
@@ -73,7 +80,11 @@ func TestPGDumpCreatesReadableArchiveFromExportedSnapshot(t *testing.T) {
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.pool.Exec(ctx, `insert into threads (id, tenant_id, title, created_by) values ('thr_dump', 'ten_default', 'Dump fixture', 'test')`); err != nil {
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `insert into threads (id, tenant_id, owner_user_id, title, created_by) values ('thr_dump', 'ten_default', $1, 'Dump fixture', 'test')`, owner.ID); err != nil {
 		t.Fatal(err)
 	}
 

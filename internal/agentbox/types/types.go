@@ -8,6 +8,7 @@ var ErrSignupInvitationInvalid = errors.New("signup invitation is invalid or exp
 var ErrEmailAlreadyRegistered = errors.New("email is already registered")
 var ErrUserNotFound = errors.New("user not found")
 var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
+var ErrThreadNotFound = errors.New("Thread not found.")
 
 const DefaultTenantID = "ten_default"
 
@@ -25,8 +26,8 @@ const (
 )
 
 type AuthContext struct {
-	TenantID        string          `json:"tenant_id"`
-	TenantSlug      string          `json:"tenant_slug,omitempty"`
+	TenantID        string          `json:"-"`
+	TenantSlug      string          `json:"-"`
 	UserID          string          `json:"user_id,omitempty"`
 	UserDisplayName string          `json:"user_display_name,omitempty"`
 	SubjectType     AuthSubjectType `json:"subject_type"`
@@ -49,7 +50,7 @@ type Tenant struct {
 
 type User struct {
 	ID           string  `json:"id"`
-	TenantID     string  `json:"tenant_id"`
+	TenantID     string  `json:"-"`
 	Email        string  `json:"email"`
 	DisplayName  string  `json:"display_name"`
 	PasswordHash *string `json:"-"`
@@ -101,44 +102,58 @@ type SignupInvitation struct {
 }
 
 type Thread struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	Title           string  `json:"title"`
-	CreatedAt       string  `json:"created_at"`
-	UpdatedAt       string  `json:"updated_at"`
-	CreatedBy       string  `json:"created_by"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
+	ID                       string  `json:"id"`
+	TenantID                 string  `json:"-"`
+	OwnerUserID              string  `json:"owner_user_id"`
+	Title                    string  `json:"title"`
+	CreatedAt                string  `json:"created_at"`
+	UpdatedAt                string  `json:"updated_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+}
+
+type ThreadAccess struct {
+	ThreadID    string `json:"thread_id"`
+	OwnerUserID string `json:"owner_user_id"`
+	UserID      string `json:"user_id"`
+	IsOwner     bool   `json:"is_owner"`
 }
 
 type Asset struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	MessageID       string  `json:"message_id"`
-	StorageKey      string  `json:"storage_key"`
-	FileName        string  `json:"file_name"`
-	Filename        string  `json:"filename"`
-	MimeType        *string `json:"mime_type"`
-	SizeBytes       int64   `json:"size_bytes"`
-	PublicURL       *string `json:"public_url"`
-	DownloadURL     *string `json:"download_url,omitempty"`
-	CreatedAt       string  `json:"created_at"`
-	CreatedBy       string  `json:"created_by"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
+	ID                       string  `json:"id"`
+	TenantID                 string  `json:"-"`
+	MessageID                string  `json:"message_id"`
+	StorageKey               string  `json:"storage_key"`
+	FileName                 string  `json:"file_name"`
+	Filename                 string  `json:"filename"`
+	MimeType                 *string `json:"mime_type"`
+	SizeBytes                int64   `json:"size_bytes"`
+	PublicURL                *string `json:"public_url,omitempty"`
+	DownloadURL              *string `json:"download_url,omitempty"`
+	CreatedAt                string  `json:"created_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
 }
 
 type Message struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	ThreadID        string  `json:"thread_id"`
-	Author          string  `json:"author"`
-	Body            string  `json:"body"`
-	BodyContentType *string `json:"body_content_type"`
-	CreatedAt       string  `json:"created_at"`
-	Assets          []Asset `json:"assets"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
+	ID                       string  `json:"id"`
+	TenantID                 string  `json:"-"`
+	ThreadID                 string  `json:"thread_id"`
+	Author                   string  `json:"author"`
+	Body                     string  `json:"body"`
+	BodyContentType          *string `json:"body_content_type"`
+	CreatedAt                string  `json:"created_at"`
+	Assets                   []Asset `json:"assets"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
 }
 
 type ThreadWithMessages struct {
@@ -154,7 +169,6 @@ type ChatGPTFileReference struct {
 }
 
 type NewAsset struct {
-	TenantID   string
 	StorageKey string
 	FileName   string
 	MimeType   *string
@@ -163,20 +177,22 @@ type NewAsset struct {
 }
 
 type PendingUpload struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	ThreadID        string  `json:"thread_id"`
-	StorageKey      string  `json:"storage_key"`
-	FileName        string  `json:"file_name"`
-	MimeType        *string `json:"mime_type"`
-	SizeBytes       int64   `json:"size_bytes"`
-	PublicURL       *string `json:"public_url"`
-	CreatedAt       string  `json:"created_at"`
-	ExpiresAt       string  `json:"expires_at"`
-	CreatedBy       string  `json:"created_by"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
-	ConsumedAt      *string `json:"consumed_at,omitempty"`
+	ID                       string  `json:"id"`
+	TenantID                 string  `json:"-"`
+	ThreadID                 string  `json:"thread_id"`
+	StorageKey               string  `json:"storage_key"`
+	FileName                 string  `json:"file_name"`
+	MimeType                 *string `json:"mime_type"`
+	SizeBytes                int64   `json:"size_bytes"`
+	PublicURL                *string `json:"public_url,omitempty"`
+	CreatedAt                string  `json:"created_at"`
+	ExpiresAt                string  `json:"expires_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	ConsumedAt               *string `json:"consumed_at,omitempty"`
 }
 
 type UploadIntentFile struct {
@@ -191,7 +207,7 @@ type PresignedUpload struct {
 	FileName        string            `json:"file_name"`
 	MimeType        *string           `json:"mime_type"`
 	SizeBytes       int64             `json:"size_bytes"`
-	PublicURL       *string           `json:"public_url"`
+	PublicURL       *string           `json:"public_url,omitempty"`
 	UploadURL       string            `json:"upload_url"`
 	ExpiresIn       int               `json:"expires_in"`
 	RequiredHeaders map[string]string `json:"required_headers"`
@@ -203,7 +219,8 @@ type UploadedAssetReference struct {
 
 type SearchThreadResult struct {
 	ID                 string   `json:"id"`
-	TenantID           string   `json:"tenant_id,omitempty"`
+	TenantID           string   `json:"-"`
+	OwnerUserID        string   `json:"owner_user_id"`
 	Title              string   `json:"title"`
 	CreatedAt          string   `json:"created_at"`
 	UpdatedAt          string   `json:"updated_at"`

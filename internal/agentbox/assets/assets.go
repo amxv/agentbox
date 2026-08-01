@@ -27,7 +27,7 @@ import (
 )
 
 type UploadBytesParams struct {
-	TenantID    string
+	UserID      string
 	ThreadID    string
 	MessageHint string
 	Bytes       []byte
@@ -43,7 +43,7 @@ type SignedURLParams struct {
 }
 
 type PresignedUploadParams struct {
-	TenantID         string
+	UserID           string
 	ThreadID         string
 	UploadID         string
 	FileName         string
@@ -57,7 +57,7 @@ type AssetStore interface {
 	UploadAssetBytes(ctx context.Context, params UploadBytesParams) (agenttypes.NewAsset, error)
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
-	UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
+	UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
 
 func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
@@ -192,7 +192,7 @@ func (s *R2Store) UploadAssetBytes(ctx context.Context, params UploadBytesParams
 
 	fileName := SanitizeFilename(params.FileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
-	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
+	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
 		contentType = *mimeType
@@ -213,7 +213,7 @@ func (s *R2Store) UploadAssetBytes(ctx context.Context, params UploadBytesParams
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  int64(len(params.Bytes)),
-		PublicURL:  PublicURLForKey(s.cfg.R2PublicBaseURL, storageKey),
+		PublicURL:  nil,
 	}, nil
 }
 
@@ -236,7 +236,7 @@ func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params Pres
 	}
 	fileName := SanitizeFilename(params.FileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
-	storageKey := MakeStorageKey(params.TenantID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
 		contentType = *mimeType
@@ -258,7 +258,7 @@ func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params Pres
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  params.SizeBytes,
-		PublicURL:  PublicURLForKey(s.cfg.R2PublicBaseURL, storageKey),
+		PublicURL:  nil,
 		UploadURL:  out.URL,
 		ExpiresIn:  expires,
 		RequiredHeaders: map[string]string{
@@ -296,7 +296,7 @@ func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params Signe
 	return out.URL, nil
 }
 
-func (s *R2Store) UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error) {
+func (s *R2Store) UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error) {
 	file, err := NormalizeChatGPTFileInput(input)
 	if err != nil {
 		return agenttypes.NewAsset{}, err
@@ -330,7 +330,7 @@ func (s *R2Store) UploadChatGPTFile(ctx context.Context, tenantID string, thread
 		fileName = *file.FileName
 	}
 	return s.UploadAssetBytes(ctx, UploadBytesParams{
-		TenantID:    tenantID,
+		UserID:      userID,
 		ThreadID:    threadID,
 		MessageHint: file.FileID,
 		Bytes:       bytes,
@@ -362,10 +362,10 @@ func InferMimeType(fileName string, fallback *string) *string {
 	return &value
 }
 
-func MakeStorageKey(tenantID string, threadID string, messageHint string, fileName string) string {
+func MakeStorageKey(userID string, threadID string, messageHint string, fileName string) string {
 	return strings.Join([]string{
 		"agentbox",
-		tenantID,
+		userID,
 		threadID,
 		messageHint,
 		uuid.NewString() + "-" + SanitizeFilename(fileName),

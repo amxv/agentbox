@@ -47,7 +47,7 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	store := &FakeStore{MaxFileSizeBytes: 10, PublicBaseURL: "https://cdn.example"}
 	mimeType := "text/plain"
 	asset, err := store.UploadAssetBytes(context.Background(), UploadBytesParams{
-		TenantID: "ten_1",
+		UserID:   "usr_1",
 		ThreadID: "thr_1",
 		Bytes:    []byte("hello"),
 		FileName: "report one.txt",
@@ -56,10 +56,10 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if asset.FileName != "report-one.txt" || asset.SizeBytes != 5 || asset.PublicURL == nil {
+	if asset.FileName != "report-one.txt" || asset.SizeBytes != 5 || asset.PublicURL != nil {
 		t.Fatalf("unexpected asset: %#v", asset)
 	}
-	if !strings.HasPrefix(asset.StorageKey, "agentbox/ten_1/thr_1/message/") {
+	if !strings.HasPrefix(asset.StorageKey, "agentbox/usr_1/thr_1/message/") {
 		t.Fatalf("storage key = %q", asset.StorageKey)
 	}
 	url, err := store.CreateSignedAssetDownloadURL(context.Background(), SignedURLParams{

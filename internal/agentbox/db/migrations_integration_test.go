@@ -118,6 +118,23 @@ select
 		t.Fatalf("legacy authentication data was retained: users=%d sessions=%d codes=%d api_keys=%d", usersCount, sessionsCount, codesCount, activeKeyCount)
 	}
 
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Deployment Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyOwnerUserID string
+	var legacyCreatedBy string
+	if err := repository.pool.QueryRow(ctx, `
+select owner_user_id, created_by
+from threads
+where id = 'thr_legacy'
+`).Scan(&legacyOwnerUserID, &legacyCreatedBy); err != nil {
+		t.Fatal(err)
+	}
+	if legacyOwnerUserID != owner.ID || legacyCreatedBy != "Legacy owner" {
+		t.Fatalf("legacy ownership backfill changed attribution: owner=%q want=%q created_by=%q", legacyOwnerUserID, owner.ID, legacyCreatedBy)
+	}
+
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +290,181 @@ func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
 	}
 	if key, user, err := repository.FindAPIKeyBySecret(ctx, memberSecret); err != nil || key != nil || user != nil {
 		t.Fatalf("disabled user credential authenticated: key=%#v user=%#v err=%v", key, user, err)
+	}
+}
+
+func TestUserOwnedPrivateThreadAccessUsesOneIndexedBoundary(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner Person", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "member@example.com", "Member Person", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKey, err := repository.CreateAPIKey(ctx, owner.ID, "chatgpt", "chatgpt", hashSecret("owner-secret"), "agb_owner", []string{"threads:read", "threads:write", "assets:read", "assets:write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownerBrowser := types.AuthContext{
+		UserID:          owner.ID,
+		UserDisplayName: owner.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorName:       "Web dashboard",
+	}
+	ownerConnector := types.AuthContext{
+		UserID:          owner.ID,
+		UserDisplayName: owner.DisplayName,
+		SubjectType:     types.AuthSubjectAPIKey,
+		ActorName:       ownerKey.Name,
+		KeyID:           ownerKey.ID,
+	}
+	memberBrowser := types.AuthContext{
+		UserID:          member.ID,
+		UserDisplayName: member.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorName:       "Web dashboard",
+	}
+
+	ownerThread, err := repository.CreateThread(ctx, owner.ID, "private marker owner", ownerBrowser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberThread, err := repository.CreateThread(ctx, member.ID, "private marker member", memberBrowser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownerThread.OwnerUserID != owner.ID || ownerThread.CreatedByUserDisplayName == nil || *ownerThread.CreatedByUserDisplayName != owner.DisplayName || ownerThread.CreatedByActorName == nil || *ownerThread.CreatedByActorName != "Web dashboard" {
+		t.Fatalf("owner thread metadata = %#v", ownerThread)
+	}
+
+	ownerThreads, err := repository.ListThreads(ctx, owner.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberThreads, err := repository.ListThreads(ctx, member.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownerThreads) != 1 || ownerThreads[0].ID != ownerThread.ID || len(memberThreads) != 1 || memberThreads[0].ID != memberThread.ID {
+		t.Fatalf("private lists crossed users: owner=%#v member=%#v", ownerThreads, memberThreads)
+	}
+
+	ownerSearch, err := repository.SearchThreads(ctx, owner.ID, types.SearchThreadParams{Query: "private marker", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownerSearch) != 1 || ownerSearch[0].ID != ownerThread.ID || ownerSearch[0].OwnerUserID != owner.ID {
+		t.Fatalf("private search crossed users: %#v", ownerSearch)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, ownerThread.ID); err != nil || access != nil {
+		t.Fatalf("member resolved owner access: access=%#v err=%v", access, err)
+	}
+	if thread, err := repository.GetThread(ctx, member.ID, ownerThread.ID); err != nil || thread != nil {
+		t.Fatalf("member read owner thread: thread=%#v err=%v", thread, err)
+	}
+	if _, err := repository.PostMessage(ctx, member.ID, ownerThread.ID, memberBrowser, "blocked", nil, nil); !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("member posted to owner thread: %v", err)
+	}
+
+	textType := "text/plain"
+	message, err := repository.PostMessage(ctx, owner.ID, ownerThread.ID, ownerConnector, "connector contribution", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + owner.ID + "/" + ownerThread.ID + "/message/existing.txt",
+		FileName:   "existing.txt",
+		MimeType:   &textType,
+		SizeBytes:  8,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.CreatedByUserID == nil || *message.CreatedByUserID != owner.ID || message.CreatedByKeyID == nil || *message.CreatedByKeyID != ownerKey.ID || message.CreatedByUserDisplayName == nil || *message.CreatedByUserDisplayName != owner.DisplayName || message.CreatedByActorName == nil || *message.CreatedByActorName != ownerKey.Name || len(message.Assets) != 1 {
+		t.Fatalf("connector attribution = %#v", message)
+	}
+	if message.Assets[0].PublicURL != nil || message.Assets[0].DownloadURL != nil {
+		t.Fatalf("new private asset exposed a direct URL: %#v", message.Assets[0])
+	}
+	if asset, err := repository.GetAsset(ctx, member.ID, message.Assets[0].ID); err != nil || asset != nil {
+		t.Fatalf("member read owner asset: asset=%#v err=%v", asset, err)
+	}
+	if asset, err := repository.GetAsset(ctx, owner.ID, message.Assets[0].ID); err != nil || asset == nil || asset.StorageKey != message.Assets[0].StorageKey {
+		t.Fatalf("owner asset lookup failed: asset=%#v err=%v", asset, err)
+	}
+
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	upload := types.PendingUpload{
+		ID:                       "upl_owner_private",
+		ThreadID:                 ownerThread.ID,
+		StorageKey:               "agentbox/" + owner.ID + "/" + ownerThread.ID + "/upl_owner_private/file.txt",
+		FileName:                 "file.txt",
+		MimeType:                 &textType,
+		SizeBytes:                4,
+		ExpiresAt:                isoMillis(expiresAt),
+		CreatedBy:                ownerKey.Name,
+		CreatedByUserID:          &owner.ID,
+		CreatedByKeyID:           &ownerKey.ID,
+		CreatedByUserDisplayName: &owner.DisplayName,
+		CreatedByActorName:       &ownerKey.Name,
+	}
+	createdUpload, err := repository.CreatePendingUpload(ctx, owner.ID, upload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdUpload.PublicURL != nil || !strings.HasPrefix(createdUpload.StorageKey, "agentbox/"+owner.ID+"/"+ownerThread.ID+"/") {
+		t.Fatalf("pending upload metadata = %#v", createdUpload)
+	}
+	if _, err := repository.CreatePendingUpload(ctx, member.ID, types.PendingUpload{ID: "upl_cross_user", ThreadID: ownerThread.ID, StorageKey: "blocked", FileName: "blocked.txt", ExpiresAt: isoMillis(expiresAt), CreatedBy: memberBrowser.ActorName}); !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("member created upload for owner thread: %v", err)
+	}
+	ownedUploads, err := repository.GetPendingUploads(ctx, owner.ID, ownerThread.ID, []string{upload.ID}, ownerConnector)
+	if err != nil || len(ownedUploads) != 1 || ownedUploads[0].ID != upload.ID {
+		t.Fatalf("owner pending upload lookup = %#v err=%v", ownedUploads, err)
+	}
+	wrongActor := ownerConnector
+	wrongActor.KeyID = "key_other"
+	if wrongUploads, err := repository.GetPendingUploads(ctx, owner.ID, ownerThread.ID, []string{upload.ID}, wrongActor); err != nil || len(wrongUploads) != 0 {
+		t.Fatalf("pending upload crossed actors: uploads=%#v err=%v", wrongUploads, err)
+	}
+
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	planRows, err := tx.Query(ctx, `
+explain (format text)
+select id, owner_user_id, title, updated_at
+from threads
+where owner_user_id = $1
+order by updated_at desc
+limit 50
+`, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planRows.Close()
+	plan := strings.Builder{}
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := planRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "threads_owner_updated_idx") {
+		t.Fatalf("private list plan did not use owner index:\n%s", plan.String())
 	}
 }
 
@@ -553,18 +745,24 @@ func TestListThreadsDoesNotRunMigrations(t *testing.T) {
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.pool.Exec(ctx, `insert into threads (id, tenant_id, title, created_by) values ('thr_hotpath', 'ten_default', 'Hot path', 'test')`); err != nil {
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, ActorName: "Web dashboard"}
+	thread, err := repository.CreateThread(ctx, owner.ID, "Hot path", auth)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.pool.Exec(ctx, `drop table schema_migrations`); err != nil {
 		t.Fatal(err)
 	}
 
-	threads, err := repository.ListThreads(ctx, "ten_default", 10)
+	threads, err := repository.ListThreads(ctx, owner.ID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(threads) != 1 || threads[0].ID != "thr_hotpath" {
+	if len(threads) != 1 || threads[0].ID != thread.ID {
 		t.Fatalf("threads = %#v", threads)
 	}
 

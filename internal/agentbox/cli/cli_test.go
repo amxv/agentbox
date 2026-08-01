@@ -664,7 +664,7 @@ func TestCLILoginSavesUserProfile(t *testing.T) {
 				UserID:      user.ID,
 				SubjectType: types.AuthSubjectUserSession,
 				ActorID:     "sess_browser",
-				ActorName:   user.DisplayName,
+				ActorName:   "Web dashboard",
 				SessionID:   "sess_browser",
 				Role:        user.Role,
 			}, state, redirectURI)
@@ -751,8 +751,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	textType := "text/plain"
-	if _, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, authContext, "seed asset", nil, []types.NewAsset{{
-		StorageKey: "agentbox/ten_default/seed/message/seed.txt",
+	if _, err := repo.PostMessage(t.Context(), authContext.UserID, thread.ID, authContext, "seed asset", nil, []types.NewAsset{{
+		StorageKey: "agentbox/usr_seed/seed/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,
 		SizeBytes:  int64(len("seed bytes")),
