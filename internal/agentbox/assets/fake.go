@@ -2,9 +2,15 @@ package assets
 
 import (
 	"context"
+	"errors"
 	"net/url"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 
+	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/types"
 )
 
@@ -12,9 +18,17 @@ type FakeStore struct {
 	MaxFileSizeBytes int64
 	PublicBaseURL    string
 	Uploads          []types.NewAsset
+	Buckets          map[string]map[string]backup.ObjectMetadata
+	CopyCalls        []backup.CopyObjectRequest
+	HeadFailures     map[string]error
+	ListFailures     map[string]error
+	CopyFailures     map[string]error
+	mutex            sync.Mutex
 }
 
 func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams) (types.NewAsset, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
 	limit := f.MaxFileSizeBytes
 	if limit == 0 {
 		limit = 25 * 1024 * 1024
@@ -33,6 +47,76 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 	}
 	f.Uploads = append(f.Uploads, asset)
 	return asset, nil
+}
+
+func (f *FakeStore) PutObject(bucket string, key string, sizeBytes int64, etag string) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	f.ensureBucket(bucket)
+	now := time.Now().UTC()
+	f.Buckets[bucket][key] = backup.ObjectMetadata{
+		Bucket:       bucket,
+		Key:          key,
+		SizeBytes:    sizeBytes,
+		ETag:         normalizeETag(etag),
+		LastModified: &now,
+	}
+}
+
+func (f *FakeStore) HeadObject(_ context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	if err := f.HeadFailures[failureKey(bucket, key)]; err != nil {
+		return backup.ObjectMetadata{}, err
+	}
+	objects := f.Buckets[bucket]
+	object, ok := objects[key]
+	if !ok {
+		return backup.ObjectMetadata{}, fmtObjectNotFound(bucket, key)
+	}
+	return object, nil
+}
+
+func (f *FakeStore) ListObjects(_ context.Context, bucket string, prefix string) ([]backup.ObjectMetadata, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	if err := f.ListFailures[bucket]; err != nil {
+		return nil, err
+	}
+	objects := []backup.ObjectMetadata{}
+	for key, object := range f.Buckets[bucket] {
+		if strings.HasPrefix(key, prefix) {
+			objects = append(objects, object)
+		}
+	}
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
+	return objects, nil
+}
+
+func (f *FakeStore) CopyObject(_ context.Context, request backup.CopyObjectRequest) (backup.ObjectMetadata, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	if err := f.CopyFailures[failureKey(request.DestinationBucket, request.DestinationKey)]; err != nil {
+		return backup.ObjectMetadata{}, err
+	}
+	source, ok := f.Buckets[request.SourceBucket][request.SourceKey]
+	if !ok {
+		return backup.ObjectMetadata{}, fmtObjectNotFound(request.SourceBucket, request.SourceKey)
+	}
+	if request.ExpectedETag != "" && normalizeETag(request.ExpectedETag) != source.ETag {
+		return backup.ObjectMetadata{}, errors.New("source ETag changed before copy")
+	}
+	f.ensureBucket(request.DestinationBucket)
+	now := time.Now().UTC()
+	copied := source
+	copied.Bucket = request.DestinationBucket
+	copied.Key = request.DestinationKey
+	copied.LastModified = &now
+	f.Buckets[request.DestinationBucket][request.DestinationKey] = copied
+	f.CopyCalls = append(f.CopyCalls, request)
+	return copied, nil
 }
 
 func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params PresignedUploadParams) (types.PresignedUpload, error) {
@@ -110,4 +194,21 @@ type tooLargeError struct {
 
 func (e *tooLargeError) Error() string {
 	return "File is too large. Max size is " + strconv.FormatInt(e.limit, 10) + " bytes."
+}
+
+func (f *FakeStore) ensureBucket(bucket string) {
+	if f.Buckets == nil {
+		f.Buckets = make(map[string]map[string]backup.ObjectMetadata)
+	}
+	if f.Buckets[bucket] == nil {
+		f.Buckets[bucket] = make(map[string]backup.ObjectMetadata)
+	}
+}
+
+func failureKey(bucket string, key string) string {
+	return bucket + "\x00" + key
+}
+
+func fmtObjectNotFound(bucket string, key string) error {
+	return errors.Join(backup.ErrObjectNotFound, errors.New("r2://"+bucket+"/"+key))
 }

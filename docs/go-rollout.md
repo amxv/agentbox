@@ -123,6 +123,25 @@ Migration policy:
 - Production: run `bun run db:migrate` before shifting traffic.
 - Rollback: keep the prior TypeScript deployment and database schema available. The Go schema is intentionally compatible with the existing `threads`, `messages`, and `assets` tables.
 
+Before the user/team authorization cutover, the migration command is not enough.
+Run the content-preservation preflight and require a ready manifest:
+
+```bash
+bun run backup:preflight -- \
+  --output-dir /secure/off-host/agentbox-backups \
+  --run-id user-team-cutover-YYYY-MM-DD \
+  --source-prefix agentbox/ \
+  --backup-prefix agentbox-recovery/user-team-cutover-YYYY-MM-DD
+```
+
+This creates a consistent PostgreSQL custom-format dump, records content and
+orphan counts, inventories exact R2 references, and copies each referenced object
+to a recovery prefix. It is safe to resume with the same run ID. A missing object,
+dump/copy failure, orphan row, or metadata mismatch produces `"ready": false` and
+a non-zero exit. Preserve the dump and manifest outside the deployment and follow
+`docs/user-team-sharing-backup-preflight.md` to verify restoration before the
+maintenance window.
+
 ## CLI Distribution
 
 The release CLI is now the Go command at `cmd/agentbox`.

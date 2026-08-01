@@ -120,6 +120,30 @@ the canonical schema history. Applied versions and checksums are recorded in
 
 Do not rely on `AGENTBOX_AUTO_MIGRATE=true` for production by default.
 
+## User/team Cutover Backup Preflight
+
+Before any production user/team authorization cutover, run the content backup
+preflight from a trusted machine with production PostgreSQL/R2 env loaded and a
+compatible `pg_dump` installed:
+
+```bash
+bun run backup:preflight -- \
+  --output-dir /secure/off-host/agentbox-backups \
+  --run-id user-team-cutover-YYYY-MM-DD \
+  --source-prefix agentbox/ \
+  --backup-prefix agentbox-recovery/user-team-cutover-YYYY-MM-DD
+```
+
+The command writes `database.dump` and `manifest.json`, copies every referenced
+R2 object to the recovery prefix, and exits non-zero for missing objects, orphaned
+content rows, mismatched sizes, failed copies, or dump failures. Do not continue
+unless the manifest says `"ready": true`. Rerun the same run ID to resume safely.
+
+Read `docs/user-team-sharing-backup-preflight.md` for separate-bucket options,
+manifest semantics, and restore verification. The Zodex machine has no production
+credentials; the real backup and recorded production counts are a credentialed
+local-agent gate.
+
 ## Deploy Dashboard
 
 The dashboard project is `agentbox`.

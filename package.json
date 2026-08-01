@@ -22,6 +22,7 @@
     "build:cli:all": "mkdir -p dist/release && GOOS=darwin GOARCH=arm64 go build -o dist/release/agentbox-darwin-arm64 ./cmd/agentbox && GOOS=darwin GOARCH=amd64 go build -o dist/release/agentbox-darwin-amd64 ./cmd/agentbox && GOOS=linux GOARCH=amd64 go build -o dist/release/agentbox-linux-amd64 ./cmd/agentbox && GOOS=linux GOARCH=arm64 go build -o dist/release/agentbox-linux-arm64 ./cmd/agentbox && GOOS=windows GOARCH=amd64 go build -o dist/release/agentbox-windows-amd64.exe ./cmd/agentbox",
     "build:cli:npm": "node ./scripts/prepare-agentbox-npm.mjs",
     "db:migrate": "go run ./cmd/migrate",
+    "backup:preflight": "go run ./cmd/preflight",
     "test:parity": "echo \"TypeScript parity oracle removed; use Go tests plus rollout smoke checks.\"",
     "build:all": "bun run build && bun run build:cli",
     "typecheck": "tsc --noEmit",

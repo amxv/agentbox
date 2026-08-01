@@ -11,15 +11,18 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
+	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/config"
 	agenttypes "agentbox/internal/agentbox/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 )
 
@@ -50,10 +53,90 @@ type PresignedUploadParams struct {
 }
 
 type AssetStore interface {
+	backup.ObjectStore
 	UploadAssetBytes(ctx context.Context, params UploadBytesParams) (agenttypes.NewAsset, error)
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
 	UploadChatGPTFile(ctx context.Context, tenantID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
+}
+
+func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
+	if strings.TrimSpace(bucket) == "" {
+		return backup.ObjectMetadata{}, errors.New("R2 bucket is required")
+	}
+	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isObjectNotFound(err) {
+			return backup.ObjectMetadata{}, fmt.Errorf("%w: r2://%s/%s", backup.ErrObjectNotFound, bucket, key)
+		}
+		return backup.ObjectMetadata{}, err
+	}
+	return backup.ObjectMetadata{
+		Bucket:       bucket,
+		Key:          key,
+		SizeBytes:    aws.ToInt64(output.ContentLength),
+		ETag:         normalizeETag(aws.ToString(output.ETag)),
+		LastModified: output.LastModified,
+	}, nil
+}
+
+func (s *R2Store) ListObjects(ctx context.Context, bucket string, prefix string) ([]backup.ObjectMetadata, error) {
+	if strings.TrimSpace(bucket) == "" {
+		return nil, errors.New("R2 bucket is required")
+	}
+	objects := []backup.ObjectMetadata{}
+	var continuationToken *string
+	for {
+		output, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, object := range output.Contents {
+			objects = append(objects, backup.ObjectMetadata{
+				Bucket:       bucket,
+				Key:          aws.ToString(object.Key),
+				SizeBytes:    aws.ToInt64(object.Size),
+				ETag:         normalizeETag(aws.ToString(object.ETag)),
+				LastModified: object.LastModified,
+			})
+		}
+		if !aws.ToBool(output.IsTruncated) {
+			break
+		}
+		if output.NextContinuationToken == nil || aws.ToString(output.NextContinuationToken) == "" {
+			return nil, errors.New("R2 object listing was truncated without a continuation token")
+		}
+		continuationToken = output.NextContinuationToken
+	}
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
+	return objects, nil
+}
+
+func (s *R2Store) CopyObject(ctx context.Context, request backup.CopyObjectRequest) (backup.ObjectMetadata, error) {
+	if strings.TrimSpace(request.SourceBucket) == "" || strings.TrimSpace(request.DestinationBucket) == "" {
+		return backup.ObjectMetadata{}, errors.New("source and destination R2 buckets are required")
+	}
+	input := &s3.CopyObjectInput{
+		Bucket:     aws.String(request.DestinationBucket),
+		Key:        aws.String(request.DestinationKey),
+		CopySource: aws.String(url.PathEscape(request.SourceBucket + "/" + request.SourceKey)),
+	}
+	if request.ExpectedETag != "" {
+		input.CopySourceIfMatch = aws.String(`"` + normalizeETag(request.ExpectedETag) + `"`)
+	}
+	if _, err := s.client.CopyObject(ctx, input); err != nil {
+		return backup.ObjectMetadata{}, err
+	}
+	return s.HeadObject(ctx, request.DestinationBucket, request.DestinationKey)
 }
 
 type ChatGPTFileInput struct {
@@ -326,4 +409,21 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func normalizeETag(value string) string {
+	return strings.Trim(strings.TrimSpace(value), `"`)
+}
+
+func isObjectNotFound(err error) bool {
+	var apiError smithy.APIError
+	if !errors.As(err, &apiError) {
+		return false
+	}
+	switch apiError.ErrorCode() {
+	case "NoSuchKey", "NotFound", "404":
+		return true
+	default:
+		return false
+	}
 }
