@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -407,6 +408,130 @@ func TestOwnerSetupTokensAreHashedSingleUseAndTransactional(t *testing.T) {
 	}
 	if _, _, err := repository.UseOwnerSetupToken(ctx, hashSecret(expiredSecret), "owner@example.com", "Owner", "hash-three"); !errors.Is(err, ErrOwnerSetupTokenInvalid) {
 		t.Fatalf("expired token error = %v", err)
+	}
+}
+
+func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "existing@example.com", "Existing", nil, "member"); err != nil {
+		t.Fatal(err)
+	}
+
+	invitationSecret := "aginv_transactional"
+	invitation, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(invitationSecret), time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitation.CreatedByUserID != owner.ID {
+		t.Fatalf("unexpected invitation=%#v", invitation)
+	}
+	if _, _, _, err := repository.RegisterWithSignupInvitation(ctx, hashSecret(invitationSecret), "EXISTING@example.com", "Duplicate", "password-hash", "session-duplicate", time.Now().UTC().Add(time.Hour)); !errors.Is(err, types.ErrEmailAlreadyRegistered) {
+		t.Fatalf("duplicate registration error=%v", err)
+	}
+	if active, err := repository.FindSignupInvitation(ctx, hashSecret(invitationSecret)); err != nil || active == nil {
+		t.Fatalf("duplicate registration consumed invitation: active=%#v err=%v", active, err)
+	}
+
+	memberSessionHash := "member-session-hash"
+	member, session, consumed, err := repository.RegisterWithSignupInvitation(ctx, hashSecret(invitationSecret), "member@example.com", "Member", "member-password-hash", memberSessionHash, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if member.IsOwner || member.Role != "member" || session.UserID != member.ID || consumed.ConsumedAt == nil || consumed.ConsumedByUserID == nil || *consumed.ConsumedByUserID != member.ID {
+		t.Fatalf("unexpected registration member=%#v session=%#v invitation=%#v", member, session, consumed)
+	}
+	if active, err := repository.FindSignupInvitation(ctx, hashSecret(invitationSecret)); err != nil || active != nil {
+		t.Fatalf("consumed invitation remained active: active=%#v err=%v", active, err)
+	}
+
+	memberKeySecret := "agb_member_disable"
+	if _, err := repository.CreateAPIKey(ctx, member.ID, "local", "local", hashSecret(memberKeySecret), "agb_member", []string{"threads:read"}); err != nil {
+		t.Fatal(err)
+	}
+	cliCodeHash := "member-cli-code"
+	cliStateHash := "member-cli-state"
+	if _, err := repository.CreateCLILoginCode(ctx, types.CLILoginCode{
+		UserID:      member.ID,
+		CodeHash:    cliCodeHash,
+		StateHash:   cliStateHash,
+		RedirectURI: "http://127.0.0.1:8080/callback",
+		ExpiresAt:   isoMillis(time.Now().UTC().Add(time.Hour)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := repository.SetUserDisabled(ctx, member.ID, true)
+	if err != nil || disabled.DisabledAt == nil {
+		t.Fatalf("disable member=%#v err=%v", disabled, err)
+	}
+	if foundSession, foundUser, err := repository.FindUserSessionBySecretHash(ctx, memberSessionHash); err != nil || foundSession != nil || foundUser != nil {
+		t.Fatalf("disabled session resolved: session=%#v user=%#v err=%v", foundSession, foundUser, err)
+	}
+	if foundKey, foundUser, err := repository.FindAPIKeyBySecret(ctx, memberKeySecret); err != nil || foundKey != nil || foundUser != nil {
+		t.Fatalf("disabled key resolved: key=%#v user=%#v err=%v", foundKey, foundUser, err)
+	}
+	enabled, err := repository.SetUserDisabled(ctx, member.ID, false)
+	if err != nil || enabled.DisabledAt != nil {
+		t.Fatalf("enable member=%#v err=%v", enabled, err)
+	}
+	if code, user, err := repository.ConsumeCLILoginCode(ctx, cliCodeHash, cliStateHash, "http://127.0.0.1:8080/callback"); err != nil || code != nil || user != nil {
+		t.Fatalf("disabled user's old CLI login code became usable after enablement: code=%#v user=%#v err=%v", code, user, err)
+	}
+	if _, err := repository.SetUserDisabled(ctx, owner.ID, true); !errors.Is(err, types.ErrOwnerCannotBeDisabled) {
+		t.Fatalf("owner disable error=%v", err)
+	}
+
+	concurrentSecret := "aginv_concurrent"
+	if _, err := repository.CreateSignupInvitation(ctx, owner.ID, hashSecret(concurrentSecret), time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	type registrationResult struct {
+		user types.User
+		err  error
+	}
+	results := make(chan registrationResult, 2)
+	var waitGroup sync.WaitGroup
+	for index := 0; index < 2; index++ {
+		index := index
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			user, _, _, err := repository.RegisterWithSignupInvitation(
+				ctx,
+				hashSecret(concurrentSecret),
+				fmt.Sprintf("concurrent-%d@example.com", index),
+				fmt.Sprintf("Concurrent %d", index),
+				"password-hash",
+				fmt.Sprintf("session-%d", index),
+				time.Now().UTC().Add(time.Hour),
+			)
+			results <- registrationResult{user: user, err: err}
+		}()
+	}
+	waitGroup.Wait()
+	close(results)
+	successes := 0
+	invalids := 0
+	for result := range results {
+		if result.err == nil {
+			successes++
+			if result.user.ID == "" {
+				t.Fatal("successful concurrent registration had empty user ID")
+			}
+		} else if errors.Is(result.err, types.ErrSignupInvitationInvalid) {
+			invalids++
+		} else {
+			t.Fatalf("unexpected concurrent registration error=%v", result.err)
+		}
+	}
+	if successes != 1 || invalids != 1 {
+		t.Fatalf("concurrent registration results: successes=%d invalids=%d", successes, invalids)
 	}
 }
 

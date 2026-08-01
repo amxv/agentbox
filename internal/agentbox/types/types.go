@@ -4,6 +4,10 @@ import "errors"
 
 var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
 var ErrOwnerSetupTokenInvalid = errors.New("owner setup token is invalid or expired")
+var ErrSignupInvitationInvalid = errors.New("signup invitation is invalid or expired")
+var ErrEmailAlreadyRegistered = errors.New("email is already registered")
+var ErrUserNotFound = errors.New("user not found")
+var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
 
 const DefaultTenantID = "ten_default"
 
@@ -84,6 +88,16 @@ type OwnerSetupToken struct {
 	ExpiresAt  string  `json:"expires_at"`
 	ConsumedAt *string `json:"consumed_at,omitempty"`
 	RevokedAt  *string `json:"revoked_at,omitempty"`
+}
+
+type SignupInvitation struct {
+	ID               string  `json:"id"`
+	CreatedByUserID  string  `json:"created_by_user_id"`
+	CreatedAt        string  `json:"created_at"`
+	ExpiresAt        string  `json:"expires_at"`
+	ConsumedAt       *string `json:"consumed_at,omitempty"`
+	ConsumedByUserID *string `json:"consumed_by_user_id,omitempty"`
+	RevokedAt        *string `json:"revoked_at,omitempty"`
 }
 
 type Thread struct {

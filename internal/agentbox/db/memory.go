@@ -12,21 +12,27 @@ import (
 )
 
 type MemoryRepository struct {
-	Threads          []types.Thread
-	Messages         []types.Message
-	Assets           []types.Asset
-	Pending          []types.PendingUpload
-	APIKeys          []types.APIKey
-	Tenants          []types.Tenant
-	Users            []types.User
-	Sessions         []types.UserSession
-	CLICodes         []types.CLILoginCode
-	OwnerSetupTokens []memoryOwnerSetupToken
+	Threads           []types.Thread
+	Messages          []types.Message
+	Assets            []types.Asset
+	Pending           []types.PendingUpload
+	APIKeys           []types.APIKey
+	Tenants           []types.Tenant
+	Users             []types.User
+	Sessions          []types.UserSession
+	CLICodes          []types.CLILoginCode
+	OwnerSetupTokens  []memoryOwnerSetupToken
+	SignupInvitations []memorySignupInvitation
 }
 
 type memoryOwnerSetupToken struct {
 	Token     types.OwnerSetupToken
 	TokenHash string
+}
+
+type memorySignupInvitation struct {
+	Invitation types.SignupInvitation
+	TokenHash  string
 }
 
 func (m *MemoryRepository) ListThreads(_ context.Context, tenantID string, limit int) ([]types.Thread, error) {
@@ -567,6 +573,154 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 	}
 	m.Users = append(m.Users, owner)
 	return owner, nil
+}
+
+func (m *MemoryRepository) CreateSignupInvitation(_ context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error) {
+	if strings.TrimSpace(createdByUserID) == "" || strings.TrimSpace(tokenHash) == "" || !expiresAt.After(time.Now().UTC()) {
+		return types.SignupInvitation{}, errors.New("invitation creator, token hash, and future expiry are required")
+	}
+	now := isoMillis(time.Now().UTC())
+	invitation := types.SignupInvitation{
+		ID:              "inv_" + uuid.NewString(),
+		CreatedByUserID: createdByUserID,
+		CreatedAt:       now,
+		ExpiresAt:       isoMillis(expiresAt),
+	}
+	m.SignupInvitations = append(m.SignupInvitations, memorySignupInvitation{Invitation: invitation, TokenHash: tokenHash})
+	return invitation, nil
+}
+
+func (m *MemoryRepository) ListSignupInvitations(context.Context) ([]types.SignupInvitation, error) {
+	invitations := make([]types.SignupInvitation, 0, len(m.SignupInvitations))
+	for index := len(m.SignupInvitations) - 1; index >= 0; index-- {
+		invitations = append(invitations, m.SignupInvitations[index].Invitation)
+	}
+	return invitations, nil
+}
+
+func (m *MemoryRepository) RevokeSignupInvitation(_ context.Context, invitationID string) (bool, error) {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.SignupInvitations {
+		invitation := &m.SignupInvitations[index].Invitation
+		if invitation.ID == invitationID && invitation.ConsumedAt == nil && invitation.RevokedAt == nil {
+			invitation.RevokedAt = &now
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *MemoryRepository) FindSignupInvitation(_ context.Context, tokenHash string) (*types.SignupInvitation, error) {
+	now := time.Now().UTC()
+	for _, entry := range m.SignupInvitations {
+		expiresAt, err := time.Parse(time.RFC3339Nano, entry.Invitation.ExpiresAt)
+		if err != nil || entry.TokenHash != tokenHash || entry.Invitation.ConsumedAt != nil || entry.Invitation.RevokedAt != nil || !expiresAt.After(now) {
+			continue
+		}
+		invitation := entry.Invitation
+		return &invitation, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) RegisterWithSignupInvitation(_ context.Context, tokenHash string, email string, displayName string, passwordHash string, sessionSecretHash string, sessionExpiresAt time.Time) (types.User, types.UserSession, types.SignupInvitation, error) {
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	now := time.Now().UTC()
+	invitationIndex := -1
+	for index, entry := range m.SignupInvitations {
+		expiresAt, err := time.Parse(time.RFC3339Nano, entry.Invitation.ExpiresAt)
+		if err == nil && entry.TokenHash == tokenHash && entry.Invitation.ConsumedAt == nil && entry.Invitation.RevokedAt == nil && expiresAt.After(now) {
+			invitationIndex = index
+			break
+		}
+	}
+	if invitationIndex < 0 || email == "" || displayName == "" || passwordHash == "" || sessionSecretHash == "" || !sessionExpiresAt.After(now) {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, types.ErrSignupInvitationInvalid
+	}
+	for _, user := range m.Users {
+		if strings.EqualFold(strings.TrimSpace(user.Email), email) {
+			return types.User{}, types.UserSession{}, types.SignupInvitation{}, types.ErrEmailAlreadyRegistered
+		}
+	}
+	nowValue := isoMillis(now)
+	user := types.User{
+		ID:           "usr_" + uuid.NewString(),
+		TenantID:     types.DefaultTenantID,
+		Email:        email,
+		DisplayName:  displayName,
+		PasswordHash: &passwordHash,
+		Role:         "member",
+		CreatedAt:    nowValue,
+		UpdatedAt:    nowValue,
+	}
+	session := types.UserSession{
+		ID:         "sess_" + uuid.NewString(),
+		UserID:     user.ID,
+		SecretHash: sessionSecretHash,
+		CreatedAt:  nowValue,
+		ExpiresAt:  isoMillis(sessionExpiresAt),
+	}
+	consumedAt := nowValue
+	invitation := &m.SignupInvitations[invitationIndex].Invitation
+	invitation.ConsumedAt = &consumedAt
+	invitation.ConsumedByUserID = &user.ID
+	m.Users = append(m.Users, user)
+	m.Sessions = append(m.Sessions, session)
+	return user, session, *invitation, nil
+}
+
+func (m *MemoryRepository) ListUsers(context.Context) ([]types.User, error) {
+	users := append([]types.User(nil), m.Users...)
+	sort.SliceStable(users, func(i, j int) bool {
+		if users[i].IsOwner != users[j].IsOwner {
+			return users[i].IsOwner
+		}
+		if users[i].CreatedAt != users[j].CreatedAt {
+			return users[i].CreatedAt < users[j].CreatedAt
+		}
+		return users[i].ID < users[j].ID
+	})
+	return users, nil
+}
+
+func (m *MemoryRepository) SetUserDisabled(_ context.Context, userID string, disabled bool) (types.User, error) {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.Users {
+		user := &m.Users[index]
+		if user.ID != userID {
+			continue
+		}
+		if disabled && user.IsOwner {
+			return types.User{}, types.ErrOwnerCannotBeDisabled
+		}
+		if disabled {
+			if user.DisabledAt == nil {
+				user.DisabledAt = &now
+			}
+			for sessionIndex := range m.Sessions {
+				if m.Sessions[sessionIndex].UserID == user.ID && m.Sessions[sessionIndex].RevokedAt == nil {
+					m.Sessions[sessionIndex].RevokedAt = &now
+				}
+			}
+			for keyIndex := range m.APIKeys {
+				if m.APIKeys[keyIndex].UserID == user.ID && m.APIKeys[keyIndex].RevokedAt == nil {
+					m.APIKeys[keyIndex].RevokedAt = &now
+					m.APIKeys[keyIndex].UpdatedAt = now
+				}
+			}
+			for codeIndex := range m.CLICodes {
+				if m.CLICodes[codeIndex].UserID == user.ID && m.CLICodes[codeIndex].ConsumedAt == nil {
+					m.CLICodes[codeIndex].ConsumedAt = &now
+				}
+			}
+		} else {
+			user.DisabledAt = nil
+		}
+		user.UpdatedAt = now
+		return *user, nil
+	}
+	return types.User{}, types.ErrUserNotFound
 }
 
 func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {

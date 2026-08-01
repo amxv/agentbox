@@ -163,6 +163,17 @@ manifest semantics, and restore verification. The Zodex machine has no productio
 credentials; the real backup and recorded production counts are a credentialed
 local-agent gate.
 
+## Invitation-backed Users
+
+After the permanent owner is established, open `/owner/users` in the dashboard
+to create expiring one-time signup links, review invitation history, and
+disable or re-enable non-owner accounts. These endpoints require the owner's
+browser session; deployment secrets and API keys are not accepted.
+
+Disabling a user revokes browser sessions, API credentials, and pending CLI
+login codes in the same transaction while preserving content and attribution.
+Re-enabling does not restore old credentials. See `docs/user-invitations.md`.
+
 ## Deploy Dashboard
 
 The dashboard project is `agentbox`.

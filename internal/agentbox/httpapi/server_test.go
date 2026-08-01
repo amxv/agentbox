@@ -761,6 +761,197 @@ func TestOwnerSetupAndRecoveryRequireDeploymentSecretAndRejectReplay(t *testing.
 	}
 }
 
+func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+	}
+	server := NewServer(config.Config{
+		AdminKey:          "deployment-secret",
+		AppPublicURL:      "https://agentbox.example",
+		SessionCookieName: config.DefaultSessionCookieName,
+	}, service.New(repo, &assets.FakeStore{}))
+
+	issueOwnerToken := httptest.NewRequest(http.MethodPost, "/api/admin/owner/setup-token", nil)
+	issueOwnerToken.Header.Set("x-agentbox-admin-key", "deployment-secret")
+	issueOwnerResponse := httptest.NewRecorder()
+	server.ServeHTTP(issueOwnerResponse, issueOwnerToken)
+	if issueOwnerResponse.Code != http.StatusCreated {
+		t.Fatalf("issue owner token status=%d body=%s", issueOwnerResponse.Code, issueOwnerResponse.Body.String())
+	}
+	var ownerTokenPayload struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(issueOwnerResponse.Body.Bytes(), &ownerTokenPayload); err != nil {
+		t.Fatal(err)
+	}
+	ownerSetupBody, _ := json.Marshal(map[string]string{
+		"token":        ownerTokenPayload.Token,
+		"email":        "owner@example.com",
+		"display_name": "Owner",
+		"password":     "owner-password",
+	})
+	ownerSetupResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerSetupResponse, httptest.NewRequest(http.MethodPost, "/api/auth/owner/setup", bytes.NewReader(ownerSetupBody)))
+	if ownerSetupResponse.Code != http.StatusOK {
+		t.Fatalf("owner setup status=%d body=%s", ownerSetupResponse.Code, ownerSetupResponse.Body.String())
+	}
+	ownerCookies := ownerSetupResponse.Result().Cookies()
+	if len(ownerCookies) != 1 {
+		t.Fatalf("owner cookies=%#v", ownerCookies)
+	}
+	ownerCookie := ownerCookies[0]
+
+	deploymentSecretRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
+	deploymentSecretRequest.Header.Set("x-agentbox-admin-key", "deployment-secret")
+	deploymentSecretResponse := httptest.NewRecorder()
+	server.ServeHTTP(deploymentSecretResponse, deploymentSecretRequest)
+	if deploymentSecretResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("deployment secret accessed owner users: status=%d body=%s", deploymentSecretResponse.Code, deploymentSecretResponse.Body.String())
+	}
+
+	createInvitationRequest := httptest.NewRequest(http.MethodPost, "/api/owner/invitations", strings.NewReader(`{"expires_in_minutes":120}`))
+	createInvitationRequest.AddCookie(ownerCookie)
+	createInvitationResponse := httptest.NewRecorder()
+	server.ServeHTTP(createInvitationResponse, createInvitationRequest)
+	if createInvitationResponse.Code != http.StatusCreated {
+		t.Fatalf("create invitation status=%d body=%s", createInvitationResponse.Code, createInvitationResponse.Body.String())
+	}
+	var invitationPayload struct {
+		Invitation types.SignupInvitation `json:"invitation"`
+		Token      string                 `json:"token"`
+		SignupURL  string                 `json:"signup_url"`
+	}
+	if err := json.Unmarshal(createInvitationResponse.Body.Bytes(), &invitationPayload); err != nil {
+		t.Fatal(err)
+	}
+	if invitationPayload.Invitation.ID == "" || !strings.HasPrefix(invitationPayload.Token, "aginv_") || !strings.HasPrefix(invitationPayload.SignupURL, "https://agentbox.example/signup?token=") {
+		t.Fatalf("invitation payload=%#v", invitationPayload)
+	}
+
+	inspectBody, _ := json.Marshal(map[string]string{"token": invitationPayload.Token})
+	inspectResponse := httptest.NewRecorder()
+	server.ServeHTTP(inspectResponse, httptest.NewRequest(http.MethodPost, "/api/auth/invitations/inspect", bytes.NewReader(inspectBody)))
+	if inspectResponse.Code != http.StatusOK || !strings.Contains(inspectResponse.Body.String(), `"valid":true`) {
+		t.Fatalf("inspect status=%d body=%s", inspectResponse.Code, inspectResponse.Body.String())
+	}
+
+	registerBody, _ := json.Marshal(map[string]string{
+		"token":        invitationPayload.Token,
+		"email":        "member@example.com",
+		"display_name": "Member",
+		"password":     "member-password",
+	})
+	registerResponse := httptest.NewRecorder()
+	server.ServeHTTP(registerResponse, httptest.NewRequest(http.MethodPost, "/api/auth/invitations/register", bytes.NewReader(registerBody)))
+	if registerResponse.Code != http.StatusCreated || !strings.Contains(registerResponse.Body.String(), `"redirect":"/onboarding"`) {
+		t.Fatalf("register status=%d body=%s", registerResponse.Code, registerResponse.Body.String())
+	}
+	memberCookies := registerResponse.Result().Cookies()
+	if len(memberCookies) != 1 {
+		t.Fatalf("member cookies=%#v", memberCookies)
+	}
+	var registrationPayload struct {
+		User types.User `json:"user"`
+	}
+	if err := json.Unmarshal(registerResponse.Body.Bytes(), &registrationPayload); err != nil {
+		t.Fatal(err)
+	}
+	memberID := registrationPayload.User.ID
+	if memberID == "" || registrationPayload.User.IsOwner {
+		t.Fatalf("registered user=%#v", registrationPayload.User)
+	}
+
+	memberOwnerRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
+	memberOwnerRequest.AddCookie(memberCookies[0])
+	memberOwnerResponse := httptest.NewRecorder()
+	server.ServeHTTP(memberOwnerResponse, memberOwnerRequest)
+	if memberOwnerResponse.Code != http.StatusForbidden || !strings.Contains(memberOwnerResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("member owner access status=%d body=%s", memberOwnerResponse.Code, memberOwnerResponse.Body.String())
+	}
+
+	createOwnerKeyRequest := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(`{"name":"owner-api"}`))
+	createOwnerKeyRequest.AddCookie(ownerCookie)
+	createOwnerKeyResponse := httptest.NewRecorder()
+	server.ServeHTTP(createOwnerKeyResponse, createOwnerKeyRequest)
+	if createOwnerKeyResponse.Code != http.StatusCreated {
+		t.Fatalf("create owner key status=%d body=%s", createOwnerKeyResponse.Code, createOwnerKeyResponse.Body.String())
+	}
+	var ownerKeyPayload struct {
+		Key struct {
+			Secret string `json:"key"`
+		} `json:"key"`
+	}
+	if err := json.Unmarshal(createOwnerKeyResponse.Body.Bytes(), &ownerKeyPayload); err != nil {
+		t.Fatal(err)
+	}
+	ownerKeyRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
+	ownerKeyRequest.Header.Set("authorization", "Bearer "+ownerKeyPayload.Key.Secret)
+	ownerKeyResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerKeyResponse, ownerKeyRequest)
+	if ownerKeyResponse.Code != http.StatusForbidden || !strings.Contains(ownerKeyResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner key owner access status=%d body=%s", ownerKeyResponse.Code, ownerKeyResponse.Body.String())
+	}
+
+	listUsersRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
+	listUsersRequest.AddCookie(ownerCookie)
+	listUsersResponse := httptest.NewRecorder()
+	server.ServeHTTP(listUsersResponse, listUsersRequest)
+	if listUsersResponse.Code != http.StatusOK || !strings.Contains(listUsersResponse.Body.String(), `"email":"member@example.com"`) {
+		t.Fatalf("list users status=%d body=%s", listUsersResponse.Code, listUsersResponse.Body.String())
+	}
+
+	disableRequest := httptest.NewRequest(http.MethodPost, "/api/owner/users/"+memberID+"/disable", nil)
+	disableRequest.AddCookie(ownerCookie)
+	disableResponse := httptest.NewRecorder()
+	server.ServeHTTP(disableResponse, disableRequest)
+	if disableResponse.Code != http.StatusOK || !strings.Contains(disableResponse.Body.String(), `"disabled_at":`) {
+		t.Fatalf("disable status=%d body=%s", disableResponse.Code, disableResponse.Body.String())
+	}
+	memberMeRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	memberMeRequest.AddCookie(memberCookies[0])
+	memberMeResponse := httptest.NewRecorder()
+	server.ServeHTTP(memberMeResponse, memberMeRequest)
+	if memberMeResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled member session status=%d body=%s", memberMeResponse.Code, memberMeResponse.Body.String())
+	}
+
+	enableRequest := httptest.NewRequest(http.MethodPost, "/api/owner/users/"+memberID+"/enable", nil)
+	enableRequest.AddCookie(ownerCookie)
+	enableResponse := httptest.NewRecorder()
+	server.ServeHTTP(enableResponse, enableRequest)
+	if enableResponse.Code != http.StatusOK || strings.Contains(enableResponse.Body.String(), `"disabled_at":`) {
+		t.Fatalf("enable status=%d body=%s", enableResponse.Code, enableResponse.Body.String())
+	}
+
+	unusedRequest := httptest.NewRequest(http.MethodPost, "/api/owner/invitations", nil)
+	unusedRequest.AddCookie(ownerCookie)
+	unusedResponse := httptest.NewRecorder()
+	server.ServeHTTP(unusedResponse, unusedRequest)
+	if unusedResponse.Code != http.StatusCreated {
+		t.Fatalf("unused invitation status=%d body=%s", unusedResponse.Code, unusedResponse.Body.String())
+	}
+	var unusedPayload struct {
+		Invitation types.SignupInvitation `json:"invitation"`
+		Token      string                 `json:"token"`
+	}
+	if err := json.Unmarshal(unusedResponse.Body.Bytes(), &unusedPayload); err != nil {
+		t.Fatal(err)
+	}
+	revokeRequest := httptest.NewRequest(http.MethodDelete, "/api/owner/invitations/"+unusedPayload.Invitation.ID, nil)
+	revokeRequest.AddCookie(ownerCookie)
+	revokeResponse := httptest.NewRecorder()
+	server.ServeHTTP(revokeResponse, revokeRequest)
+	if revokeResponse.Code != http.StatusOK {
+		t.Fatalf("revoke status=%d body=%s", revokeResponse.Code, revokeResponse.Body.String())
+	}
+	revokedInspectBody, _ := json.Marshal(map[string]string{"token": unusedPayload.Token})
+	revokedInspectResponse := httptest.NewRecorder()
+	server.ServeHTTP(revokedInspectResponse, httptest.NewRequest(http.MethodPost, "/api/auth/invitations/inspect", bytes.NewReader(revokedInspectBody)))
+	if revokedInspectResponse.Code != http.StatusBadRequest || !strings.Contains(revokedInspectResponse.Body.String(), "INVALID_INVITATION") {
+		t.Fatalf("revoked inspect status=%d body=%s", revokedInspectResponse.Code, revokedInspectResponse.Body.String())
+	}
+}
+
 func TestAdminTenantProvisioningAuthorizationAndIdempotency(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})

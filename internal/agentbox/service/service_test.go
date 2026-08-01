@@ -141,6 +141,113 @@ func TestOwnerSetupTokenTTLIsBounded(t *testing.T) {
 	}
 }
 
+func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
+	ownerPasswordHash, err := authpkg.HashPassword("owner-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+		Users: []types.User{{
+			ID:           "usr_owner",
+			TenantID:     types.DefaultTenantID,
+			Email:        "owner@example.com",
+			DisplayName:  "Owner",
+			PasswordHash: &ownerPasswordHash,
+			Role:         "admin",
+			IsOwner:      true,
+		}},
+	}
+	svc := New(repo, &assets.FakeStore{})
+	ownerAuth, _, err := svc.Login(context.Background(), "ignored", "owner@example.com", "owner-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invitationResult, err := svc.CreateSignupInvitation(context.Background(), ownerAuth, 2*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitationResult.Invitation.CreatedByUserID != ownerAuth.UserID || !strings.HasPrefix(invitationResult.Token, "aginv_") {
+		t.Fatalf("unexpected invitation: %#v", invitationResult)
+	}
+	inspection, err := svc.InspectSignupInvitation(context.Background(), invitationResult.Token)
+	if err != nil || !inspection.Valid || inspection.ExpiresAt == "" {
+		t.Fatalf("inspection=%#v err=%v", inspection, err)
+	}
+
+	memberAuth, memberSessionSecret, member, err := svc.RegisterWithSignupInvitation(context.Background(), invitationResult.Token, "member@example.com", "Member", "member-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if member.ID == "" || member.IsOwner || member.Role != "member" || memberAuth.UserID != member.ID || memberSessionSecret == "" {
+		t.Fatalf("unexpected registration: auth=%#v user=%#v", memberAuth, member)
+	}
+	if _, err := svc.InspectSignupInvitation(context.Background(), invitationResult.Token); !hasCodedError(err, "INVALID_INVITATION") {
+		t.Fatalf("consumed invitation inspection error=%v", err)
+	}
+	if _, _, _, err := svc.RegisterWithSignupInvitation(context.Background(), invitationResult.Token, "other@example.com", "Other", "password"); !hasCodedError(err, "INVALID_INVITATION") {
+		t.Fatalf("invitation replay error=%v", err)
+	}
+
+	duplicate, err := svc.CreateSignupInvitation(context.Background(), ownerAuth, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := svc.RegisterWithSignupInvitation(context.Background(), duplicate.Token, "OWNER@example.com", "Duplicate", "password"); !hasCodedError(err, "REGISTRATION_UNAVAILABLE") {
+		t.Fatalf("duplicate registration error=%v", err)
+	}
+	if inspection, err := svc.InspectSignupInvitation(context.Background(), duplicate.Token); err != nil || !inspection.Valid {
+		t.Fatalf("duplicate registration consumed invitation: inspection=%#v err=%v", inspection, err)
+	}
+	if err := svc.RevokeSignupInvitation(context.Background(), ownerAuth, duplicate.Invitation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.InspectSignupInvitation(context.Background(), duplicate.Token); !hasCodedError(err, "INVALID_INVITATION") {
+		t.Fatalf("revoked invitation inspection error=%v", err)
+	}
+
+	memberKey, err := svc.CreateAPIKey(context.Background(), memberAuth, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateSignupInvitation(context.Background(), memberAuth, time.Hour); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("member created invitation: %v", err)
+	}
+	ownerKey, err := svc.CreateAPIKey(context.Background(), ownerAuth, "owner-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKeyAuth, err := svc.AuthenticateAPIKey(context.Background(), ownerKey.Key)
+	if err != nil || ownerKeyAuth == nil {
+		t.Fatalf("owner key auth=%#v err=%v", ownerKeyAuth, err)
+	}
+	if _, err := svc.ListUsers(context.Background(), *ownerKeyAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner API key listed users: %v", err)
+	}
+
+	disabledMember, err := svc.SetUserDisabled(context.Background(), ownerAuth, member.ID, true)
+	if err != nil || disabledMember.DisabledAt == nil {
+		t.Fatalf("disable member=%#v err=%v", disabledMember, err)
+	}
+	if authenticated, err := svc.AuthenticateSession(context.Background(), memberSessionSecret); err != nil || authenticated != nil {
+		t.Fatalf("disabled member session auth=%#v err=%v", authenticated, err)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(context.Background(), memberKey.Key); err != nil || authenticated != nil {
+		t.Fatalf("disabled member key auth=%#v err=%v", authenticated, err)
+	}
+	if _, err := svc.SetUserDisabled(context.Background(), ownerAuth, ownerAuth.UserID, true); !hasCodedError(err, "OWNER_IMMUTABLE") {
+		t.Fatalf("owner disable error=%v", err)
+	}
+	enabledMember, err := svc.SetUserDisabled(context.Background(), ownerAuth, member.ID, false)
+	if err != nil || enabledMember.DisabledAt != nil {
+		t.Fatalf("enable member=%#v err=%v", enabledMember, err)
+	}
+	if _, _, err := svc.Login(context.Background(), "ignored", "member@example.com", "member-password"); err != nil {
+		t.Fatalf("enabled member could not log in: %v", err)
+	}
+}
+
 func hasCodedError(err error, code string) bool {
 	var coded CodedError
 	return errors.As(err, &coded) && coded.Code == code

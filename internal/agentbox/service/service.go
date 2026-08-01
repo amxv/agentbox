@@ -52,6 +52,13 @@ type Repository interface {
 	ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error)
 	CreateOwnerSetupToken(ctx context.Context, tokenHash string, expiresAt time.Time) (types.OwnerSetupToken, error)
 	UseOwnerSetupToken(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error)
+	CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error)
+	ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error)
+	RevokeSignupInvitation(ctx context.Context, invitationID string) (bool, error)
+	FindSignupInvitation(ctx context.Context, tokenHash string) (*types.SignupInvitation, error)
+	RegisterWithSignupInvitation(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string, sessionSecretHash string, sessionExpiresAt time.Time) (types.User, types.UserSession, types.SignupInvitation, error)
+	ListUsers(ctx context.Context) ([]types.User, error)
+	SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error)
 }
 
 type Service struct {
@@ -466,6 +473,16 @@ type OwnerSetupTokenResult struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+type SignupInvitationTokenResult struct {
+	Invitation types.SignupInvitation `json:"invitation"`
+	Token      string                 `json:"token"`
+}
+
+type SignupInvitationInspection struct {
+	Valid     bool   `json:"valid"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
 type ProvisionUserParams struct {
 	TenantIDOrSlug string
 	Email          string
@@ -573,6 +590,134 @@ func (s *Service) CompleteOwnerSetup(ctx context.Context, token string, email st
 		return types.AuthContext{}, "", types.User{}, err
 	}
 	return authContext, sessionSecret, owner, nil
+}
+
+func (s *Service) CreateSignupInvitation(ctx context.Context, authContext types.AuthContext, ttl time.Duration) (SignupInvitationTokenResult, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return SignupInvitationTokenResult{}, err
+	}
+	if ttl <= 0 {
+		ttl = 7 * 24 * time.Hour
+	}
+	secret, err := generateSignupInvitationToken()
+	if err != nil {
+		return SignupInvitationTokenResult{}, err
+	}
+	invitation, err := s.repo.CreateSignupInvitation(ctx, authContext.UserID, hashSecret(secret), time.Now().UTC().Add(ttl))
+	if err != nil {
+		return SignupInvitationTokenResult{}, err
+	}
+	return SignupInvitationTokenResult{Invitation: invitation, Token: secret}, nil
+}
+
+func (s *Service) ListSignupInvitations(ctx context.Context, authContext types.AuthContext) ([]types.SignupInvitation, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return nil, err
+	}
+	return s.repo.ListSignupInvitations(ctx)
+}
+
+func (s *Service) RevokeSignupInvitation(ctx context.Context, authContext types.AuthContext, invitationID string) error {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return err
+	}
+	invitationID = strings.TrimSpace(invitationID)
+	if invitationID == "" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "invitation_id is required."}
+	}
+	revoked, err := s.repo.RevokeSignupInvitation(ctx, invitationID)
+	if err != nil {
+		return err
+	}
+	if !revoked {
+		return CodedError{Code: "INVITATION_NOT_FOUND", Message: "Active invitation not found."}
+	}
+	return nil
+}
+
+func (s *Service) InspectSignupInvitation(ctx context.Context, token string) (SignupInvitationInspection, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return SignupInvitationInspection{}, CodedError{Code: "INVALID_INVITATION", Message: "Invitation is invalid, expired, revoked, or already used."}
+	}
+	invitation, err := s.repo.FindSignupInvitation(ctx, hashSecret(token))
+	if err != nil {
+		return SignupInvitationInspection{}, err
+	}
+	if invitation == nil {
+		return SignupInvitationInspection{}, CodedError{Code: "INVALID_INVITATION", Message: "Invitation is invalid, expired, revoked, or already used."}
+	}
+	return SignupInvitationInspection{Valid: true, ExpiresAt: invitation.ExpiresAt}, nil
+}
+
+func (s *Service) RegisterWithSignupInvitation(ctx context.Context, token string, email string, displayName string, password string) (types.AuthContext, string, types.User, error) {
+	token = strings.TrimSpace(token)
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if token == "" || email == "" || displayName == "" || password == "" {
+		return types.AuthContext{}, "", types.User{}, CodedError{Code: "INVALID_ARGUMENT", Message: "token, email, display_name, and password are required."}
+	}
+	passwordHash, err := auth.HashPassword(password)
+	if err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	}
+	sessionSecret, err := generateSessionSecret()
+	if err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	}
+	user, session, _, err := s.repo.RegisterWithSignupInvitation(
+		ctx,
+		hashSecret(token),
+		email,
+		displayName,
+		passwordHash,
+		hashSecret(sessionSecret),
+		time.Now().UTC().Add(s.cfg.SessionTTL),
+	)
+	if errors.Is(err, types.ErrSignupInvitationInvalid) {
+		return types.AuthContext{}, "", types.User{}, CodedError{Code: "INVALID_INVITATION", Message: "Invitation is invalid, expired, revoked, or already used.", Err: err}
+	}
+	if errors.Is(err, types.ErrEmailAlreadyRegistered) {
+		return types.AuthContext{}, "", types.User{}, CodedError{Code: "REGISTRATION_UNAVAILABLE", Message: "Registration could not be completed with those details.", Err: err}
+	}
+	if err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	}
+	authContext := authContextForUserSession(session, user)
+	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	} else if tenant != nil {
+		authContext.TenantSlug = tenant.Slug
+	}
+	return authContext, sessionSecret, user, nil
+}
+
+func (s *Service) ListUsers(ctx context.Context, authContext types.AuthContext) ([]types.User, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return nil, err
+	}
+	return s.repo.ListUsers(ctx)
+}
+
+func (s *Service) SetUserDisabled(ctx context.Context, authContext types.AuthContext, userID string, disabled bool) (types.User, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.User{}, err
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return types.User{}, CodedError{Code: "INVALID_ARGUMENT", Message: "user_id is required."}
+	}
+	user, err := s.repo.SetUserDisabled(ctx, userID, disabled)
+	if errors.Is(err, types.ErrUserNotFound) {
+		return types.User{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: err}
+	}
+	if errors.Is(err, types.ErrOwnerCannotBeDisabled) {
+		return types.User{}, CodedError{Code: "OWNER_IMMUTABLE", Message: "The permanent deployment owner cannot be disabled.", Err: err}
+	}
+	if err != nil {
+		return types.User{}, err
+	}
+	return user, nil
 }
 
 func (s *Service) ProvisionUser(ctx context.Context, params ProvisionUserParams) (types.User, string, error) {
@@ -905,6 +1050,14 @@ func generateOwnerSetupToken() (string, error) {
 	return "agos_" + base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
+func generateSignupInvitationToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return "aginv_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
 func generateSetupToken() (string, error) {
 	bytes := make([]byte, 24)
 	if _, err := rand.Read(bytes); err != nil {
@@ -1006,6 +1159,13 @@ func requireAuthContext(auth types.AuthContext) error {
 func requireUserAuthContext(auth types.AuthContext) error {
 	if strings.TrimSpace(auth.UserID) == "" || strings.TrimSpace(auth.ActorName) == "" {
 		return CodedError{Code: "PERMISSION_DENIED", Message: "Authenticated user context is required."}
+	}
+	return nil
+}
+
+func requireOwnerBrowser(auth types.AuthContext) error {
+	if auth.SubjectType != types.AuthSubjectUserSession || !auth.IsOwner || strings.TrimSpace(auth.UserID) == "" || strings.TrimSpace(auth.SessionID) == "" {
+		return CodedError{Code: "OWNER_BROWSER_REQUIRED", Message: "A permanent-owner browser session is required."}
 	}
 	return nil
 }

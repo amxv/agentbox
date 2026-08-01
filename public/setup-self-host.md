@@ -91,6 +91,22 @@ same owner email; it does not create a replacement owner.
 The deployment secret is never included in the browser URL. Only a hashed,
 expiring, single-use setup token is stored. See `docs/owner-setup.md`.
 
+## 7. Invite users
+
+After creating the permanent owner, open:
+
+```text
+https://YOUR-DASHBOARD.vercel.app/owner/users
+```
+
+Create an expiring one-time signup link and send it through a private channel.
+New users start with zero team memberships. The owner page also lists users and
+can disable or re-enable non-owner accounts. Disablement immediately revokes
+browser sessions, API credentials, and pending CLI login codes without deleting
+historical content or attribution.
+
+See `docs/user-invitations.md` for the transactional and authorization guarantees.
+
 ## 7. Deploy the human dashboard
 
 ```bash

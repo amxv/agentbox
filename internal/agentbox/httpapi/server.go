@@ -44,6 +44,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.health)
 	s.mux.HandleFunc("/api/auth/login", s.authLogin)
 	s.mux.HandleFunc("/api/auth/owner/setup", s.authOwnerSetup)
+	s.mux.HandleFunc("/api/auth/invitations/inspect", s.authInvitationInspect)
+	s.mux.HandleFunc("/api/auth/invitations/register", s.authInvitationRegister)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
 	s.mux.HandleFunc("/api/me", s.authMe)
@@ -54,6 +56,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
 	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
 	s.mux.HandleFunc("/api/admin/owner/setup-token", s.adminOwnerSetupToken)
+	s.mux.HandleFunc("/api/owner/invitations", s.ownerInvitations)
+	s.mux.HandleFunc("/api/owner/invitations/", s.ownerInvitation)
+	s.mux.HandleFunc("/api/owner/users", s.ownerUsers)
+	s.mux.HandleFunc("/api/owner/users/", s.ownerUserAction)
 	s.mux.HandleFunc("/api/keys", s.keys)
 	s.mux.HandleFunc("/api/keys/", s.key)
 	s.mux.HandleFunc("/api/threads", s.threads)
@@ -62,6 +68,166 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/viewer/threads", s.viewerThreads)
 	s.mux.HandleFunc("/api/viewer/threads/", s.viewerThread)
 	s.mux.Handle("/api/mcp", s.mcpHandler())
+}
+
+func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		invitations, err := s.service.ListSignupInvitations(r.Context(), *authContext)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"invitations": invitations})
+	case http.MethodPost:
+		var input struct {
+			ExpiresInMinutes int `json:"expires_in_minutes"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			if err := parseJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if input.ExpiresInMinutes < 0 {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "expires_in_minutes must not be negative.")
+			return
+		}
+		result, err := s.service.CreateSignupInvitation(r.Context(), *authContext, time.Duration(input.ExpiresInMinutes)*time.Minute)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		signupURL := "/signup?token=" + url.QueryEscape(result.Token)
+		if s.cfg.AppPublicURL != "" {
+			signupURL = strings.TrimRight(s.cfg.AppPublicURL, "/") + signupURL
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"invitation": result.Invitation,
+			"token":      result.Token,
+			"signup_url": signupURL,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) ownerInvitation(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	invitationID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/invitations/"), "/")
+	if invitationID == "" || strings.Contains(invitationID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodDelete) {
+		return
+	}
+	if err := s.service.RevokeSignupInvitation(r.Context(), *authContext, invitationID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": invitationID})
+}
+
+func (s *Server) ownerUsers(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	users, err := s.service.ListUsers(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+func (s *Server) ownerUserAction(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/users/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	disabled := false
+	switch parts[1] {
+	case "disable":
+		disabled = true
+	case "enable":
+		disabled = false
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	user, err := s.service.SetUserDisabled(r.Context(), *authContext, parts[0], disabled)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func (s *Server) authInvitationInspect(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Token string `json:"token"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	inspection, err := s.service.InspectSignupInvitation(r.Context(), input.Token)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, inspection)
+}
+
+func (s *Server) authInvitationRegister(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Token       string `json:"token"`
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authContext, sessionSecret, user, err := s.service.RegisterWithSignupInvitation(r.Context(), input.Token, input.Email, input.DisplayName, input.Password)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	s.setSessionCookie(w, sessionSecret)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"auth":     authContext,
+		"user":     user,
+		"redirect": "/onboarding",
+	})
 }
 
 func (s *Server) adminOwnerSetupToken(w http.ResponseWriter, r *http.Request) {

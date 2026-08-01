@@ -13,6 +13,7 @@ import (
 	"agentbox/internal/agentbox/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -638,6 +639,217 @@ returning id, tenant_id, email, display_name, password_hash, role, is_owner, cre
 `, "usr_"+uuid.NewString(), types.DefaultTenantID, email, displayName, passwordHash))
 }
 
+func (r *Repository) CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time) (types.SignupInvitation, error) {
+	if strings.TrimSpace(createdByUserID) == "" || strings.TrimSpace(tokenHash) == "" || !expiresAt.After(time.Now().UTC()) {
+		return types.SignupInvitation{}, errors.New("invitation creator, token hash, and future expiry are required")
+	}
+	return scanSignupInvitation(r.pool.QueryRow(ctx, `
+insert into signup_invitations (id, token_hash, created_by_user_id, expires_at)
+values ($1, $2, $3, $4)
+returning id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
+`, "inv_"+uuid.NewString(), tokenHash, createdByUserID, expiresAt))
+}
+
+func (r *Repository) ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error) {
+	rows, err := r.pool.Query(ctx, `
+select id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
+from signup_invitations
+order by created_at desc, id desc
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	invitations := []types.SignupInvitation{}
+	for rows.Next() {
+		invitation, err := scanSignupInvitation(rows)
+		if err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, invitation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return invitations, nil
+}
+
+func (r *Repository) RevokeSignupInvitation(ctx context.Context, invitationID string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+update signup_invitations
+set revoked_at = now()
+where id = $1 and consumed_at is null and revoked_at is null
+`, strings.TrimSpace(invitationID))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) FindSignupInvitation(ctx context.Context, tokenHash string) (*types.SignupInvitation, error) {
+	invitation, err := scanSignupInvitation(r.pool.QueryRow(ctx, `
+select id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
+from signup_invitations
+where token_hash = $1
+  and consumed_at is null
+  and revoked_at is null
+  and expires_at > now()
+`, strings.TrimSpace(tokenHash)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &invitation, nil
+}
+
+func (r *Repository) RegisterWithSignupInvitation(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string, sessionSecretHash string, sessionExpiresAt time.Time) (types.User, types.UserSession, types.SignupInvitation, error) {
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if tokenHash == "" || email == "" || displayName == "" || passwordHash == "" || sessionSecretHash == "" || !sessionExpiresAt.After(time.Now().UTC()) {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, types.ErrSignupInvitationInvalid
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	invitation, err := scanSignupInvitation(tx.QueryRow(ctx, `
+select id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
+from signup_invitations
+where token_hash = $1
+  and consumed_at is null
+  and revoked_at is null
+  and expires_at > now()
+for update
+`, tokenHash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, types.ErrSignupInvitationInvalid
+	}
+	if err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+
+	user, err := scanUser(tx.QueryRow(ctx, `
+insert into users (id, tenant_id, email, display_name, password_hash, role, is_owner)
+values ($1, $2, $3, $4, $5, 'member', false)
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+`, "usr_"+uuid.NewString(), types.DefaultTenantID, email, displayName, passwordHash))
+	if err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+			return types.User{}, types.UserSession{}, types.SignupInvitation{}, types.ErrEmailAlreadyRegistered
+		}
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+
+	session, err := scanUserSession(tx.QueryRow(ctx, `
+insert into user_sessions (id, user_id, secret_hash, expires_at)
+values ($1, $2, $3, $4)
+returning id, user_id, secret_hash, created_at, last_used_at, expires_at, revoked_at
+`, "sess_"+uuid.NewString(), user.ID, sessionSecretHash, sessionExpiresAt))
+	if err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+
+	invitation, err = scanSignupInvitation(tx.QueryRow(ctx, `
+update signup_invitations
+set consumed_at = now(), consumed_by_user_id = $1
+where id = $2
+returning id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
+`, user.ID, invitation.ID))
+	if err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.User{}, types.UserSession{}, types.SignupInvitation{}, err
+	}
+	return user, session, invitation, nil
+}
+
+func (r *Repository) ListUsers(ctx context.Context) ([]types.User, error) {
+	rows, err := r.pool.Query(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+from users
+order by is_owner desc, created_at asc, id asc
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []types.User{}
+	for rows.Next() {
+		user, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func (r *Repository) SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.User{}, err
+	}
+	defer tx.Rollback(ctx)
+	user, err := scanUser(tx.QueryRow(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+from users
+where id = $1
+for update
+`, strings.TrimSpace(userID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.User{}, types.ErrUserNotFound
+	}
+	if err != nil {
+		return types.User{}, err
+	}
+	if disabled && user.IsOwner {
+		return types.User{}, types.ErrOwnerCannotBeDisabled
+	}
+	if disabled {
+		user, err = scanUser(tx.QueryRow(ctx, `
+update users
+set disabled_at = coalesce(disabled_at, now()), updated_at = now()
+where id = $1
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+`, user.ID))
+		if err != nil {
+			return types.User{}, err
+		}
+		if _, err := tx.Exec(ctx, `update user_sessions set revoked_at = coalesce(revoked_at, now()) where user_id = $1`, user.ID); err != nil {
+			return types.User{}, err
+		}
+		if _, err := tx.Exec(ctx, `update api_keys set revoked_at = coalesce(revoked_at, now()), updated_at = now() where user_id = $1`, user.ID); err != nil {
+			return types.User{}, err
+		}
+		if _, err := tx.Exec(ctx, `update cli_login_codes set consumed_at = coalesce(consumed_at, now()) where user_id = $1`, user.ID); err != nil {
+			return types.User{}, err
+		}
+	} else {
+		user, err = scanUser(tx.QueryRow(ctx, `
+update users
+set disabled_at = null, updated_at = now()
+where id = $1
+returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
+`, user.ID))
+		if err != nil {
+			return types.User{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.User{}, err
+	}
+	return user, nil
+}
+
 func (r *Repository) UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
 	row := r.pool.QueryRow(ctx, `
 insert into users (id, tenant_id, email, display_name, password_hash, role)
@@ -1078,6 +1290,34 @@ func scanOwnerSetupToken(row threadScanner) (types.OwnerSetupToken, error) {
 		token.RevokedAt = &value
 	}
 	return token, err
+}
+
+func scanSignupInvitation(row threadScanner) (types.SignupInvitation, error) {
+	var createdAt time.Time
+	var expiresAt time.Time
+	var consumedAt *time.Time
+	var revokedAt *time.Time
+	invitation := types.SignupInvitation{}
+	err := row.Scan(
+		&invitation.ID,
+		&invitation.CreatedByUserID,
+		&createdAt,
+		&expiresAt,
+		&consumedAt,
+		&invitation.ConsumedByUserID,
+		&revokedAt,
+	)
+	invitation.CreatedAt = isoMillis(createdAt)
+	invitation.ExpiresAt = isoMillis(expiresAt)
+	if consumedAt != nil {
+		value := isoMillis(*consumedAt)
+		invitation.ConsumedAt = &value
+	}
+	if revokedAt != nil {
+		value := isoMillis(*revokedAt)
+		invitation.RevokedAt = &value
+	}
+	return invitation, err
 }
 
 func hashSecret(value string) string {

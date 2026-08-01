@@ -38,7 +38,7 @@ export function OwnerSetupView() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      router.replace("/threads");
+      router.replace("/owner/users");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
