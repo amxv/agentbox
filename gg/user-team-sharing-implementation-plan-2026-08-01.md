@@ -360,19 +360,19 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 | Phase | Status | Last commit | Evidence / remaining work |
 |---|---|---|---|
 | 1. Canonical migrations and backup workflow | Code complete | `bfb78c6` | Canonical migrations plus the PostgreSQL/R2 backup preflight, manifest, recovery-copy workflow, fakes, CI integration, and runbook are implemented. Real production backup, restore verification, and count evidence remain reserved for the credentialed local cutover. |
-| 2. Deployment-global users and credentials | Code complete | `55ef9c1` | Deployment-global login, permanent owner, invitation-backed users, user-owned credentials/sessions/codes, actor attribution, disablement revocation, and owner recovery are implemented. Tenant selectors and deployment-secret tenant provisioning are retired; remaining tenant columns are temporary content-migration scaffolding for Phase 3. |
-| 3. User-owned private thread access | Pending | — | No implementation started. |
-| 4. Invitations and zero-team registration | Pending | — | No implementation started. |
+| 2. Deployment-global users and credentials | Code complete | `44c1cd2` | Permanent-owner bootstrap/recovery, deployment-global login, user-owned credentials/sessions/CLI codes, actor attribution, disablement invalidation, and tenant-free browser/CLI/profile contracts are implemented. Remaining tenant fields are internal content-migration scaffolding for Phases 3 and 14, not an account or authorization selector. |
+| 3. User-owned private thread access | Pending | — | No implementation started. This is the exact next code-bearing phase. |
+| 4. Invitations and zero-team registration | Code complete | `55ef9c1` | Hashed, expiring, revocable, single-use invitations; atomic zero-team registration; browser-session creation; signup and owner user/invitation pages; and onboarding redirect are implemented. Initial team assignment is intentionally deferred to Phase 5. |
 | 5. Owner-managed teams and memberships | Pending | — | No implementation started. |
-| 6. Onboarding and connector setup | Pending | — | No implementation started. |
+| 6. Onboarding and connector setup | Pending | — | Only the post-registration `/onboarding` placeholder exists. The three resumable ChatGPT, Claude, and local setup cards and completion state are not implemented. |
 | 7. Team sharing and effective access | Pending | — | No implementation started. |
 | 8. Public sharing and public page | Pending | — | No implementation started. |
 | 9. MCP and CLI visibility operation | Pending | — | No implementation started. |
 | 10. Unified inbox and attribution UX | Pending | — | No implementation started. |
-| 11. Owner user and credential administration | Pending | — | No implementation started. |
+| 11. Owner user and credential administration | In progress | `55ef9c1` | Owner-browser user listing plus disable/enable are implemented. Disablement transactionally revokes active browser sessions, user credentials, and pending CLI login codes. Owner-wide credential metadata/forced revoke and team-membership deactivation remain. |
 | 12. Disabled-user attachment purge | Pending | — | No implementation started. |
 | 13. Owner-only web content viewer | Pending | — | No implementation started. |
-| 14. Final code cutover and tenant removal | Pending | — | Zodex implementation phase; finish all code and remove the tenant path. |
+| 14. Final code cutover and tenant removal | Pending | `44c1cd2` | Tenant account selectors, tenant provisioning routes/CLI commands, and tenant profile fields were removed early in Phase 2. Content-table tenant columns, internal routing fields, obsolete compatibility configuration, and final migration cleanup remain. |
 | 15. Credentialed production cutover | Reserved for local agent | — | Start only after Phases 1-14 are complete and pushed. |
 
 ### Checkpoint log
@@ -428,6 +428,23 @@ YYYY-MM-DD — Phase N / short slice name
 - Validation: `go test ./...`, `go vet ./...`, `bun run build:api`, `bun run build:cli`, `bun run typecheck`, `bun run lint`, `bun run build`, and `git diff --check` passed. The production Next.js build includes `/owner/setup` and `/api/auth/owner/setup`. Service, HTTP, CLI, and memory tests prove token replacement, replay/expiry rejection, same-email recovery, password replacement, no deployment-secret leakage, owner/API-key non-issuance, and one-time browser-session creation. PostgreSQL setup-token/hash/rollback tests were discovered and skipped locally because Zodex has no `TEST_DATABASE_URL`; they will run in the configured PostgreSQL CI job.
 - Remaining: Implement invitation-backed deployment-global user creation and owner-managed user listing/disable/enable; revoke or invalidate live sessions/credentials on disablement through all surfaces; remove tenant selection and metadata from browser and CLI login/profile/provisioning contracts; and replace the remaining legacy tenant administration path. Production must set the Go backend's `APP_PUBLIC_URL` to the dashboard origin and issue the real first-owner token from a trusted credentialed operator shell.
 - Next: Implement invitation-backed deployment-global user lifecycle: hashed expiring single-use invitation tokens, owner-browser-only invitation/list/disable/enable endpoints, invitation acceptance with password setup and browser-session creation, disabled-user invalidation, and tests proving the deployment secret and API keys cannot exercise owner user-management operations.
+
+
+2026-08-01 — Phase 4 / invitation-backed zero-team registration and user lifecycle
+- Status: Code complete
+- Commit: `55ef9c1`
+- Implemented: Added canonical hashed signup invitations with random one-time secrets, owner-selected expiry, revocation, safe public inspection, and row-lock-serialized single-use redemption. Registration atomically creates one deployment-global user and one browser session, consumes the invitation, rejects expired/revoked/replayed tokens without account disclosure, and rolls back cleanly for duplicate email. Added owner-browser-only invitation create/list/revoke and user list/disable/enable APIs, `/signup`, `/owner/users`, same-origin proxy routes, and the post-registration `/onboarding` destination. New users start with zero teams. Disablement preserves the user and content while revoking sessions, API credentials, and pending CLI login codes; the permanent owner cannot be disabled.
+- Validation: `go test ./...`, `go vet ./...`, `bun run build:api`, `bun run build:cli`, `bun run typecheck`, `bun run lint`, `bun run build`, and `git diff --check` passed. Service and HTTP tests prove owner-browser-only administration, deployment-secret and owner-API-key denial, generic invalid invitation behavior, duplicate-email rollback, single-use registration, immediate session/key invalidation, owner immutability, and re-enable behavior. PostgreSQL tests cover transactional registration, concurrent double redemption with exactly one success, duplicate-email rollback, and disablement revocation; they are enabled in CI and skipped on Zodex when `TEST_DATABASE_URL` is absent.
+- Remaining: No Phase 4 code-bearing work. Phase 5 must extend the same invitation transaction with zero-or-more initial team memberships. Phase 6 must replace the onboarding placeholder with the approved resumable connector setup. Production invitation delivery, acceptance, and smoke verification remain reserved for the credentialed local cutover.
+- Next: Retire the remaining tenant-era login/profile/provisioning product contracts, then begin Phase 3's thread-owner migration and centralized private-access predicate.
+
+2026-08-02 — Phase 2 / tenant-era login, provisioning, and profile contract removal
+- Status: Code complete
+- Commit: `44c1cd2`
+- Implemented: Removed `/api/admin/tenants` and its subroutes, removed `agentbox provision tenant`, disabled the internal legacy provisioning boundary, removed the tenant selector from browser login, removed tenant metadata from CLI-login responses and the persisted profile schema, made legacy profile tenant fields parse-and-ignore only, and updated current dashboard/setup/README/operator copy to the deployment-global identity model. Added negative route/command tests, actual on-disk profile serialization assertions, and restored CLI help coverage. Content tenant columns and `AuthContext` routing fields remain temporary internal scaffolding until Phase 3 and the final Phase 14 migration; they are no longer a user-selectable identity boundary.
+- Validation: `git diff --check`, `go test ./...`, `go vet ./...`, `bun run build:api`, `bun run build:cli`, `bun run typecheck`, `bun run lint`, and `bun run build` passed. The production Next.js build generated owner setup, signup, owner users/invitations, onboarding, thread, asset, and MCP routes. Hard source assertions confirmed there is no registered `/api/admin/tenants` route, no CLI `provision` dispatch or implementation, no tenant field in the current CLI profile model, and no tenant selector in current login/CLI contracts. PostgreSQL tests remain enabled in CI and are skipped locally without `TEST_DATABASE_URL`.
+- Remaining: No Phase 2 code-bearing work. Credentialed production verification still must create/recover the owner, accept an invitation, test login and CLI login, and verify disable/enable against the split backend/dashboard deployment. Final removal of content/schema tenant scaffolding belongs to Phases 3 and 14.
+- Next: Begin Phase 3 by adding `threads.owner_user_id`, a canonical owner backfill for preserved legacy threads, and one centralized owner-only `ThreadAccess` predicate used by list, search, get, post, upload, finalize, asset signing, MCP, CLI, and dashboard paths.
 
 ## Plan Phases
 
@@ -1183,11 +1200,3 @@ Reopen writes only after every preservation and security check passes. If produc
 ## Amendments
 
 None yet.
-
-2026-08-01 — Phase 2 / tenant-era identity contract removal
-- Status: Code complete
-- Commit: `55ef9c1`
-- Implemented: Retired `/api/admin/tenants` and the `agentbox provision tenant` command, disabled the remaining internal tenant provisioning service boundary, removed tenant selection from dashboard login and current CLI request contracts, removed tenant identity from saved CLI profiles, and documented deployment-global email/password login. Added negative tests proving tenant provisioning routes and commands are unavailable, profile JSON contains no tenant identity, and permanent-owner recovery or owner invitations are the only supported account-establishment paths. Content tenant columns and `AuthContext` routing fields remain temporary internal scaffolding until Phase 3 replaces content authorization.
-- Validation: `go test ./...`, `go vet ./...`, `bun run build:api`, `bun run build:cli`, `bun run typecheck`, `bun run lint`, `bun run build`, source-level hard assertions for removed tenant routes/selectors/profile fields, and `git diff --check` passed. PostgreSQL integration tests were discovered and skipped locally because Zodex has no `TEST_DATABASE_URL`; they remain enabled in the PostgreSQL CI job.
-- Remaining: No Phase 2 or Phase 4 code-bearing work. Production still requires credentialed local owner creation, invitation delivery/acceptance, login, disable/enable, and split-dashboard smoke verification. Tenant-era content/schema fields are intentionally deferred to the canonical ownership migration and final cleanup phases.
-- Next: Begin Phase 3 by adding canonical thread ownership and team-grant schema contracts, migrating every preserved thread to the permanent deployment owner as private-by-default, and centralizing the authorization predicate before changing thread, message, search, attachment, MCP, CLI, or dashboard behavior.
