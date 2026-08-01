@@ -1,762 +1,562 @@
-# AgentBox User, Team, and Thread Sharing Specification
+# AgentBox User, Team, and Public Sharing Specification
 
-Status: Approved product specification
+Status: Approved for implementation planning
 
-Branch: `feat/user-team-sharing`
+Date: 2026-08-01
 
-## 1. Product Summary
+Target branch: `feat/user-team-sharing`
 
-AgentBox is deployed once by a permanent deployment owner. One deployment consists of:
+## 1. Purpose
 
-- one Go API and MCP backend;
-- one Next.js dashboard;
+AgentBox must evolve from a deployment-wide shared inbox into a multi-user deployment where every person has a private AgentBox experience, can connect several independently attributed agent surfaces, can collaborate through overlapping teams, and can expose selected threads through public read-only URLs.
+
+The deployment remains self-hosted as one Go backend, one Next.js dashboard, one PostgreSQL database, and one Cloudflare R2 bucket. The deployment is the infrastructure and security boundary. It is not the normal content-visibility boundary.
+
+## 2. Product Model
+
+### 2.1 Deployment
+
+One AgentBox installation is one deployment. It owns:
+
+- the Go API and MCP backend;
+- the Next.js dashboard and public thread pages;
 - one PostgreSQL database;
-- one Cloudflare R2 bucket;
-- many registered users;
-- many overlapping teams;
-- private, team-shared, and publicly shared threads.
+- one private Cloudflare R2 bucket;
+- one permanent deployment owner;
+- all registered users, credentials, teams, threads, messages, and attachments.
 
-A deployment is an infrastructure and administration boundary. It is not a thread-visibility boundary.
+The existing tenant concept is not part of the final product model. Tenant selectors, tenant-scoped logins, tenant-scoped inboxes, and tenant-scoped credential management must be removed from the finished system.
 
-A user represents one person together with all of that person's AgentBox clients and agents. ChatGPT, Claude, the web dashboard, a local CLI installation, and a future Raycast installation are credentials or actors belonging to that user; they are not separate AgentBox users.
+### 2.2 Deployment owner
 
-Each user gets the same private AgentBox experience that the original single-player product provides. Threads are private by default and are visible only to the owning user and credentials that act for that user. A user may explicitly share a thread with one or more teams, or publish it through an opaque public read-only URL.
+There is exactly one permanent deployment owner.
 
-## 2. Goals
+The owner is the only person who can:
 
-The implementation must provide:
-
-1. One deployment with multiple user accounts.
-2. One permanent deployment owner.
-3. Invite-only user registration.
-4. Per-user browser sessions and credentials.
-5. Private-by-default user-owned threads.
-6. Many-to-many teams and memberships.
-7. Canonical threads shared with one or more teams without copying data.
-8. Full participation rights for every user who can access a non-public thread.
-9. Public read-only thread links with rendered Markdown and attachments.
-10. Consistent authorization across the web API, MCP, CLI, uploads, downloads, and search.
-11. Agent-level attribution within a user account.
-12. Preservation of all existing threads, messages, attachment metadata, and R2 objects during migration.
-
-## 3. Non-Goals for the Initial Release
-
-The initial implementation does not require:
-
-- granular per-thread read/write roles;
-- per-message visibility;
-- guest accounts with write access;
-- public comments or public posting;
-- ownership transfer between users;
-- deletion or editing of individual messages;
-- a published Raycast extension;
-- multiple deployment owners;
-- OAuth or third-party identity providers;
-- team-scoped credentials;
-- cross-deployment federation;
-- billing, quotas, or usage metering;
-- live realtime updates beyond normal refresh/revalidation behavior.
-
-## 4. Core Concepts
-
-### 4.1 Deployment
-
-A deployment is one self-hosted AgentBox installation and all infrastructure behind it.
-
-The deployment has exactly one permanent owner. The owner is the only user who can:
-
-- create invitations;
-- revoke invitations;
-- browse and manage all users;
+- create and revoke signup invitations;
+- choose invitation expiry;
+- optionally attach initial team memberships to an invitation;
+- create, rename, and manage teams;
+- add and remove users from teams;
+- view all registered users and their status;
 - disable users;
-- create, rename, archive, and delete teams;
-- add or remove users from teams;
 - inspect credential metadata for every user;
-- revoke another user's credential;
-- view all deployment content through owner-only web dashboard routes;
-- purge attachment objects associated with a disabled user.
+- revoke any user credential;
+- access the owner-only web content viewer;
+- permanently purge attachments uploaded by a disabled user.
 
-The deployment owner cannot retrieve an existing credential secret. Secrets are shown only when created.
+The deployment owner cannot be demoted, disabled, deleted, or transferred through normal product flows. Additional deployment administrators are out of scope.
 
-Owner-only view-all-content access is a web-dashboard administration feature. It must not be inherited by the owner's MCP URLs, CLI keys, Raycast keys, or ordinary API keys. Those credentials receive only the same content access as a normal user credential.
+### 2.3 User
 
-### 4.2 User
-
-A user is one person and their collection of AgentBox surfaces.
+A user represents one person and all AgentBox surfaces acting for that person.
 
 A user owns:
 
-- one account identity;
-- password authentication;
-- browser sessions;
-- API credentials;
-- private threads;
-- messages and attachments created through their credentials;
-- team memberships.
+- their browser account and sessions;
+- their private threads;
+- their ChatGPT credential and MCP URL;
+- their Claude credential and MCP URL;
+- their local-machine CLI credential;
+- any additional credentials they create later;
+- memberships in zero or more teams.
 
-A user's email address is unique within the deployment.
+Users are not duplicated per team. One user may belong to several overlapping teams or to no teams at all.
 
-A user may belong to zero, one, or many teams.
+Email addresses are unique within the deployment.
 
-A disabled user cannot sign in or authenticate through any existing credential. Their sessions and credentials are revoked. Their threads, messages, attachments, authorship, and team contributions remain stored.
+### 2.4 Credential and actor
 
-### 4.3 Credential / Actor
+ChatGPT, Claude, a local CLI installation, and future Raycast installations are credentials acting on behalf of a user. They are not separate users.
 
-A credential authenticates one client acting for one user.
+Each credential must have:
 
-Initial recommended credential purposes are:
+- one owning user;
+- a human-readable label such as `chatgpt`, `claude`, or `local-macbook`;
+- a one-time-visible secret;
+- independent creation, rotation, revocation, and last-used metadata;
+- an attribution identity preserved on every message it creates.
 
-1. ChatGPT
-2. Claude
-3. Local
+Credential names are unique only within one user's account. Different users may each have credentials named `chatgpt`, `claude`, or `local`.
 
-Additional credentials may be created later for another machine, agent, CI job, or future Raycast installation.
+Browser-authored messages act directly as the signed-in user and display an actor label such as `Web dashboard`. They do not require a hidden browser API key.
 
-Each credential has:
+### 2.5 Team
+
+A team is an owner-managed, many-to-many group of registered users inside one deployment.
+
+A team has:
 
 - a stable ID;
-- an owning user ID;
-- a user-visible label;
-- a purpose/type where useful;
-- a secret shown once;
-- a hashed secret stored in PostgreSQL;
-- creation, last-used, revocation, and optional expiry metadata;
-- scopes required by the client surface.
+- a deployment-wide unique slug suitable for CLI and MCP use;
+- a display name;
+- zero or more active members.
 
-Credential labels are unique only within one user account. Different users may each have credentials named `chatgpt`, `claude`, or `local`.
+Only the deployment owner manages teams and memberships. Ordinary users cannot create teams, invite users, or alter team membership.
 
-Messages preserve both the human account and the acting credential when available. The dashboard should render attribution such as:
-
-- `Ashray · ChatGPT`
-- `Ashray · Claude`
-- `Ashray · Local`
-- `Ashray · Web`
-
-A browser-authenticated message is attributed to the user and a built-in web actor rather than an API-key secret.
-
-### 4.4 Team
-
-A team is an admin-managed group of registered users in the same deployment.
-
-Only the deployment owner can create teams or change membership.
-
-A user may belong to multiple teams. Teams may overlap. A user may also belong to no teams.
-
-Team membership does not automatically expose a user's private threads. A thread becomes visible to a team only when an authorized participant explicitly shares that thread with the team.
-
-### 4.5 Thread
+### 2.6 Thread
 
 Every thread has exactly one owning user.
 
-A newly created thread is private regardless of whether it was created through the dashboard, API, MCP, CLI, or another client.
+A newly created thread is always private, regardless of whether it was created through the web dashboard, API, MCP, or CLI.
 
-The thread owner and every credential owned by that user can access the private thread.
+Thread creation must not accept team-sharing or public-sharing parameters. Visibility is changed only through the dedicated thread-visibility operation after creation.
 
-A thread remains one canonical object when shared. Sharing never creates a copy.
+Messages are append-only. A thread remains one canonical object when it is shared; sharing never copies a thread, message, or attachment.
 
-### 4.6 Team Share
+## 3. Authorization and Visibility
 
-A thread may be shared with zero, one, or many teams.
+### 3.1 Private access
 
-A user can access a team-shared thread when they are an active member of at least one team that currently has access to the thread.
+A private thread is accessible only to:
 
-Every authenticated user who can access a thread has full thread participation rights. They may:
+- its owning user;
+- browser sessions for that user;
+- active credentials owned by that user;
+- the deployment owner through the owner-only web content viewer.
 
-- read all messages;
+The owner's web-only view-all capability must not be inherited by the owner's API keys, CLI profiles, MCP URLs, or other non-web credentials.
+
+### 3.2 Team access
+
+A thread may be shared with any number of teams.
+
+An active user can access a team-shared thread when the user is an active member of at least one team currently attached to the thread. Every active credential owned by that user receives the same effective access.
+
+Anyone who currently has normal access to a thread has full collaboration permissions on that thread. They may:
+
+- read all messages and attachment metadata;
 - post messages;
 - upload attachments;
-- download attachments;
-- share the thread with another team they belong to;
+- share the thread with another team they currently belong to;
 - remove any existing team share;
 - enable public sharing;
 - disable public sharing;
-- regenerate the public link.
+- regenerate the public URL.
 
-Adding a new team share is allowed only when the acting user is an active member of that target team. This prevents a participant from sharing into a team they cannot access.
+Adding a team share is permitted only when the acting user is currently a member of the target team. Removing a share is permitted for any currently authorized participant, even if that operation removes the participant's own last access path. The operation succeeds atomically; subsequent requests must then be denied if the user no longer qualifies for access.
 
-Removing a team share is allowed to any authenticated participant who can currently access the thread, even when the participant is not a member of the team being removed.
+The thread owner always retains access, regardless of team shares.
 
-When a team share is removed:
-
-- members of that team immediately lose access unless another access path remains;
-- existing messages and attachments remain in the canonical thread;
-- previous authorship remains unchanged;
-- no content is copied or deleted.
-
-### 4.7 Public Share
+### 3.3 Public access
 
 A thread may have at most one active public share URL at a time.
 
-The public URL uses a high-entropy opaque identifier, for example:
+The public URL must:
+
+- contain a cryptographically random, unguessable token;
+- use the dashboard origin, for example `/share/<opaque-token>`;
+- be read-only;
+- be unlisted and marked `noindex`;
+- show the live thread, including messages added after publishing;
+- render Markdown, GitHub-flavored tables, fenced code, syntax highlighting, and Mermaid using the existing dashboard renderer;
+- display safe author attribution and timestamps;
+- show attachment previews where supported;
+- allow public attachment downloads through short-lived signed R2 URLs;
+- omit private dashboard navigation, email addresses, credential IDs, API-key metadata, internal team membership, and other non-public account data.
+
+Disabling public sharing immediately invalidates the current public URL. Regenerating the URL invalidates the previous token and creates a new one.
+
+Public access never permits posting, uploading, changing visibility, or accessing any other thread.
+
+### 3.4 Unified effective-access rule
+
+Normal dashboard, API, MCP, CLI, search, attachment, and upload operations must authorize through one centralized effective-access rule:
 
 ```text
-https://agentbox.example.com/share/shr_<opaque-random-value>
+thread.owner_user_id = current_user_id
+OR current_user_id is an active member of a team attached to the thread
 ```
 
-The public page is:
+No caller may authorize thread access by comparing display names, credential names, legacy `created_by` strings, or deployment-owner status outside the explicit owner-only web routes.
 
-- read-only;
-- accessible without authentication;
-- unlisted;
-- marked `noindex` and `nofollow`;
-- backed by the live canonical thread rather than a frozen snapshot;
-- rendered using the existing Markdown, code, table, Mermaid, plain-text, and attachment UI;
-- stripped of private dashboard navigation and management controls.
+Attachment upload, finalize, preview, and download authorization must use the same thread-access decision as thread reads and writes.
 
-The public page displays:
+## 4. Attribution
 
-- thread title;
-- messages in order;
-- safe author display labels;
-- timestamps;
-- rendered Markdown or plain text;
-- attachment names, previews, and download actions.
+Every new message and attachment must preserve both levels of attribution:
 
-It must not expose:
+- the owning user who is responsible for the action;
+- the concrete actor surface that performed it.
 
-- user email addresses;
-- API-key IDs or secrets;
-- session IDs;
-- internal authorization metadata;
-- private inbox links;
-- team membership lists;
-- admin controls.
+Examples:
 
-Public attachments are accessible through short-lived signed R2 download URLs created only after validating the active public share. R2 remains private.
+```text
+Ashray · Web dashboard
+Ashray · ChatGPT
+Ashray · Claude
+Ashray · Local CLI
+```
 
-Any authenticated participant with thread access may disable the public URL or regenerate it. Regeneration invalidates the previous URL immediately.
+Attribution must remain readable after a credential is revoked or a user is disabled. Persisted display snapshots must therefore accompany stable user and credential references.
 
-## 5. Authorization Rules
+Legacy messages and attachments whose original actors cannot be mapped to new credentials must preserve their existing author strings as historical attribution and may have null new user/credential references where necessary.
 
-### 5.1 Effective Thread Access
+## 5. Invitations and Registration
 
-An active user can access a thread when any of the following is true:
+Public registration is disabled.
 
-1. `thread.owner_user_id == user.id`; or
-2. the user is an active member of a team with an active share for the thread.
+The deployment owner creates invitation links from the owner dashboard. An invitation must be:
 
-Public URLs use a separate read-only authorization path based on the active public-share identifier.
+- cryptographically random;
+- stored as a hash rather than a reusable plaintext secret;
+- single-use;
+- revocable before use;
+- expired after an owner-selected duration;
+- optionally associated with one or more initial teams.
 
-The deployment owner does not bypass this rule through normal API, MCP, CLI, or user-facing dashboard endpoints.
+Opening a valid invitation displays a registration page. The recipient enters:
 
-### 5.2 Owner Web View-All
+- email address;
+- display name;
+- password.
 
-Owner-only administration endpoints may list and read every thread for debugging and deployment management.
+Successful registration must atomically:
 
-These endpoints must require:
+- create the user;
+- add the invitation's initial team memberships, if any;
+- consume the invitation;
+- create an authenticated browser session;
+- redirect the user to onboarding.
 
-- a valid first-party browser session;
-- the permanent owner role;
-- the owner-only web route namespace.
+The new user must immediately appear in the owner's user-management dashboard, whether or not the invitation included a team.
 
-Owner view-all must not be activated by API-key scopes and must not be exposed as an MCP tool or CLI command.
+Invalid, expired, revoked, or already-consumed invitations must not reveal deployment user information and must not create partial accounts or memberships.
 
-### 5.3 Centralized Enforcement
+## 6. Onboarding
 
-Authorization must be enforced below individual client adapters. HTTP, MCP, CLI, dashboard proxy routes, attachment signing, upload preparation, thread search, and thread listing must all call the same service/repository authorization boundary.
+The first authenticated destination after signup is a resumable onboarding experience. It remains available later from settings.
 
-No adapter may authorize access based only on a thread ID, attachment ID, creator display name, credential label, or old tenant ID.
+Onboarding presents three numbered setup steps in this order:
 
-A missing or inaccessible thread should normally be returned as not found to avoid leaking its existence.
+1. Connect ChatGPT
+2. Connect Claude
+3. Connect a local coding agent
 
-## 6. Inbox and Search Behavior
+Credentials are created only when the user clicks the relevant setup action. Unused credentials must not be pre-created.
 
-The default inbox and `list_threads` result contain every thread the current user can access:
+### 6.1 ChatGPT setup
 
-- user-owned private threads;
-- user-owned team-shared threads;
-- threads owned by other users and shared with one of the current user's teams;
-- publicly shared threads only when the user also has authenticated access through ownership/team membership. Public status alone does not add a thread to every authenticated inbox.
+The ChatGPT card creates a dedicated credential and shows its secret only once as a complete remote MCP URL:
 
-The dashboard should provide lightweight filters:
+```text
+https://<deployment>/api/mcp?key=<chatgpt-secret>
+```
 
-- All
-- Private
-- Shared with me
-- Public
-- one filter per team membership
+The card includes current setup instructions for adding a no-auth remote MCP server in ChatGPT. Losing the URL requires rotating or recreating that credential.
 
-Search uses the same effective-access set. A search must never return a title, snippet, count, attachment, or author from an inaccessible thread.
+### 6.2 Claude setup
 
-## 7. Thread Visibility Management Surface
+The Claude card creates a separate dedicated credential and a separate query-string-authenticated MCP URL. It includes instructions appropriate for connecting the remote AgentBox MCP server to Claude.
 
-Thread creation remains private and unchanged in spirit. Visibility is managed separately.
+ChatGPT and Claude must never share a credential or URL, because independent attribution and revocation are required.
 
-### 7.1 MCP
+### 6.3 Local coding-agent setup
 
-Add one MCP tool:
+The local setup card creates one credential for one machine. Additional machines can be configured later from settings with additional credentials.
+
+The card produces a copyable prompt intended to be pasted into a local coding agent such as Codex or Claude Code. The prompt must:
+
+- briefly explain that AgentBox is a shared threaded inbox between the user and their agents;
+- include the deployment base URL;
+- include the newly generated local credential secret;
+- install the public npm CLI package;
+- save an active local profile for this user and deployment;
+- avoid requiring the deployment-owner secret;
+- list accessible threads as the final connection test;
+- tell the local agent to report whether setup and the test succeeded.
+
+The initial generated prompt assumes one machine and one key.
+
+## 7. Credential Management
+
+Users can list, create, rotate, and revoke only credentials owned by their own account.
+
+Users can view:
+
+- credential label;
+- masked secret or token prefix;
+- creation time;
+- last-used time;
+- revocation state where useful;
+- intended surface or purpose.
+
+Secrets are shown only once at creation or rotation and are never retrievable later.
+
+The deployment owner can view credential metadata for every user and can revoke any credential, but cannot retrieve or reconstruct its secret.
+
+Disabling a user immediately revokes all active sessions and credentials owned by that user.
+
+## 8. Team Management
+
+The owner dashboard must support:
+
+- creating a team;
+- assigning its name and unique slug;
+- viewing its members;
+- adding any active registered user;
+- removing a user;
+- viewing all teams a user belongs to;
+- selecting initial teams while creating an invitation.
+
+Users can view the teams they belong to and the stable slugs required by thread-visibility controls. They cannot change memberships.
+
+Removing a user from a team immediately removes access that depended solely on that membership. Existing messages and attachments remain in their canonical threads with attribution intact.
+
+## 9. Thread Visibility Interfaces
+
+### 9.1 MCP
+
+Add exactly one MCP tool for visibility management:
 
 ```text
 manage_thread_visibility
 ```
 
-It accepts a thread ID and any combination of:
+The tool accepts:
 
-- team IDs/slugs to add;
-- team IDs/slugs to remove;
-- `public: true` to enable public sharing;
-- `public: false` to disable public sharing;
-- `regenerate_public_link: true` to replace an active public URL.
+```json
+{
+  "thread_id": "thr_...",
+  "add_teams": ["team-slug-or-id"],
+  "remove_teams": ["team-slug-or-id"],
+  "public": true,
+  "regenerate_public_link": false
+}
+```
 
-It returns the complete resulting visibility state, including active team shares and the public path/URL when public sharing is active.
+All mutation fields are optional. Calling the tool with only `thread_id` returns the current visibility state and the caller's available teams.
 
-The existing `create_thread` tool always creates a private thread and does not accept visibility arguments.
+The tool must:
 
-### 7.2 CLI
+- apply additions, removals, and public-state changes atomically;
+- treat repeated requests idempotently;
+- reject target teams the acting user is not a member of when adding shares;
+- return the resulting team shares;
+- return the caller's available teams with IDs, slugs, and names;
+- return the public URL when public sharing is active;
+- return a normal access-denied result when the caller cannot access the thread.
 
-Add one top-level visibility-management command:
+`create_thread` remains private-only and receives no visibility fields.
+
+Existing read tools must return only threads the owning user can currently access. `get_thread` should include safe visibility metadata useful to authenticated clients.
+
+### 9.2 CLI
+
+Add one CLI subcommand:
 
 ```text
 agentbox visibility <thread-id>
 ```
 
-Supported behavior should include:
+Supported behavior:
 
-```bash
-agentbox visibility <thread-id> --show
-agentbox visibility <thread-id> --add-team <team-id-or-slug>
-agentbox visibility <thread-id> --remove-team <team-id-or-slug>
-agentbox visibility <thread-id> --public
-agentbox visibility <thread-id> --unpublic
+```text
+agentbox visibility <thread-id>
+agentbox visibility <thread-id> --share-team <slug-or-id>
+agentbox visibility <thread-id> --unshare-team <slug-or-id>
+agentbox visibility <thread-id> --publish
+agentbox visibility <thread-id> --unpublish
 agentbox visibility <thread-id> --regenerate-public-link
 ```
 
-Flags may be combined where unambiguous. JSON output must be available.
+`--share-team` and `--unshare-team` may be repeated. A single invocation may combine team and public changes and must map to the same atomic backend operation as MCP and the web dashboard.
 
-The CLI uses the selected user's credential and cannot invoke owner view-all behavior.
+Running the command without mutation flags displays:
 
-### 7.3 Web Dashboard
+- the owner;
+- current team shares;
+- current public status and URL;
+- the user's available teams.
 
-The authenticated thread page includes a visibility control that shows:
+`agentbox create` remains private-only and receives no public or team flags.
 
-- Private/Shared/Public status;
-- all teams currently sharing the thread;
-- teams the current user belongs to and can add;
-- the current public URL when active;
-- copy, disable, and regenerate actions.
+### 9.3 Web dashboard
 
-Every authenticated participant with thread access sees and can use these controls.
+Every accessible thread page must expose a visibility control that uses the same backend operation. It must show:
 
-## 8. Invitations and Registration
+- `Private` when no team or public shares exist;
+- every team currently attached to the thread;
+- the active public URL, when present;
+- teams the acting user may add;
+- controls to remove existing team shares;
+- controls to publish, unpublish, copy, and regenerate the public URL.
 
-Only the deployment owner can create invitation links.
+The control must make it clear when an action will remove the user's own team-based access.
 
-An invitation is:
+## 10. Inbox, Search, and Thread Reads
 
-- cryptographically random;
-- single-use;
-- revocable before use;
-- expiring at an owner-selected time;
-- not required to be pre-bound to an email address;
-- optionally associated with one or more initial team memberships.
+The default inbox remains one unified inbox. A user and all of their credentials see every thread they currently qualify to access:
 
-Opening a valid invitation displays a registration page. The invited person enters:
+- private threads they own;
+- threads shared with any team they belong to.
 
-- display name;
-- email address;
-- password.
+The dashboard should expose lightweight filters:
 
-On successful registration:
+- All
+- Private
+- Shared with me
+- one filter for each team
+- Public
 
-1. a user account is created;
-2. the invitation is consumed;
-3. requested initial team memberships are created;
-4. a browser session is established;
-5. the user appears immediately in the owner admin dashboard;
-6. the user is redirected to onboarding.
+The default MCP and CLI list/search behavior uses the unified accessible set without requiring a workspace or team selector.
 
-The owner may also create an invitation with no initial team. The user then receives a fully private AgentBox account and can still create public links.
+Search must never reveal titles, message snippets, counts, attachments, or existence of inaccessible threads.
 
-Expired, revoked, consumed, or unknown invitation links must not reveal account or team information.
+## 11. Owner-Only Web Administration
 
-## 9. Onboarding
+The owner web dashboard is intentionally more powerful than normal user surfaces.
 
-A newly registered user enters an onboarding flow before or alongside the normal inbox.
+It must provide:
 
-The recommended setup is numbered and encourages completion of all three integrations:
+- deployment user list and status;
+- invitation creation, expiry, revocation, and initial-team selection;
+- team and membership management;
+- per-user credential metadata and forced revocation;
+- user disablement;
+- an explicitly owner-only content view that can browse all threads and attachments for debugging and support;
+- an irreversible attachment-purge action for disabled users.
 
-1. Connect ChatGPT
-2. Connect Claude
-3. Connect Local Agent
+The owner-only content view must be reachable only through an authenticated owner browser session. It must use separate owner-only web routes or service entry points and must not be expressible through ordinary API-key scopes.
 
-### 9.1 ChatGPT
+Normal user API keys, including keys owned by the deployment owner, must receive only that user's normal effective thread access.
 
-The user clicks to create a dedicated ChatGPT credential. AgentBox shows the secret only once and presents a full remote MCP URL with the key in the query string:
+## 12. User Disablement and Attachment Purge
 
-```text
-https://deployment.example.com/api/mcp?key=<chatgpt-secret>
-```
+Users are disabled, not hard-deleted.
 
-The URL is configured as a no-auth custom MCP connection because the credential is embedded in the URL.
+Disabling a user must:
 
-### 9.2 Claude
+- revoke all browser sessions;
+- revoke all credentials;
+- remove or deactivate all team memberships;
+- prevent new login and API authentication;
+- retain the user row for attribution;
+- retain all threads and messages;
+- retain thread ownership;
+- retain team-shared threads and their visibility to still-qualified users;
+- retain private threads for owner-only web inspection;
+- avoid transferring ownership.
 
-The user clicks to create a separate Claude credential and receives a separate MCP URL. ChatGPT and Claude never share a credential because messages must retain independent attribution and revocation.
+The owner may later invoke one irreversible `Purge attachments` action for a disabled user. The purge applies only to attachments uploaded by that user's browser sessions or credentials, identified by stable uploader user ID. It must not delete attachments uploaded by other users merely because they appear in a thread owned by the disabled user.
 
-### 9.3 Local Agent
+Purging must:
 
-The user clicks to create one local-machine credential. The first version assumes one machine and creates one key for that machine.
+- delete the corresponding R2 objects;
+- retain thread and message records;
+- retain an attachment tombstone with filename, original attribution, and purge timestamp;
+- render a clear `Attachment deleted by deployment owner` state instead of a broken link;
+- be safe to retry without deleting unrelated objects.
 
-AgentBox produces a pasteable prompt written for a local coding agent such as Codex or Claude Code. The prompt must:
+No account-ownership transfer workflow is required.
 
-- briefly explain AgentBox as a shared thread inbox between the user and their agents;
-- include the deployment base URL;
-- include the newly generated local credential secret;
-- install the CLI with `npm install -g @amxv/agentbox`;
-- save a named CLI profile using the provided URL and key;
-- run `agentbox doctor` where appropriate;
-- run `agentbox list` as the final connection test;
-- tell the local agent not to echo or commit the secret.
+## 13. Data Preservation and Migration
 
-Additional machine credentials can be created later from settings.
+No existing thread, message, or attachment may be lost.
 
-Credential creation is click-to-create. Registration does not silently create unused credentials.
+Before any production schema cutover, the migration process must create and verify:
 
-## 10. Credential Management
+- a PostgreSQL backup containing all thread, message, asset, and pending attachment metadata required for recovery;
+- an R2 object inventory and a recoverable backup or copy of every object referenced by existing attachment rows;
+- recorded row and object counts sufficient to prove the backup covers current production content;
+- a dry-run migration report that identifies orphaned rows or missing R2 objects before destructive changes are allowed.
 
-Users can:
-
-- list their own credentials;
-- create a credential;
-- rotate/recreate a credential;
-- revoke their own credential;
-- inspect its label, purpose, created time, last-used time, and masked value.
-
-Users cannot see another user's credential metadata.
-
-The deployment owner can inspect metadata for every credential and revoke any credential, but cannot retrieve its secret.
-
-Credential names are scoped to the owning user.
-
-Disabling a user revokes all active sessions and credentials immediately.
-
-## 11. User and Team Administration
-
-The owner web dashboard includes:
-
-### Users
-
-- active and disabled users;
-- display name and email;
-- signup/invite time;
-- team memberships;
-- session/credential metadata;
-- last activity where available;
-- disable action;
-- attachment purge action for disabled users.
-
-### Invitations
-
-- create invite;
-- choose expiration;
-- optionally select initial teams;
-- copy invite URL;
-- see created, expires, consumed, or revoked status;
-- revoke unused invite.
-
-### Teams
-
-- create team;
-- rename team;
-- archive/delete team;
-- list members;
-- add existing users;
-- remove members.
-
-Deleting or archiving a team removes that team's access path from shared threads but does not delete thread content.
-
-## 12. Disabled Users and Attachment Purging
-
-Disabling a user:
-
-- prevents password login;
-- revokes browser sessions;
-- revokes API credentials;
-- removes active team memberships;
-- retains all owned threads, messages, and attachments;
-- retains all contributions and attribution in other users' team-shared threads;
-- does not transfer ownership.
-
-The owner may later purge attachment objects associated with the disabled user's account to save storage.
-
-Attachment purging must be a separate explicit destructive action with confirmation and a result summary. It may delete:
-
-- R2 objects created by the disabled user or their credentials;
-- corresponding attachment database rows or mark them purged;
-- pending uploads owned by the user.
-
-It must not delete thread or message text. The UI should preserve a tombstone such as `Attachment removed by deployment owner` when an attachment referenced by a retained message has been purged.
-
-Ownership transfer is not supported.
-
-## 13. Data Model
-
-The intended logical model is:
-
-### `users`
-
-- `id`
-- `email` (deployment-unique, case-insensitive)
-- `display_name`
-- `password_hash`
-- `role` (`owner` or `member`)
-- `created_at`
-- `updated_at`
-- `disabled_at`
-
-Exactly one active user has role `owner`.
-
-### `user_sessions`
-
-- `id`
-- `user_id`
-- `secret_hash`
-- `created_at`
-- `last_used_at`
-- `expires_at`
-- `revoked_at`
-
-### `api_keys`
-
-- `id`
-- `user_id`
-- `name`
-- `purpose`
-- `token_prefix`
-- `token_hash`
-- `scopes`
-- `created_at`
-- `updated_at`
-- `last_used_at`
-- `expires_at`
-- `revoked_at`
-
-Active key names are unique by `(user_id, lower(name))`.
-
-### `teams`
-
-- `id`
-- `slug`
-- `name`
-- `created_by_user_id`
-- `created_at`
-- `updated_at`
-- `archived_at`
-
-### `team_memberships`
-
-- `team_id`
-- `user_id`
-- `added_by_user_id`
-- `created_at`
-
-Primary key: `(team_id, user_id)`.
-
-### `invitations`
-
-- `id`
-- `token_hash`
-- `token_prefix`
-- `created_by_user_id`
-- `created_at`
-- `expires_at`
-- `consumed_at`
-- `consumed_by_user_id`
-- `revoked_at`
-
-### `invitation_teams`
-
-- `invitation_id`
-- `team_id`
-
-Primary key: `(invitation_id, team_id)`.
-
-### `threads`
-
-Existing thread fields plus:
-
-- `owner_user_id` (required)
-
-Legacy tenant columns may remain temporarily during migration but are not part of the final authorization model.
-
-### `messages`
-
-Existing message fields plus stable attribution:
-
-- `created_by_user_id`
-- `created_by_key_id`
-- built-in web actor metadata when no API key is used.
-
-### `assets`
-
-Existing asset fields plus:
-
-- `created_by_user_id`
-- `created_by_key_id`
-- optional `purged_at`
-- optional `purged_by_user_id`
-
-### `thread_team_shares`
-
-- `thread_id`
-- `team_id`
-- `shared_by_user_id`
-- `created_at`
-
-Primary key: `(thread_id, team_id)`.
-
-### `thread_public_shares`
-
-- `id` (opaque public identifier)
-- `thread_id`
-- `created_by_user_id`
-- `created_at`
-- `revoked_at`
-
-Only one active public share may exist per thread.
-
-## 14. API Surface
-
-The exact endpoint naming may evolve, but the backend must support these capabilities:
-
-### Authenticated user routes
-
-- session login/logout/me;
-- list/create/read threads using effective access;
-- post messages and upload/download attachments using effective access;
-- read/update thread visibility;
-- list the current user's teams;
-- list/create/revoke the current user's credentials;
-- invitation registration;
-- onboarding state/data.
-
-### Public routes
-
-- fetch public thread by opaque share ID;
-- fetch short-lived public attachment URL after validating the share.
-
-### Owner-only browser-session routes
-
-- users and user status;
-- invitations;
-- teams and memberships;
-- all credential metadata and revocation;
-- view-all thread listing/detail;
-- disabled-user attachment purge.
-
-Owner-only administration routes must reject API-key authentication.
-
-## 15. Migration and Data Preservation
-
-No existing thread, message, attachment metadata, or attachment object may be lost.
-
-Before applying the new authorization migration, production content must be backed up and verified.
-
-The backup must include:
-
-1. PostgreSQL rows for `threads`, `messages`, `assets`, and relevant upload/object metadata.
-2. Every R2 object referenced by an attachment row.
-3. A manifest containing row counts, object counts, object sizes, and checksums where feasible.
-4. A restore procedure tested against a non-production database and bucket or prefix.
-
-Accounts, sessions, API keys, login codes, and the half-built tenant model do not need to be preserved as product identities. They may be reset.
-
-Migration behavior:
-
-1. Create or provision the new permanent owner account.
-2. Assign every existing thread to that owner.
-3. Preserve all thread IDs, message IDs, asset IDs, timestamps, bodies, content types, storage keys, filenames, MIME types, and sizes.
-4. Preserve current author strings for display/history.
-5. Map historical stable creator IDs when possible; otherwise retain legacy attribution without inventing a new agent identity.
-6. Keep existing R2 object keys valid. Objects do not need to be moved merely to satisfy a new prefix convention.
-7. Reissue all user-facing credentials after migration.
-8. Validate counts and sample attachment downloads before declaring the migration complete.
-
-The migration must be staged and reversible until validation is complete. Destructive cleanup of legacy auth/tenant columns happens only after the new system is operating correctly.
-
-## 16. Security Requirements
-
-- Store passwords using the existing strong password hash mechanism.
-- Store session, API-key, invitation, CLI-login, and similar secrets only as cryptographic hashes.
-- Use high-entropy opaque public share IDs.
-- Keep R2 private and issue short-lived signed URLs.
-- Validate thread access before creating upload or download URLs.
-- Validate public-share activity before signing public attachment URLs.
-- Prevent disabled users from authenticating through sessions or keys.
-- Do not put user emails or private metadata into public pages.
-- Mark public pages `noindex` and `nofollow`.
-- Prevent normal API keys from calling owner administration or view-all routes.
-- Return not-found semantics for inaccessible private resources where appropriate.
-- Log administrative destructive actions without logging secrets.
-
-## 17. Testing Requirements
-
-The automated suite must cover:
-
-- private-thread isolation between users;
-- access inherited through each overlapping team membership;
-- one thread shared with multiple teams;
-- duplicate membership and share idempotency;
-- removal of one access path while another remains;
-- immediate loss of access after the final team share is removed;
-- full posting/upload rights for a team participant;
-- inability to share into a team the actor is not a member of;
-- visibility management through API, MCP, and CLI;
-- public enable, disable, and regenerate behavior;
-- old public URL invalidation after regeneration;
-- public Markdown rendering and attachment signing;
-- private attachment download denial;
-- search/list isolation;
-- credentials scoped to their owning user;
-- same credential label used by different users;
-- disabled-user authentication failure;
-- owner web view-all success;
-- owner API-key/MCP/CLI view-all denial;
-- invite expiry, revocation, single use, and initial teams;
-- content backup/restore count and checksum verification;
-- legacy content migration to the permanent owner.
-
-## 18. Rollout Sequence
-
-1. Add and test content backup/export tooling.
-2. Back up production PostgreSQL content and R2 objects.
-3. Verify restore in a non-production environment.
-4. Add the new schema alongside legacy fields.
-5. Introduce user-owned credentials and centralized effective-access queries.
-6. Backfill existing threads to the new permanent owner.
-7. Add team administration and membership.
-8. Add thread visibility management to API, MCP, CLI, and web.
-9. Add public read-only routes and pages.
-10. Add invitation registration and onboarding.
-11. Add owner view-all and administration dashboard.
-12. Add disable and attachment-purge workflows.
-13. Reissue production credentials and validate all client surfaces.
-14. Remove or quarantine obsolete tenant/auth paths only after production validation.
-
-## 19. Approved Product Decisions
-
-The following decisions are final for this implementation:
-
-- Existing content must be preserved and backed up.
-- Existing accounts and credentials may be reset.
-- There is one permanent deployment owner.
-- Only the owner manages invitations, users, teams, and memberships.
-- Owner view-all exists only in the authenticated web administration surface.
-- Users may belong to multiple or zero teams.
-- Invitations may include zero or more initial team memberships.
-- Threads are private by default.
-- Thread creation does not accept visibility parameters.
-- Visibility is managed through one dedicated MCP tool and one dedicated CLI command.
-- Any authenticated participant with thread access has full thread participation and visibility-management rights.
-- A thread may be shared with multiple teams.
-- Removing access does not delete or copy prior contributions.
-- Public pages are live, read-only, revocable, opaque, rendered, and include attachment access.
-- ChatGPT, Claude, and Local use separate credentials for attribution and revocation.
-- Onboarding credentials are click-to-create.
-- The initial local setup assumes one machine and one key.
-- Users manage only their own credential secrets and metadata.
-- The owner may inspect all credential metadata and revoke credentials, but cannot recover secrets.
-- Users are disabled rather than automatically deleted.
-- Ownership transfer is not supported.
-- Attachment purging for disabled users is a separate owner-only destructive action.
-- Raycast onboarding is deferred.
+Authentication and authorization data may be reset. Existing users, sessions, tenant records, API keys, setup tokens, and CLI credentials do not need to survive.
+
+At cutover:
+
+- a new deployment-owner account is created;
+- every existing thread is assigned to that owner as a private thread;
+- every existing message remains attached to its original thread in original order;
+- every existing attachment row remains attached to its original message;
+- existing R2 objects remain usable through their stored opaque storage keys and do not need to be renamed;
+- legacy author strings are preserved exactly as historical attribution;
+- legacy tenant IDs cease to determine access;
+- every human and agent credential is recreated under the new user-owned model.
+
+The migration must be resumable or safely retryable and must not require keeping the old tenant authorization path after cutover. The finished system has one authorization model.
+
+## 14. Storage and Attachment Security
+
+The R2 bucket remains private.
+
+All authenticated and public downloads use short-lived signed URLs generated only after verifying either:
+
+- normal effective thread access;
+- explicit owner-only web access; or
+- a valid active public share token for the exact containing thread.
+
+New object keys should include stable uploader and thread identity for operational clarity, but authorization must never rely on parsing an object key. Legacy object keys remain opaque values stored in the database.
+
+Direct `R2_PUBLIC_BASE_URL` links must not be used to bypass AgentBox authorization in the finished system.
+
+## 15. Required Data Relationships
+
+The implementation may choose exact table and type names, but the final schema must make these relationships explicit and enforceable:
+
+- one deployment owner;
+- globally unique active user email;
+- users independent of teams;
+- user-owned credentials;
+- user-owned browser sessions;
+- many-to-many team memberships;
+- invitations with zero or more initial team memberships;
+- exactly one thread owner;
+- many-to-many thread/team shares;
+- at most one active public share per thread;
+- message and attachment attribution to both user and actor where known;
+- disabled users retained for historical references;
+- purged attachment tombstones retained after R2 deletion.
+
+Authorization must be expressed through stable IDs and relational constraints, not display strings.
+
+## 16. Error and Concurrency Requirements
+
+- Visibility mutations are atomic and idempotent.
+- Concurrent attempts to create the same team share produce one share, not duplicates.
+- Concurrent publish requests leave one active public token.
+- Regeneration invalidates the previous token exactly once.
+- Consuming an invitation and creating a user/memberships is one transaction.
+- Reusing, racing, or retrying a consumed invitation cannot create duplicate accounts or memberships.
+- Disabling a user and revoking credentials takes effect for subsequent requests immediately.
+- A caller losing access because of an unshare receives success for the committed mutation and denial on future reads.
+- Public and authenticated asset signing verifies the asset belongs to the authorized thread.
+- Missing or purged R2 objects produce explicit attachment states rather than leaking storage errors or crashing thread rendering.
+
+## 17. Explicitly Deferred or Out of Scope
+
+- Publishing or distributing the Raycast extension.
+- Granular per-thread read versus write roles.
+- Per-message visibility.
+- Direct user-to-user sharing outside a team.
+- Public comments or public uploads.
+- Multiple deployment owners or delegated admins.
+- User-created teams.
+- Ownership transfer.
+- Hard deletion of user, thread, or message history.
+- Billing, quotas, external identity providers, email verification, and password recovery.
+- Preserving old sessions, API keys, tenant records, or CLI profiles through migration.
+- Adding sharing flags to `create_thread` or `agentbox create`.
+
+## 18. Acceptance Criteria
+
+1. Existing production threads, messages, and attachment references are backed up, verified, migrated, and readable after cutover with no content loss.
+2. The final product has no tenant selector or tenant-wide content visibility path.
+3. The deployment has exactly one permanent owner and supports multiple ordinary users.
+4. Signup is possible only through a valid, unexpired, unconsumed, owner-generated invitation.
+5. An invitation can add the new user to zero, one, or several initial teams atomically.
+6. Every new thread is private and visible only to its owner, that owner's credentials, and the owner's web-only debugging viewer.
+7. ChatGPT, Claude, local CLI, and browser messages are independently attributable to one user and one actor surface.
+8. Users and their credentials list, search, read, post, upload, and download only threads they own or receive through current team memberships.
+9. A user may belong to multiple teams, and one thread may be shared with multiple teams without copying data.
+10. Any currently authorized participant can add a share to a team they belong to, remove an existing team share, publish, unpublish, or regenerate the public URL.
+11. MCP exposes one `manage_thread_visibility` tool; CLI exposes one `agentbox visibility` subcommand; thread creation remains private-only.
+12. The unified inbox and normal list/search operations return the complete effective accessible set without a team/workspace selector.
+13. Public URLs are opaque, revocable, live, read-only, `noindex`, and render messages and public attachments without exposing private account metadata.
+14. Every user independently creates and revokes their own ChatGPT, Claude, and local credentials; secrets are shown only once.
+15. First-run onboarding presents numbered ChatGPT, Claude, and local setup cards and produces a working one-machine local-agent setup prompt whose final test lists accessible threads.
+16. Only the deployment owner can invite or disable users, manage teams and memberships, inspect all credential metadata, revoke another user's credential, and use the web-only view-all-content surface.
+17. The deployment owner's CLI and MCP credentials do not receive view-all-content privileges.
+18. Disabling a user immediately revokes sessions and credentials while preserving ownership, messages, team-shared history, and attribution.
+19. The owner can idempotently purge only attachments uploaded by a disabled user, freeing R2 storage while preserving attachment tombstones in message history.
+20. The finished codebase has one centralized stable-ID-based authorization model and no permanent fallback to the old tenant-wide path.
