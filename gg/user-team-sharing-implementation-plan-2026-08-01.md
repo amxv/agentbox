@@ -359,7 +359,7 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 
 | Phase | Status | Last commit | Evidence / remaining work |
 |---|---|---|---|
-| 1. Canonical migrations and backup workflow | In progress | `3cb9265` | Canonical checksum-ledgered migration runner and PostgreSQL CI coverage are implemented; backup/preflight tooling and R2 verification remain. |
+| 1. Canonical migrations and backup workflow | Code complete | `bfb78c6` | Canonical migrations plus the PostgreSQL/R2 backup preflight, manifest, recovery-copy workflow, fakes, CI integration, and runbook are implemented. Real production backup, restore verification, and count evidence remain reserved for the credentialed local cutover. |
 | 2. Deployment-global users and credentials | Pending | — | No implementation started. |
 | 3. User-owned private thread access | Pending | — | No implementation started. |
 | 4. Invitations and zero-team registration | Pending | — | No implementation started. |
@@ -396,6 +396,14 @@ YYYY-MM-DD — Phase N / short slice name
 - Validation: `go test ./...` passed; PostgreSQL-specific tests were discovered and skipped because Zodex has no `TEST_DATABASE_URL`; `go vet ./...`, `bun run build:api`, `bun run build:cli`, and `git diff --check` passed. The new CI workflow supplies PostgreSQL and runs the integration tests on the branch.
 - Remaining: Implement the provider-neutral PostgreSQL backup/export plus row-count manifest, extend R2 storage inventory/head/copy capabilities and fakes, verify referenced/missing/orphaned objects, and add repeatability/readiness tests. Real production backup evidence remains a local credentialed verification gate.
 - Next: Extend `AssetStore` and `FakeStore` with exact-key metadata, inventory, and recovery-copy operations, then implement the Phase 1 preflight command and machine-readable manifest around database counts/export and R2 verification.
+
+2026-08-01 — Phase 1 / verified content backup preflight
+- Status: Code complete
+- Commit: `bfb78c6`
+- Implemented: Added a repeatable-read PostgreSQL snapshot/export boundary, consistent row and orphan counts, exact asset and pending-upload object references, custom-format `pg_dump`, SHA-256 dump evidence, paginated R2 inventory/head/conditional-copy operations, same- or separate-bucket recovery prefixes, machine-readable readiness manifests, retry-safe existing-copy verification, explicit missing/mismatched/unreferenced object reporting, a production-safe `backup:preflight` command, storage fakes, failure/idempotency tests, PostgreSQL/`pg_dump` CI coverage, and the backup/restore runbook.
+- Validation: `go test ./...`, `go vet ./...`, `go build ./cmd/preflight`, `bun run build:api`, `bun run build:cli`, `bun run typecheck`, `bun run lint`, and `git diff --check` passed. The Zodex machine has neither `TEST_DATABASE_URL` nor `pg_dump`, so PostgreSQL snapshot/migration/archive tests were discovered and skipped locally; `.github/workflows/verify.yml` now supplies PostgreSQL 16 and matching client tools so those tests execute in CI. No production database or R2 credentials were used.
+- Remaining: No Phase 1 code-bearing work. During Phase 15, a credentialed local agent must run the command against production, preserve `database.dump` and `manifest.json` off deployment, require `ready: true`, restore-test the dump, compare real row counts, sample recovery objects, and record the production evidence before cutover.
+- Next: Begin Phase 2 by adding the canonical deployment-global identity migration and domain contracts: globally unique users, one protected permanent owner, user-owned credentials/sessions/login codes, owner bootstrap/recovery, and auth contexts that resolve stable user plus actor identity without granting owner authority to API keys.
 
 ## Plan Phases
 
