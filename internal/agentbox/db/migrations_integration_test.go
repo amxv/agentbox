@@ -469,6 +469,219 @@ limit 50
 	}
 }
 
+func TestTeamSharedThreadAccessIsImmediateCompleteAndIndexed(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, err := repository.BootstrapOwner(ctx, "share-owner@example.com", "Share Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "share-member@example.com", "Share Member", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondMember, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "share-second@example.com", "Second Member", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "share-outsider@example.com", "Share Outsider", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamA, err := repository.CreateTeam(ctx, "team-a", "Team A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamB, err := repository.CreateTeam(ctx, "team-b", "Team B")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectAPIKey, ActorName: "member-agent", KeyID: "key_member"}
+	thread, err := repository.CreateThread(ctx, owner.ID, "team shared indexed marker", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if visibility, err := repository.GetThreadVisibility(ctx, member.ID, thread.ID); err != nil || visibility != nil {
+		t.Fatalf("private visibility leaked before share: visibility=%#v err=%v", visibility, err)
+	}
+	shared, err := repository.SetThreadVisibility(ctx, owner.ID, thread.ID, []string{teamA.ID, teamB.ID, teamA.ID})
+	if err != nil || len(shared.SharedTeams) != 2 || shared.OwnerUserID != owner.ID {
+		t.Fatalf("initial visibility=%#v err=%v", shared, err)
+	}
+	var shareCount int
+	if err := repository.pool.QueryRow(ctx, `select count(*) from thread_team_shares where thread_id = $1`, thread.ID).Scan(&shareCount); err != nil {
+		t.Fatal(err)
+	}
+	if shareCount != 2 {
+		t.Fatalf("duplicate team share count=%d", shareCount)
+	}
+
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, thread.ID); err != nil || access != nil {
+		t.Fatalf("share without membership granted access: access=%#v err=%v", access, err)
+	}
+	if _, err := repository.AddTeamMember(ctx, teamA.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	access, err := repository.ResolveThreadAccess(ctx, member.ID, thread.ID)
+	if err != nil || access == nil || access.IsOwner || len(access.MatchedTeamIDs) != 1 || access.MatchedTeamIDs[0] != teamA.ID {
+		t.Fatalf("team access=%#v err=%v", access, err)
+	}
+
+	threads, err := repository.ListThreads(ctx, member.ID, 50)
+	if err != nil || len(threads) != 1 || threads[0].ID != thread.ID {
+		t.Fatalf("team list=%#v err=%v", threads, err)
+	}
+	search, err := repository.SearchThreads(ctx, member.ID, types.SearchThreadParams{Query: "indexed marker", Limit: 20})
+	if err != nil || len(search) != 1 || search[0].ID != thread.ID {
+		t.Fatalf("team search=%#v err=%v", search, err)
+	}
+	detail, err := repository.GetThread(ctx, member.ID, thread.ID)
+	if err != nil || detail == nil || len(detail.Visibility.SharedTeams) != 2 {
+		t.Fatalf("team detail=%#v err=%v", detail, err)
+	}
+
+	textType := "text/plain"
+	message, err := repository.PostMessage(ctx, member.ID, thread.ID, memberAuth, "team participant message", nil, []types.NewAsset{{
+		StorageKey: "agentbox/" + member.ID + "/" + thread.ID + "/message/team.txt",
+		FileName:   "team.txt",
+		MimeType:   &textType,
+		SizeBytes:  4,
+	}})
+	if err != nil || len(message.Assets) != 1 || message.CreatedByActorName == nil || *message.CreatedByActorName != memberAuth.ActorName {
+		t.Fatalf("team post=%#v err=%v", message, err)
+	}
+	if asset, err := repository.GetAsset(ctx, member.ID, message.Assets[0].ID); err != nil || asset == nil || asset.ID != message.Assets[0].ID {
+		t.Fatalf("team asset lookup=%#v err=%v", asset, err)
+	}
+	if asset, err := repository.GetAsset(ctx, outsider.ID, message.Assets[0].ID); err != nil || asset != nil {
+		t.Fatalf("outsider asset lookup=%#v err=%v", asset, err)
+	}
+
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	upload := types.PendingUpload{
+		ID:                       "upl_team_shared",
+		ThreadID:                 thread.ID,
+		StorageKey:               "agentbox/" + member.ID + "/" + thread.ID + "/upl_team_shared/file.txt",
+		FileName:                 "file.txt",
+		MimeType:                 &textType,
+		SizeBytes:                4,
+		ExpiresAt:                isoMillis(expiresAt),
+		CreatedBy:                memberAuth.ActorName,
+		CreatedByUserID:          &member.ID,
+		CreatedByKeyID:           &memberAuth.KeyID,
+		CreatedByUserDisplayName: &member.DisplayName,
+		CreatedByActorName:       &memberAuth.ActorName,
+	}
+	createdUpload, err := repository.CreatePendingUpload(ctx, member.ID, upload)
+	if err != nil || createdUpload.ID != upload.ID {
+		t.Fatalf("team upload creation=%#v err=%v", createdUpload, err)
+	}
+	pending, err := repository.GetPendingUploads(ctx, member.ID, thread.ID, []string{upload.ID}, memberAuth)
+	if err != nil || len(pending) != 1 || pending[0].ID != upload.ID {
+		t.Fatalf("team pending upload=%#v err=%v", pending, err)
+	}
+	if err := repository.MarkPendingUploadsConsumed(ctx, member.ID, thread.ID, []string{upload.ID}, memberAuth); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repository.AddTeamMember(ctx, teamB.ID, secondMember.ID); err != nil {
+		t.Fatal(err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, secondMember.ID, thread.ID); err != nil || access == nil || len(access.MatchedTeamIDs) != 1 || access.MatchedTeamIDs[0] != teamB.ID {
+		t.Fatalf("second team access=%#v err=%v", access, err)
+	}
+
+	participantVisibility, err := repository.SetThreadVisibility(ctx, member.ID, thread.ID, []string{teamA.ID})
+	if err != nil || len(participantVisibility.SharedTeams) != 1 || participantVisibility.SharedTeams[0].ID != teamA.ID {
+		t.Fatalf("participant visibility mutation=%#v err=%v", participantVisibility, err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, secondMember.ID, thread.ID); err != nil || access != nil {
+		t.Fatalf("removed team retained access: access=%#v err=%v", access, err)
+	}
+
+	if removed, err := repository.RemoveTeamMember(ctx, teamA.ID, member.ID); err != nil || !removed {
+		t.Fatalf("membership removal removed=%t err=%v", removed, err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, thread.ID); err != nil || access != nil {
+		t.Fatalf("removed member retained access: access=%#v err=%v", access, err)
+	}
+	if _, err := repository.PostMessage(ctx, member.ID, thread.ID, memberAuth, "blocked", nil, nil); !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("removed member posted: %v", err)
+	}
+	if _, err := repository.CreatePendingUpload(ctx, member.ID, types.PendingUpload{ID: "upl_blocked", ThreadID: thread.ID, StorageKey: "blocked", FileName: "blocked.txt", ExpiresAt: isoMillis(expiresAt), CreatedBy: memberAuth.ActorName}); !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("removed member created upload: %v", err)
+	}
+	if asset, err := repository.GetAsset(ctx, member.ID, message.Assets[0].ID); err != nil || asset != nil {
+		t.Fatalf("removed member retained asset access: asset=%#v err=%v", asset, err)
+	}
+
+	if _, err := repository.AddTeamMember(ctx, teamA.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, thread.ID); err != nil || access == nil {
+		t.Fatalf("re-added member did not regain access: access=%#v err=%v", access, err)
+	}
+	privateAgain, err := repository.SetThreadVisibility(ctx, member.ID, thread.ID, nil)
+	if err != nil || len(privateAgain.SharedTeams) != 0 {
+		t.Fatalf("participant made private visibility=%#v err=%v", privateAgain, err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, thread.ID); err != nil || access != nil {
+		t.Fatalf("participant retained access after making private: access=%#v err=%v", access, err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, owner.ID, thread.ID); err != nil || access == nil || !access.IsOwner {
+		t.Fatalf("owner lost access after private mutation: access=%#v err=%v", access, err)
+	}
+
+	if _, err := repository.SetThreadVisibility(ctx, owner.ID, thread.ID, []string{"team_missing"}); !errors.Is(err, types.ErrTeamNotFound) {
+		t.Fatalf("missing share team error=%v", err)
+	}
+
+	if _, err := repository.SetThreadVisibility(ctx, owner.ID, thread.ID, []string{teamA.ID}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	planRows, err := tx.Query(ctx, `
+explain (format text)
+select t.id
+from threads t
+where `+normalThreadAccessPredicate+`
+order by t.updated_at desc
+limit 50
+`, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planRows.Close()
+	plan := strings.Builder{}
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := planRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "thread_team_shares_team_thread_idx") || !strings.Contains(plan.String(), "team_memberships_user_team_idx") {
+		t.Fatalf("team access plan missed indexes:\n%s", plan.String())
+	}
+}
+
 func TestCredentialMigrationRemovesTenantAndPlaintextSecretColumns(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

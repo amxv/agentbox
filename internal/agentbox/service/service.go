@@ -27,6 +27,8 @@ var ErrInvalidLogin = errors.New("Invalid email or password.")
 
 type Repository interface {
 	ResolveThreadAccess(ctx context.Context, userID string, threadID string) (*types.ThreadAccess, error)
+	GetThreadVisibility(ctx context.Context, userID string, threadID string) (*types.ThreadVisibility, error)
+	SetThreadVisibility(ctx context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error)
 	ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error)
 	SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
@@ -164,6 +166,45 @@ func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadI
 		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
 	}
 	return thread, nil
+}
+
+func (s *Service) GetThreadVisibility(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadVisibility, error) {
+	if err := requireScope(auth, "threads:read"); err != nil {
+		return nil, err
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
+	}
+	visibility, err := s.repo.GetThreadVisibility(ctx, auth.UserID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if visibility == nil {
+		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	return visibility, nil
+}
+
+func (s *Service) SetThreadVisibility(ctx context.Context, auth types.AuthContext, threadID string, teamIDs []string) (types.ThreadVisibility, error) {
+	if err := requireScope(auth, "threads:write"); err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return types.ThreadVisibility{}, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
+	}
+	visibility, err := s.repo.SetThreadVisibility(ctx, auth.UserID, threadID, uniqueTrimmedStrings(teamIDs))
+	if errors.Is(err, types.ErrThreadNotFound) {
+		return types.ThreadVisibility{}, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	if errors.Is(err, types.ErrTeamNotFound) {
+		return types.ThreadVisibility{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "One or more selected teams no longer exist.", Err: err}
+	}
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return visibility, nil
 }
 
 func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID string) (*types.Asset, error) {

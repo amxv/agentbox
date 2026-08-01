@@ -1342,6 +1342,167 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	}
 }
 
+func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	authA := authContext(types.DefaultTenantID, "agent-a")
+	authA.UserID = "usr_share_a"
+	authA.UserDisplayName = "Share A"
+	authB := authContext(types.DefaultTenantID, "agent-b")
+	authB.UserID = "usr_share_b"
+	authB.UserDisplayName = "Share B"
+	authC := authContext(types.DefaultTenantID, "agent-c")
+	authC.UserID = "usr_share_c"
+	authC.UserDisplayName = "Share C"
+	repo.Users = append(repo.Users,
+		types.User{ID: authA.UserID, TenantID: types.DefaultTenantID, Email: "a-share@example.com", DisplayName: authA.UserDisplayName, Role: "member"},
+		types.User{ID: authB.UserID, TenantID: types.DefaultTenantID, Email: "b-share@example.com", DisplayName: authB.UserDisplayName, Role: "member"},
+		types.User{ID: authC.UserID, TenantID: types.DefaultTenantID, Email: "c-share@example.com", DisplayName: authC.UserDisplayName, Role: "member"},
+	)
+	team, err := repo.CreateTeam(t.Context(), "shared-team", "Shared Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddTeamMember(t.Context(), team.ID, authB.UserID); err != nil {
+		t.Fatal(err)
+	}
+	keyA, err := svc.CreateAPIKey(t.Context(), authA, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := svc.CreateAPIKey(t.Context(), authB, "agent-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyC, err := svc.CreateAPIKey(t.Context(), authC, "agent-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := svc.CreateThread(t.Context(), authA, "team-shared marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
+
+	request := func(method string, path string, secret string, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("authorization", "Bearer "+secret)
+		if body != "" {
+			req.Header.Set("content-type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, req)
+		return response
+	}
+
+	privateB := request(http.MethodGet, "/api/threads/"+thread.ID, keyB.Key, "")
+	if privateB.Code != http.StatusNotFound {
+		t.Fatalf("private thread visible before share: status=%d body=%s", privateB.Code, privateB.Body.String())
+	}
+
+	shareBody, _ := json.Marshal(map[string]any{"team_ids": []string{team.ID, team.ID}})
+	shared := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyA.Key, string(shareBody))
+	if shared.Code != http.StatusOK || !strings.Contains(shared.Body.String(), `"slug":"shared-team"`) {
+		t.Fatalf("share status=%d body=%s", shared.Code, shared.Body.String())
+	}
+
+	listB := request(http.MethodGet, "/api/threads", keyB.Key, "")
+	if listB.Code != http.StatusOK || !strings.Contains(listB.Body.String(), thread.ID) {
+		t.Fatalf("team member list status=%d body=%s", listB.Code, listB.Body.String())
+	}
+	searchB := request(http.MethodGet, "/api/threads?query=team-shared", keyB.Key, "")
+	if searchB.Code != http.StatusOK || !strings.Contains(searchB.Body.String(), thread.ID) {
+		t.Fatalf("team member search status=%d body=%s", searchB.Code, searchB.Body.String())
+	}
+	detailB := request(http.MethodGet, "/api/threads/"+thread.ID, keyB.Key, "")
+	if detailB.Code != http.StatusOK || !strings.Contains(detailB.Body.String(), `"shared_teams"`) || !strings.Contains(detailB.Body.String(), team.ID) {
+		t.Fatalf("team member detail status=%d body=%s", detailB.Code, detailB.Body.String())
+	}
+	postB := request(http.MethodPost, "/api/threads/"+thread.ID+"/messages", keyB.Key, `{"body":"team participant reply"}`)
+	if postB.Code != http.StatusCreated || !strings.Contains(postB.Body.String(), `"author":"agent-b"`) {
+		t.Fatalf("team member post status=%d body=%s", postB.Code, postB.Body.String())
+	}
+
+	uploadIntent := request(http.MethodPost, "/api/threads/"+thread.ID+"/uploads", keyB.Key, `{"files":[{"file_name":"team-note.txt","mime_type":"text/plain","size_bytes":4}]}`)
+	if uploadIntent.Code != http.StatusCreated {
+		t.Fatalf("team upload intent status=%d body=%s", uploadIntent.Code, uploadIntent.Body.String())
+	}
+	var uploadPayload struct {
+		Uploads []struct {
+			UploadID string `json:"upload_id"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(uploadIntent.Body.Bytes(), &uploadPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(uploadPayload.Uploads) != 1 || uploadPayload.Uploads[0].UploadID == "" {
+		t.Fatalf("team upload payload=%#v", uploadPayload)
+	}
+	finalizeBody, _ := json.Marshal(map[string]any{
+		"body":       "team upload finalization",
+		"upload_ids": []string{uploadPayload.Uploads[0].UploadID},
+	})
+	finalized := request(http.MethodPost, "/api/threads/"+thread.ID+"/messages", keyB.Key, string(finalizeBody))
+	if finalized.Code != http.StatusCreated {
+		t.Fatalf("team upload finalization status=%d body=%s", finalized.Code, finalized.Body.String())
+	}
+	var finalizedPayload struct {
+		Message types.Message `json:"message"`
+	}
+	if err := json.Unmarshal(finalized.Body.Bytes(), &finalizedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(finalizedPayload.Message.Assets) != 1 {
+		t.Fatalf("finalized team asset payload=%#v", finalizedPayload)
+	}
+	assetID := finalizedPayload.Message.Assets[0].ID
+	downloadB := request(http.MethodGet, "/api/assets/"+assetID+"/download", keyB.Key, "")
+	if downloadB.Code != http.StatusOK || !strings.Contains(downloadB.Body.String(), `"download_url"`) {
+		t.Fatalf("team asset signing status=%d body=%s", downloadB.Code, downloadB.Body.String())
+	}
+
+	unshared := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyB.Key, `{"team_ids":[]}`)
+	if unshared.Code != http.StatusOK || !strings.Contains(unshared.Body.String(), `"shared_teams":[]`) {
+		t.Fatalf("participant unshare status=%d body=%s", unshared.Code, unshared.Body.String())
+	}
+	revokedB := request(http.MethodGet, "/api/threads/"+thread.ID, keyB.Key, "")
+	if revokedB.Code != http.StatusNotFound {
+		t.Fatalf("participant retained access after removing its share: status=%d body=%s", revokedB.Code, revokedB.Body.String())
+	}
+	ownerStillHasAccess := request(http.MethodGet, "/api/threads/"+thread.ID, keyA.Key, "")
+	if ownerStillHasAccess.Code != http.StatusOK {
+		t.Fatalf("thread owner lost access: status=%d body=%s", ownerStillHasAccess.Code, ownerStillHasAccess.Body.String())
+	}
+
+	sharedAgain := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyA.Key, string(shareBody))
+	if sharedAgain.Code != http.StatusOK {
+		t.Fatalf("reshare status=%d body=%s", sharedAgain.Code, sharedAgain.Body.String())
+	}
+	outsiderC := request(http.MethodGet, "/api/threads/"+thread.ID, keyC.Key, "")
+	if outsiderC.Code != http.StatusNotFound {
+		t.Fatalf("unrelated API key bypassed membership: status=%d body=%s", outsiderC.Code, outsiderC.Body.String())
+	}
+	if _, err := repo.RemoveTeamMember(t.Context(), team.ID, authB.UserID); err != nil {
+		t.Fatal(err)
+	}
+	membershipRevokedB := request(http.MethodGet, "/api/threads/"+thread.ID, keyB.Key, "")
+	if membershipRevokedB.Code != http.StatusNotFound {
+		t.Fatalf("removed member retained access: status=%d body=%s", membershipRevokedB.Code, membershipRevokedB.Body.String())
+	}
+	downloadRevokedB := request(http.MethodGet, "/api/assets/"+assetID+"/download", keyB.Key, "")
+	if downloadRevokedB.Code != http.StatusNotFound {
+		t.Fatalf("removed member retained asset signing: status=%d body=%s", downloadRevokedB.Code, downloadRevokedB.Body.String())
+	}
+	if _, err := repo.AddTeamMember(t.Context(), team.ID, authB.UserID); err != nil {
+		t.Fatal(err)
+	}
+	membershipRestoredB := request(http.MethodGet, "/api/threads/"+thread.ID, keyB.Key, "")
+	if membershipRestoredB.Code != http.StatusOK {
+		t.Fatalf("re-added member did not regain access: status=%d body=%s", membershipRestoredB.Code, membershipRestoredB.Body.String())
+	}
+}
+
 func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})

@@ -25,6 +25,7 @@ type MemoryRepository struct {
 	SignupInvitations []memorySignupInvitation
 	Teams             []types.Team
 	TeamMemberships   []types.TeamMembership
+	ThreadTeamShares  []types.ThreadTeamShare
 	Onboarding        []types.OnboardingState
 }
 
@@ -42,16 +43,116 @@ type memorySignupInvitation struct {
 func (m *MemoryRepository) ResolveThreadAccess(_ context.Context, userID string, threadID string) (*types.ThreadAccess, error) {
 	for _, thread := range m.Threads {
 		if thread.ID == threadID {
-			return normalMemoryThreadAccess(thread, userID), nil
+			return m.normalThreadAccess(thread, userID), nil
 		}
 	}
 	return nil, nil
 }
 
+func (m *MemoryRepository) GetThreadVisibility(_ context.Context, userID string, threadID string) (*types.ThreadVisibility, error) {
+	for _, thread := range m.Threads {
+		if thread.ID != threadID || m.normalThreadAccess(thread, userID) == nil {
+			continue
+		}
+		visibility := m.threadVisibility(thread)
+		return &visibility, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) SetThreadVisibility(_ context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error) {
+	teamIDs = uniqueNonEmptyStrings(teamIDs)
+	var thread *types.Thread
+	for index := range m.Threads {
+		if m.Threads[index].ID == threadID && m.normalThreadAccess(m.Threads[index], userID) != nil {
+			thread = &m.Threads[index]
+			break
+		}
+	}
+	if thread == nil {
+		return types.ThreadVisibility{}, types.ErrThreadNotFound
+	}
+
+	desiredTeams := make([]types.Team, 0, len(teamIDs))
+	for _, teamID := range teamIDs {
+		found := false
+		for _, team := range m.Teams {
+			if team.ID == teamID {
+				desiredTeams = append(desiredTeams, team)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return types.ThreadVisibility{}, types.ErrTeamNotFound
+		}
+	}
+	sort.SliceStable(desiredTeams, func(i, j int) bool {
+		if !strings.EqualFold(desiredTeams[i].Name, desiredTeams[j].Name) {
+			return strings.ToLower(desiredTeams[i].Name) < strings.ToLower(desiredTeams[j].Name)
+		}
+		if !strings.EqualFold(desiredTeams[i].Slug, desiredTeams[j].Slug) {
+			return strings.ToLower(desiredTeams[i].Slug) < strings.ToLower(desiredTeams[j].Slug)
+		}
+		return desiredTeams[i].ID < desiredTeams[j].ID
+	})
+
+	existing := map[string]types.ThreadTeamShare{}
+	kept := make([]types.ThreadTeamShare, 0, len(m.ThreadTeamShares)+len(teamIDs))
+	for _, share := range m.ThreadTeamShares {
+		if share.ThreadID != threadID {
+			kept = append(kept, share)
+			continue
+		}
+		existing[share.TeamID] = share
+	}
+	now := isoMillis(time.Now().UTC())
+	creator := userID
+	for _, teamID := range teamIDs {
+		if share, ok := existing[teamID]; ok {
+			kept = append(kept, share)
+			continue
+		}
+		kept = append(kept, types.ThreadTeamShare{
+			ThreadID:        threadID,
+			TeamID:          teamID,
+			CreatedByUserID: &creator,
+			CreatedAt:       now,
+		})
+	}
+	m.ThreadTeamShares = kept
+	return types.ThreadVisibility{ThreadID: threadID, OwnerUserID: thread.OwnerUserID, SharedTeams: desiredTeams}, nil
+}
+
+func (m *MemoryRepository) threadVisibility(thread types.Thread) types.ThreadVisibility {
+	teamIDs := map[string]struct{}{}
+	for _, share := range m.ThreadTeamShares {
+		if share.ThreadID == thread.ID {
+			teamIDs[share.TeamID] = struct{}{}
+		}
+	}
+	teams := []types.Team{}
+	for _, team := range m.Teams {
+		if _, ok := teamIDs[team.ID]; ok {
+			teams = append(teams, team)
+		}
+	}
+	sort.SliceStable(teams, func(i, j int) bool {
+		if !strings.EqualFold(teams[i].Name, teams[j].Name) {
+			return strings.ToLower(teams[i].Name) < strings.ToLower(teams[j].Name)
+		}
+		if !strings.EqualFold(teams[i].Slug, teams[j].Slug) {
+			return strings.ToLower(teams[i].Slug) < strings.ToLower(teams[j].Slug)
+		}
+		return teams[i].ID < teams[j].ID
+	})
+	return types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID, SharedTeams: teams}
+}
+
 func (m *MemoryRepository) ListThreads(_ context.Context, userID string, limit int) ([]types.Thread, error) {
 	threads := []types.Thread{}
 	for _, thread := range m.Threads {
-		if normalMemoryThreadAccess(thread, userID) != nil {
+		if m.normalThreadAccess(thread, userID) != nil {
 			threads = append(threads, thread)
 		}
 	}
@@ -72,7 +173,7 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 		return threads[i].UpdatedAt > threads[j].UpdatedAt
 	})
 	for _, thread := range threads {
-		if normalMemoryThreadAccess(thread, userID) == nil {
+		if m.normalThreadAccess(thread, userID) == nil {
 			continue
 		}
 		if params.CreatedBy != nil && *params.CreatedBy != "" && thread.CreatedBy != *params.CreatedBy {
@@ -176,7 +277,7 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, userID str
 
 func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID string) (*types.ThreadWithMessages, error) {
 	for _, thread := range m.Threads {
-		if thread.ID != threadID || normalMemoryThreadAccess(thread, userID) == nil {
+		if thread.ID != threadID || m.normalThreadAccess(thread, userID) == nil {
 			continue
 		}
 		messages := []types.Message{}
@@ -199,7 +300,7 @@ func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID 
 		sort.Slice(messages, func(i, j int) bool {
 			return messages[i].CreatedAt < messages[j].CreatedAt
 		})
-		return &types.ThreadWithMessages{Thread: thread, Messages: messages}, nil
+		return &types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: m.threadVisibility(thread)}, nil
 	}
 	return nil, nil
 }
@@ -214,7 +315,7 @@ func (m *MemoryRepository) GetAsset(_ context.Context, userID string, assetID st
 				continue
 			}
 			for _, thread := range m.Threads {
-				if thread.ID == message.ThreadID && normalMemoryThreadAccess(thread, userID) != nil {
+				if thread.ID == message.ThreadID && m.normalThreadAccess(thread, userID) != nil {
 					copy := asset
 					copy.PublicURL = nil
 					copy.DownloadURL = nil
@@ -283,7 +384,7 @@ func (m *MemoryRepository) MarkPendingUploadsConsumed(_ context.Context, userID 
 func (m *MemoryRepository) PostMessage(_ context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
 	var threadIndex = -1
 	for i, thread := range m.Threads {
-		if thread.ID == threadID && normalMemoryThreadAccess(thread, userID) != nil {
+		if thread.ID == threadID && m.normalThreadAccess(thread, userID) != nil {
 			threadIndex = i
 			break
 		}
@@ -1288,16 +1389,36 @@ func pendingUploadOwnedBy(upload types.PendingUpload, owner types.AuthContext) b
 	return upload.CreatedByKeyID != nil && *upload.CreatedByKeyID == owner.KeyID
 }
 
-// normalMemoryThreadAccess mirrors the SQL normalThreadAccessPredicate. Phase 7
-// must widen both implementations together when team sharing is introduced.
-func normalMemoryThreadAccess(thread types.Thread, userID string) *types.ThreadAccess {
-	if strings.TrimSpace(userID) == "" || thread.OwnerUserID != userID {
+// normalThreadAccess mirrors the SQL normalThreadAccessPredicate.
+func (m *MemoryRepository) normalThreadAccess(thread types.Thread, userID string) *types.ThreadAccess {
+	if strings.TrimSpace(userID) == "" {
+		return nil
+	}
+	matched := []string{}
+	memberTeams := map[string]struct{}{}
+	for _, membership := range m.TeamMemberships {
+		if membership.UserID == userID {
+			memberTeams[membership.TeamID] = struct{}{}
+		}
+	}
+	for _, share := range m.ThreadTeamShares {
+		if share.ThreadID != thread.ID {
+			continue
+		}
+		if _, ok := memberTeams[share.TeamID]; ok {
+			matched = append(matched, share.TeamID)
+		}
+	}
+	sort.Strings(matched)
+	isOwner := thread.OwnerUserID == userID
+	if !isOwner && len(matched) == 0 {
 		return nil
 	}
 	return &types.ThreadAccess{
-		ThreadID:    thread.ID,
-		OwnerUserID: thread.OwnerUserID,
-		UserID:      userID,
-		IsOwner:     true,
+		ThreadID:       thread.ID,
+		OwnerUserID:    thread.OwnerUserID,
+		UserID:         userID,
+		IsOwner:        isOwner,
+		MatchedTeamIDs: matched,
 	}
 }

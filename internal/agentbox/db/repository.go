@@ -27,9 +27,19 @@ type Repository struct {
 }
 
 // normalThreadAccessPredicate is the single normal-user authorization boundary.
-// Phase 7 widens this exact predicate with active team membership; callers must
-// not introduce separate thread-visibility checks.
-const normalThreadAccessPredicate = `t.owner_user_id = $1`
+// It is intentionally evaluated at query time so membership and visibility
+// changes revoke or grant access immediately across every content path.
+const normalThreadAccessPredicate = `(
+  t.owner_user_id = $1
+  or exists (
+    select 1
+    from thread_team_shares access_share
+    join team_memberships access_membership
+      on access_membership.team_id = access_share.team_id
+    where access_share.thread_id = t.id
+      and access_membership.user_id = $1
+  )
+)`
 
 func Open(ctx context.Context, cfg config.Config) (*Repository, error) {
 	if cfg.DatabaseURL == "" {
@@ -56,10 +66,21 @@ func (r *Repository) Close() {
 func (r *Repository) ResolveThreadAccess(ctx context.Context, userID string, threadID string) (*types.ThreadAccess, error) {
 	var access types.ThreadAccess
 	err := r.pool.QueryRow(ctx, `
-select t.id, t.owner_user_id
+select
+  t.id,
+  t.owner_user_id,
+  coalesce(array(
+    select access_share.team_id
+    from thread_team_shares access_share
+    join team_memberships access_membership
+      on access_membership.team_id = access_share.team_id
+    where access_share.thread_id = t.id
+      and access_membership.user_id = $1
+    order by access_share.team_id
+  ), '{}'::text[])
 from threads t
 where `+normalThreadAccessPredicate+` and t.id = $2
-`, userID, threadID).Scan(&access.ThreadID, &access.OwnerUserID)
+`, userID, threadID).Scan(&access.ThreadID, &access.OwnerUserID, &access.MatchedTeamIDs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -69,6 +90,91 @@ where `+normalThreadAccessPredicate+` and t.id = $2
 	access.UserID = userID
 	access.IsOwner = access.OwnerUserID == userID
 	return &access, nil
+}
+
+func (r *Repository) GetThreadVisibility(ctx context.Context, userID string, threadID string) (*types.ThreadVisibility, error) {
+	var visibility types.ThreadVisibility
+	err := r.pool.QueryRow(ctx, `
+select t.id, t.owner_user_id
+from threads t
+where `+normalThreadAccessPredicate+` and t.id = $2
+`, userID, threadID).Scan(&visibility.ThreadID, &visibility.OwnerUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	teams, err := r.listThreadTeams(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	visibility.SharedTeams = teams
+	return &visibility, nil
+}
+
+func (r *Repository) SetThreadVisibility(ctx context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error) {
+	teamIDs = uniqueNonEmptyStrings(teamIDs)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	visibility := types.ThreadVisibility{ThreadID: threadID}
+	err = tx.QueryRow(ctx, `
+select t.owner_user_id
+from threads t
+where `+normalThreadAccessPredicate+` and t.id = $2
+for update
+`, userID, threadID).Scan(&visibility.OwnerUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.ThreadVisibility{}, types.ErrThreadNotFound
+	}
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+
+	teams, err := listTeamsByIDsTx(ctx, tx, teamIDs)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+delete from thread_team_shares
+where thread_id = $1
+  and not (team_id = any($2::text[]))
+`, threadID, teamIDs); err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	for _, team := range teams {
+		if _, err := tx.Exec(ctx, `
+insert into thread_team_shares (thread_id, team_id, created_by_user_id)
+values ($1, $2, $3)
+on conflict (thread_id, team_id) do nothing
+`, threadID, team.ID, userID); err != nil {
+			return types.ThreadVisibility{}, err
+		}
+	}
+	visibility.SharedTeams = teams
+	if err := tx.Commit(ctx); err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return visibility, nil
+}
+
+func (r *Repository) listThreadTeams(ctx context.Context, threadID string) ([]types.Team, error) {
+	rows, err := r.pool.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join thread_team_shares share on share.team_id = t.id
+where share.thread_id = $1
+order by lower(t.name), lower(t.slug), t.id
+`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTeams(rows)
 }
 
 func (r *Repository) ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error) {
@@ -288,7 +394,14 @@ order by created_at asc
 		}
 	}
 
-	return &types.ThreadWithMessages{Thread: thread, Messages: messages}, nil
+	visibility, err := r.GetThreadVisibility(ctx, userID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if visibility == nil {
+		return nil, nil
+	}
+	return &types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: *visibility}, nil
 }
 
 func (r *Repository) GetAsset(ctx context.Context, userID string, assetID string) (*types.Asset, error) {

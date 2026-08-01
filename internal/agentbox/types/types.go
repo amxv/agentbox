@@ -155,10 +155,24 @@ type Thread struct {
 }
 
 type ThreadAccess struct {
+	ThreadID       string   `json:"thread_id"`
+	OwnerUserID    string   `json:"owner_user_id"`
+	UserID         string   `json:"user_id"`
+	IsOwner        bool     `json:"is_owner"`
+	MatchedTeamIDs []string `json:"matched_team_ids"`
+}
+
+type ThreadTeamShare struct {
+	ThreadID        string  `json:"thread_id"`
+	TeamID          string  `json:"team_id"`
+	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+}
+
+type ThreadVisibility struct {
 	ThreadID    string `json:"thread_id"`
 	OwnerUserID string `json:"owner_user_id"`
-	UserID      string `json:"user_id"`
-	IsOwner     bool   `json:"is_owner"`
+	SharedTeams []Team `json:"shared_teams"`
 }
 
 type Asset struct {
@@ -197,7 +211,8 @@ type Message struct {
 
 type ThreadWithMessages struct {
 	Thread
-	Messages []Message `json:"messages"`
+	Messages   []Message        `json:"messages"`
+	Visibility ThreadVisibility `json:"visibility"`
 }
 
 type ChatGPTFileReference struct {
