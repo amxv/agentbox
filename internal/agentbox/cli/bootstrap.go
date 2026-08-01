@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"agentbox/internal/agentbox/profiles"
 )
@@ -294,6 +295,57 @@ func (r *Runner) runProvision(args []string, profileName string) error {
 	return nil
 }
 
+func (r *Runner) runOwner(args []string, profileName string) error {
+	if len(args) == 0 || args[0] != "setup-token" {
+		return errors.New("Usage: agentbox owner setup-token [--base-url <url>] [--app-url <url>] [--admin-key <key>] [--expires 30m] [--json]")
+	}
+	fs := newFlagSet("owner setup-token")
+	baseURL := fs.String("base-url", "", "Agentbox backend URL")
+	appURL := fs.String("app-url", "", "dashboard URL used when the backend returns a relative setup path")
+	adminKey := fs.String("admin-key", "", "Agentbox deployment admin key")
+	expires := fs.Duration("expires", 30*time.Minute, "one-time token lifetime, up to 24h")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("Usage: agentbox owner setup-token [options]")
+	}
+	if *expires <= 0 || *expires > 24*time.Hour {
+		return errors.New("--expires must be greater than zero and no more than 24h")
+	}
+	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
+	if err != nil {
+		return err
+	}
+	minutes := int((*expires + time.Minute - time.Nanosecond) / time.Minute)
+	payload, _ := json.Marshal(map[string]int{"expires_in_minutes": minutes})
+	var result struct {
+		Token     string `json:"token"`
+		Purpose   string `json:"purpose"`
+		ExpiresAt string `json:"expires_at"`
+		SetupURL  string `json:"setup_url"`
+	}
+	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/owner/setup-token", http.MethodPost, bytes.NewReader(payload), &result); err != nil {
+		return err
+	}
+	if strings.HasPrefix(result.SetupURL, "/") {
+		setupBaseURL := strings.TrimSpace(*appURL)
+		if setupBaseURL == "" {
+			setupBaseURL = resolvedBaseURL
+		}
+		result.SetupURL = strings.TrimRight(setupBaseURL, "/") + result.SetupURL
+	}
+	if *jsonOut {
+		return printJSON(r.Stdout, result)
+	}
+	fmt.Fprintf(r.Stdout, "Issued owner %s token.\n", result.Purpose)
+	fmt.Fprintf(r.Stdout, "Expires: %s\n", result.ExpiresAt)
+	fmt.Fprintf(r.Stdout, "Setup URL: %s\n", result.SetupURL)
+	fmt.Fprintln(r.Stdout, "Open this URL once in a trusted browser. It contains the one-time token, not the deployment secret.")
+	return nil
+}
+
 func (r *Runner) runDeploy(args []string, globalProfileName string) error {
 	if len(args) == 0 || args[0] != "vercel" {
 		return errors.New(`Usage: agentbox deploy vercel`)
@@ -319,6 +371,7 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel link --yes --project agentbox-go",
 		"vercel env add DATABASE_URL production",
 		"vercel env add AGENTBOX_ADMIN_KEY production",
+		"printf 'https://YOUR-DASHBOARD.vercel.app' | vercel env add APP_PUBLIC_URL production",
 		"vercel env add R2_ACCOUNT_ID production",
 		"vercel env add R2_ACCESS_KEY_ID production",
 		"vercel env add R2_SECRET_ACCESS_KEY production",
@@ -326,10 +379,10 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel env add AGENTBOX_ENV production",
 		"vercel --prod --yes -A deploy/vercel/backend/vercel.json",
 		"bun run db:migrate",
-		"agentbox provision tenant --base-url https://YOUR-BACKEND.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\" --tenant-slug default --tenant-name Default --user-email you@example.com --user-name \"Your Name\" --create-cli-key --profile-name production",
 		"vercel link --yes --project agentbox",
 		"printf 'https://YOUR-BACKEND.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production",
 		"vercel --prod --yes -A deploy/vercel/dashboard/vercel.json",
+		"agentbox owner setup-token --base-url https://YOUR-BACKEND.vercel.app --app-url https://YOUR-DASHBOARD.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\" --expires 30m",
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, map[string]any{"commands": commands})

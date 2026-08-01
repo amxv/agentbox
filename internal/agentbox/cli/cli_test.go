@@ -53,6 +53,7 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
 		{[]string{"init", "--help"}, []string{"Usage: agentbox init", "existing user credential"}},
+		{[]string{"owner", "--help"}, []string{"Usage: agentbox owner setup-token", "permanent deployment owner"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
 		{[]string{"provision", "--help"}, []string{"Usage: agentbox provision tenant", "deployment-owner admin API"}},
 		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "tenant-scoped API key"}},
@@ -516,7 +517,7 @@ func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 		t.Fatalf("deploy vercel failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "agentbox provision tenant --base-url") {
+	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "vercel env add APP_PUBLIC_URL production") || !strings.Contains(output, "agentbox owner setup-token --base-url") {
 		t.Fatalf("deploy output = %s", output)
 	}
 	if called {
@@ -538,6 +539,37 @@ func TestCLIAdminKeyManagementIsDisabled(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--admin-key and --base-url are no longer supported") {
 		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestCLIOwnerSetupTokenPrintsBrowserLinkWithoutDeploymentSecret(t *testing.T) {
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+	}
+	server := httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "deployment-secret"}, service.New(repo, &assets.FakeStore{})))
+	t.Cleanup(server.Close)
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"owner", "setup-token", "--base-url", server.URL, "--admin-key", "deployment-secret", "--expires", "15m"}); code != 0 {
+		t.Fatalf("owner setup-token failed: code=%d stderr=%s", code, stderr.String())
+	}
+	output := out.String()
+	if !strings.Contains(output, "Issued owner bootstrap token.") || !strings.Contains(output, server.URL+"/owner/setup?token=agos_") {
+		t.Fatalf("owner setup-token output=%s", output)
+	}
+	if strings.Contains(output, "deployment-secret") {
+		t.Fatalf("deployment secret leaked in CLI output: %s", output)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"owner", "setup-token", "--base-url", server.URL, "--admin-key", "deployment-secret", "--expires", "25h"}); code == 0 {
+		t.Fatalf("oversized setup token expiry unexpectedly succeeded: %s", out.String())
+	}
+	if !strings.Contains(stderr.String(), "no more than 24h") {
+		t.Fatalf("oversized expiry stderr=%s", stderr.String())
 	}
 }
 

@@ -49,6 +49,7 @@ The deployment admin key is used for provisioning and deployment-level administr
 vercel link --yes --project agentbox-go
 vercel env add DATABASE_URL production
 vercel env add AGENTBOX_ADMIN_KEY production
+vercel env add APP_PUBLIC_URL production
 vercel env add R2_ACCOUNT_ID production
 vercel env add R2_ACCESS_KEY_ID production
 vercel env add R2_SECRET_ACCESS_KEY production
@@ -73,25 +74,22 @@ vercel --prod --yes -A deploy/vercel/backend/vercel.json
 bun run db:migrate
 ```
 
-## 6. Provision the first tenant and human
+## 6. Create the permanent deployment owner
 
 ```bash
-agentbox provision tenant \
-  --base-url https://youragentbox.vercel.app \
+agentbox owner setup-token \
+  --base-url https://your-agentbox-api.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --tenant-slug default \
-  --tenant-name Default \
-  --user-email you@example.com \
-  --user-name "Your Name" \
-  --create-cli-key \
-  --key-name local \
-  --profile-name prod
-
-agentbox doctor
-agentbox list
+  --expires 30m
 ```
 
-This creates the first tenant, tenant admin user, and tenant-scoped CLI identity.
+Set `APP_PUBLIC_URL` on the backend to the dashboard origin before issuing the
+link. Open the printed URL once in a trusted browser to create the permanent
+owner. Running the command after the owner exists issues a recovery link for the
+same owner email; it does not create a replacement owner.
+
+The deployment secret is never included in the browser URL. Only a hashed,
+expiring, single-use setup token is stored. See `docs/owner-setup.md`.
 
 ## 7. Deploy the human dashboard
 

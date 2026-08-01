@@ -1,5 +1,10 @@
 package types
 
+import "errors"
+
+var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
+var ErrOwnerSetupTokenInvalid = errors.New("owner setup token is invalid or expired")
+
 const DefaultTenantID = "ten_default"
 
 type Actor struct {
@@ -70,6 +75,15 @@ type CLILoginCode struct {
 	CreatedAt   string  `json:"created_at"`
 	ExpiresAt   string  `json:"expires_at"`
 	ConsumedAt  *string `json:"consumed_at,omitempty"`
+}
+
+type OwnerSetupToken struct {
+	ID         string  `json:"id"`
+	Purpose    string  `json:"purpose"`
+	CreatedAt  string  `json:"created_at"`
+	ExpiresAt  string  `json:"expires_at"`
+	ConsumedAt *string `json:"consumed_at,omitempty"`
+	RevokedAt  *string `json:"revoked_at,omitempty"`
 }
 
 type Thread struct {

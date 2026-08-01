@@ -12,15 +12,21 @@ import (
 )
 
 type MemoryRepository struct {
-	Threads  []types.Thread
-	Messages []types.Message
-	Assets   []types.Asset
-	Pending  []types.PendingUpload
-	APIKeys  []types.APIKey
-	Tenants  []types.Tenant
-	Users    []types.User
-	Sessions []types.UserSession
-	CLICodes []types.CLILoginCode
+	Threads          []types.Thread
+	Messages         []types.Message
+	Assets           []types.Asset
+	Pending          []types.PendingUpload
+	APIKeys          []types.APIKey
+	Tenants          []types.Tenant
+	Users            []types.User
+	Sessions         []types.UserSession
+	CLICodes         []types.CLILoginCode
+	OwnerSetupTokens []memoryOwnerSetupToken
+}
+
+type memoryOwnerSetupToken struct {
+	Token     types.OwnerSetupToken
+	TokenHash string
 }
 
 func (m *MemoryRepository) ListThreads(_ context.Context, tenantID string, limit int) ([]types.Thread, error) {
@@ -414,6 +420,113 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 	now := isoMillis(time.Now())
 	email = strings.TrimSpace(email)
 	displayName = strings.TrimSpace(displayName)
+	if email == "" || displayName == "" || passwordHash == "" {
+		return types.User{}, errors.New("owner email, display name, and password hash are required")
+	}
+	for i := range m.Users {
+		if m.Users[i].IsOwner {
+			if !strings.EqualFold(m.Users[i].Email, email) {
+				return types.User{}, ErrOwnerAlreadyExists
+			}
+			m.Users[i].DisplayName = displayName
+			m.Users[i].PasswordHash = &passwordHash
+			m.Users[i].Role = "admin"
+			m.Users[i].DisabledAt = nil
+			m.Users[i].UpdatedAt = now
+			return m.Users[i], nil
+		}
+	}
+	for i := range m.Users {
+		if strings.EqualFold(m.Users[i].Email, email) {
+			m.Users[i].DisplayName = displayName
+			m.Users[i].PasswordHash = &passwordHash
+			m.Users[i].Role = "admin"
+			m.Users[i].IsOwner = true
+			m.Users[i].DisabledAt = nil
+			m.Users[i].UpdatedAt = now
+			return m.Users[i], nil
+		}
+	}
+	owner := types.User{
+		ID:           "usr_" + uuid.NewString(),
+		TenantID:     types.DefaultTenantID,
+		Email:        email,
+		DisplayName:  displayName,
+		PasswordHash: &passwordHash,
+		Role:         "admin",
+		IsOwner:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	m.Users = append(m.Users, owner)
+	return owner, nil
+}
+
+func (m *MemoryRepository) CreateOwnerSetupToken(_ context.Context, tokenHash string, expiresAt time.Time) (types.OwnerSetupToken, error) {
+	if strings.TrimSpace(tokenHash) == "" || !expiresAt.After(time.Now().UTC()) {
+		return types.OwnerSetupToken{}, errors.New("owner setup token hash and future expiry are required")
+	}
+	now := time.Now().UTC()
+	nowValue := isoMillis(now)
+	for index := range m.OwnerSetupTokens {
+		if m.OwnerSetupTokens[index].Token.ConsumedAt == nil && m.OwnerSetupTokens[index].Token.RevokedAt == nil {
+			m.OwnerSetupTokens[index].Token.RevokedAt = &nowValue
+		}
+	}
+	purpose := "bootstrap"
+	for _, user := range m.Users {
+		if user.IsOwner {
+			purpose = "recovery"
+			break
+		}
+	}
+	token := types.OwnerSetupToken{
+		ID:        "ost_" + uuid.NewString(),
+		Purpose:   purpose,
+		CreatedAt: nowValue,
+		ExpiresAt: isoMillis(expiresAt),
+	}
+	m.OwnerSetupTokens = append(m.OwnerSetupTokens, memoryOwnerSetupToken{Token: token, TokenHash: tokenHash})
+	return token, nil
+}
+
+func (m *MemoryRepository) UseOwnerSetupToken(_ context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error) {
+	now := time.Now().UTC()
+	for index := range m.OwnerSetupTokens {
+		entry := &m.OwnerSetupTokens[index]
+		expiresAt, err := time.Parse(time.RFC3339Nano, entry.Token.ExpiresAt)
+		if err != nil || entry.TokenHash != tokenHash || entry.Token.ConsumedAt != nil || entry.Token.RevokedAt != nil || !expiresAt.After(now) {
+			continue
+		}
+		ownerIndex := -1
+		for userIndex := range m.Users {
+			if m.Users[userIndex].IsOwner {
+				ownerIndex = userIndex
+				break
+			}
+		}
+		if entry.Token.Purpose == "bootstrap" && ownerIndex >= 0 {
+			return types.User{}, types.OwnerSetupToken{}, ErrOwnerSetupTokenInvalid
+		}
+		if entry.Token.Purpose == "recovery" && ownerIndex < 0 {
+			return types.User{}, types.OwnerSetupToken{}, ErrOwnerSetupTokenInvalid
+		}
+		if ownerIndex >= 0 && !strings.EqualFold(m.Users[ownerIndex].Email, strings.TrimSpace(email)) {
+			return types.User{}, types.OwnerSetupToken{}, ErrOwnerAlreadyExists
+		}
+		owner, err := m.bootstrapOwner(strings.TrimSpace(email), strings.TrimSpace(displayName), passwordHash)
+		if err != nil {
+			return types.User{}, types.OwnerSetupToken{}, err
+		}
+		consumedAt := isoMillis(now)
+		entry.Token.ConsumedAt = &consumedAt
+		return owner, entry.Token, nil
+	}
+	return types.User{}, types.OwnerSetupToken{}, ErrOwnerSetupTokenInvalid
+}
+
+func (m *MemoryRepository) bootstrapOwner(email string, displayName string, passwordHash string) (types.User, error) {
+	now := isoMillis(time.Now())
 	if email == "" || displayName == "" || passwordHash == "" {
 		return types.User{}, errors.New("owner email, display name, and password hash are required")
 	}

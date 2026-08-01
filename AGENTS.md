@@ -120,6 +120,25 @@ the canonical schema history. Applied versions and checksums are recorded in
 
 Do not rely on `AGENTBOX_AUTO_MIGRATE=true` for production by default.
 
+## Permanent Owner Setup
+
+The deployment admin secret is not a daily actor credential. Use it only from a
+trusted operator shell to issue a one-time owner bootstrap or recovery link:
+
+```bash
+agentbox owner setup-token \
+  --base-url https://api.agentbox.example.com \
+  --admin-key "$AGENTBOX_ADMIN_KEY" \
+  --expires 30m
+```
+
+Set `APP_PUBLIC_URL` on the Go backend to the Next.js dashboard origin when the
+projects are deployed separately. The token is hash-only in PostgreSQL,
+single-use, expiring, and replaced whenever a new token is issued. Recovery is
+restricted to the same permanent owner email. Browser sessions and API keys
+cannot issue setup tokens, and owner API keys never receive owner-browser-only
+authority. See `docs/owner-setup.md`.
+
 ## User/team Cutover Backup Preflight
 
 Before any production user/team authorization cutover, run the content backup

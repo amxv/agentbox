@@ -319,6 +319,97 @@ select
 	}
 }
 
+func TestOwnerSetupTokensAreHashedSingleUseAndTransactional(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	firstSecret := "agos_first_secret"
+	first, err := repository.CreateOwnerSetupToken(ctx, hashSecret(firstSecret), time.Now().UTC().Add(15*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Purpose != "bootstrap" {
+		t.Fatalf("first purpose = %q", first.Purpose)
+	}
+	var storedHash string
+	if err := repository.pool.QueryRow(ctx, `select token_hash from owner_setup_tokens where id = $1`, first.ID).Scan(&storedHash); err != nil {
+		t.Fatal(err)
+	}
+	if storedHash != hashSecret(firstSecret) || storedHash == firstSecret {
+		t.Fatalf("setup token storage is not hash-only: %q", storedHash)
+	}
+
+	secondSecret := "agos_second_secret"
+	second, err := repository.CreateOwnerSetupToken(ctx, hashSecret(secondSecret), time.Now().UTC().Add(15*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Purpose != "bootstrap" || second.ID == first.ID {
+		t.Fatalf("unexpected replacement token: first=%#v second=%#v", first, second)
+	}
+	var firstRevoked bool
+	if err := repository.pool.QueryRow(ctx, `select revoked_at is not null from owner_setup_tokens where id = $1`, first.ID).Scan(&firstRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if !firstRevoked {
+		t.Fatal("issuing a replacement token did not revoke the prior active token")
+	}
+	if _, _, err := repository.UseOwnerSetupToken(ctx, hashSecret(firstSecret), "owner@example.com", "Owner", "hash-one"); !errors.Is(err, ErrOwnerSetupTokenInvalid) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+
+	owner, consumed, err := repository.UseOwnerSetupToken(ctx, hashSecret(secondSecret), "owner@example.com", "Owner", "hash-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !owner.IsOwner || consumed.ConsumedAt == nil {
+		t.Fatalf("bootstrap result owner=%#v token=%#v", owner, consumed)
+	}
+	if _, _, err := repository.UseOwnerSetupToken(ctx, hashSecret(secondSecret), "owner@example.com", "Owner", "hash-one"); !errors.Is(err, ErrOwnerSetupTokenInvalid) {
+		t.Fatalf("replayed token error = %v", err)
+	}
+
+	recoverySecret := "agos_recovery_secret"
+	recovery, err := repository.CreateOwnerSetupToken(ctx, hashSecret(recoverySecret), time.Now().UTC().Add(15*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Purpose != "recovery" {
+		t.Fatalf("recovery purpose = %q", recovery.Purpose)
+	}
+	if _, _, err := repository.UseOwnerSetupToken(ctx, hashSecret(recoverySecret), "other@example.com", "Wrong", "hash-two"); !errors.Is(err, ErrOwnerAlreadyExists) {
+		t.Fatalf("wrong-email recovery error = %v", err)
+	}
+	var recoveryConsumed bool
+	if err := repository.pool.QueryRow(ctx, `select consumed_at is not null from owner_setup_tokens where id = $1`, recovery.ID).Scan(&recoveryConsumed); err != nil {
+		t.Fatal(err)
+	}
+	if recoveryConsumed {
+		t.Fatal("failed recovery consumed the one-time token despite transaction rollback")
+	}
+	recoveredOwner, _, err := repository.UseOwnerSetupToken(ctx, hashSecret(recoverySecret), "OWNER@example.com", "Recovered", "hash-two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredOwner.ID != owner.ID || recoveredOwner.DisplayName != "Recovered" {
+		t.Fatalf("recovery changed owner identity: before=%#v after=%#v", owner, recoveredOwner)
+	}
+
+	expiredSecret := "agos_expired_secret"
+	expired, err := repository.CreateOwnerSetupToken(ctx, hashSecret(expiredSecret), time.Now().UTC().Add(15*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `update owner_setup_tokens set expires_at = now() - interval '1 minute' where id = $1`, expired.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repository.UseOwnerSetupToken(ctx, hashSecret(expiredSecret), "owner@example.com", "Owner", "hash-three"); !errors.Is(err, ErrOwnerSetupTokenInvalid) {
+		t.Fatalf("expired token error = %v", err)
+	}
+}
+
 func TestMigrateRejectsAppliedMigrationDrift(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

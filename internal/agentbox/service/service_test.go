@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"agentbox/internal/agentbox/assets"
 	authpkg "agentbox/internal/agentbox/auth"
@@ -70,6 +72,78 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 	if authenticated, err := svc.AuthenticateAPIKey(context.Background(), credential.Key); err != nil || authenticated != nil {
 		t.Fatalf("disabled user credential authenticated: auth=%#v err=%v", authenticated, err)
 	}
+}
+
+func TestOwnerSetupTokensBootstrapRecoverRevokeAndRejectReplay(t *testing.T) {
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+	}
+	svc := New(repo, &assets.FakeStore{})
+
+	first, err := svc.IssueOwnerSetupToken(context.Background(), 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Purpose != "bootstrap" || !strings.HasPrefix(first.Token, "agos_") {
+		t.Fatalf("unexpected first setup token: %#v", first)
+	}
+	second, err := svc.IssueOwnerSetupToken(context.Background(), 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Purpose != "bootstrap" || second.Token == first.Token {
+		t.Fatalf("unexpected replacement token: first=%#v second=%#v", first, second)
+	}
+	if _, _, _, err := svc.CompleteOwnerSetup(context.Background(), first.Token, "owner@example.com", "Owner", "first-password"); !hasCodedError(err, "INVALID_OWNER_SETUP_TOKEN") {
+		t.Fatalf("revoked token error = %v", err)
+	}
+
+	authContext, sessionSecret, owner, err := svc.CompleteOwnerSetup(context.Background(), second.Token, "owner@example.com", "Owner", "first-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.ID == "" || !owner.IsOwner || authContext.UserID != owner.ID || !authContext.IsOwner || authContext.SubjectType != types.AuthSubjectUserSession || sessionSecret == "" {
+		t.Fatalf("unexpected owner completion: auth=%#v owner=%#v secret=%q", authContext, owner, sessionSecret)
+	}
+	if _, _, _, err := svc.CompleteOwnerSetup(context.Background(), second.Token, "owner@example.com", "Owner", "first-password"); !hasCodedError(err, "INVALID_OWNER_SETUP_TOKEN") {
+		t.Fatalf("replayed token error = %v", err)
+	}
+
+	recovery, err := svc.IssueOwnerSetupToken(context.Background(), 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Purpose != "recovery" {
+		t.Fatalf("recovery purpose = %q", recovery.Purpose)
+	}
+	if _, _, _, err := svc.CompleteOwnerSetup(context.Background(), recovery.Token, "other@example.com", "Wrong", "second-password"); !hasCodedError(err, "OWNER_EMAIL_MISMATCH") {
+		t.Fatalf("wrong-email recovery error = %v", err)
+	}
+	recoveredAuth, _, recoveredOwner, err := svc.CompleteOwnerSetup(context.Background(), recovery.Token, "OWNER@example.com", "Recovered Owner", "second-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredOwner.ID != owner.ID || recoveredOwner.DisplayName != "Recovered Owner" || recoveredAuth.UserID != owner.ID {
+		t.Fatalf("recovery changed owner identity: before=%#v after=%#v", owner, recoveredOwner)
+	}
+	if _, _, err := svc.Login(context.Background(), "ignored", "owner@example.com", "second-password"); err != nil {
+		t.Fatalf("recovered password did not authenticate: %v", err)
+	}
+	if _, _, err := svc.Login(context.Background(), "ignored", "owner@example.com", "first-password"); !errors.Is(err, ErrInvalidLogin) {
+		t.Fatalf("old password still authenticated: %v", err)
+	}
+}
+
+func TestOwnerSetupTokenTTLIsBounded(t *testing.T) {
+	svc := New(&db.MemoryRepository{}, &assets.FakeStore{})
+	if _, err := svc.IssueOwnerSetupToken(context.Background(), 25*time.Hour); !hasCodedError(err, "INVALID_ARGUMENT") {
+		t.Fatalf("oversized TTL error = %v", err)
+	}
+}
+
+func hasCodedError(err error, code string) bool {
+	var coded CodedError
+	return errors.As(err, &coded) && coded.Code == code
 }
 
 func TestServiceThreadAndMessageFlow(t *testing.T) {

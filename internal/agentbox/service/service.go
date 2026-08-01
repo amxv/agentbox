@@ -50,6 +50,8 @@ type Repository interface {
 	RevokeUserSession(ctx context.Context, sessionID string) error
 	CreateCLILoginCode(ctx context.Context, code types.CLILoginCode) (types.CLILoginCode, error)
 	ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error)
+	CreateOwnerSetupToken(ctx context.Context, tokenHash string, expiresAt time.Time) (types.OwnerSetupToken, error)
+	UseOwnerSetupToken(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error)
 }
 
 type Service struct {
@@ -458,6 +460,12 @@ type CLILoginExchangeResult struct {
 	AuthType    string       `json:"auth_type"`
 }
 
+type OwnerSetupTokenResult struct {
+	Token     string `json:"token"`
+	Purpose   string `json:"purpose"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 type ProvisionUserParams struct {
 	TenantIDOrSlug string
 	Email          string
@@ -515,6 +523,56 @@ func (s *Service) ProvisionTenant(ctx context.Context, params ProvisionTenantPar
 		result.APIKey = &key
 	}
 	return result, nil
+}
+
+func (s *Service) IssueOwnerSetupToken(ctx context.Context, ttl time.Duration) (OwnerSetupTokenResult, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Minute
+	}
+	if ttl > 24*time.Hour {
+		return OwnerSetupTokenResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "Owner setup token expiry may not exceed 24 hours."}
+	}
+	secret, err := generateOwnerSetupToken()
+	if err != nil {
+		return OwnerSetupTokenResult{}, err
+	}
+	token, err := s.repo.CreateOwnerSetupToken(ctx, hashSecret(secret), time.Now().UTC().Add(ttl))
+	if err != nil {
+		return OwnerSetupTokenResult{}, err
+	}
+	return OwnerSetupTokenResult{
+		Token:     secret,
+		Purpose:   token.Purpose,
+		ExpiresAt: token.ExpiresAt,
+	}, nil
+}
+
+func (s *Service) CompleteOwnerSetup(ctx context.Context, token string, email string, displayName string, password string) (types.AuthContext, string, types.User, error) {
+	token = strings.TrimSpace(token)
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if token == "" || email == "" || displayName == "" || password == "" {
+		return types.AuthContext{}, "", types.User{}, CodedError{Code: "INVALID_ARGUMENT", Message: "token, email, display_name, and password are required."}
+	}
+	passwordHash, err := auth.HashPassword(password)
+	if err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	}
+	owner, _, err := s.repo.UseOwnerSetupToken(ctx, hashSecret(token), email, displayName, passwordHash)
+	if errors.Is(err, types.ErrOwnerSetupTokenInvalid) {
+		return types.AuthContext{}, "", types.User{}, CodedError{Code: "INVALID_OWNER_SETUP_TOKEN", Message: "Owner setup token is invalid, expired, revoked, or already used.", Err: err}
+	}
+	if errors.Is(err, types.ErrOwnerAlreadyExists) {
+		return types.AuthContext{}, "", types.User{}, CodedError{Code: "OWNER_EMAIL_MISMATCH", Message: "Recovery must use the permanent owner's existing email address.", Err: err}
+	}
+	if err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	}
+	authContext, sessionSecret, err := s.createSessionForUser(ctx, owner)
+	if err != nil {
+		return types.AuthContext{}, "", types.User{}, err
+	}
+	return authContext, sessionSecret, owner, nil
 }
 
 func (s *Service) ProvisionUser(ctx context.Context, params ProvisionUserParams) (types.User, string, error) {
@@ -637,6 +695,10 @@ func (s *Service) Login(ctx context.Context, _ string, email string, password st
 	if user == nil || user.PasswordHash == nil || !auth.VerifyPassword(password, *user.PasswordHash) {
 		return types.AuthContext{}, "", ErrInvalidLogin
 	}
+	return s.createSessionForUser(ctx, *user)
+}
+
+func (s *Service) createSessionForUser(ctx context.Context, user types.User) (types.AuthContext, string, error) {
 	secret, err := generateSessionSecret()
 	if err != nil {
 		return types.AuthContext{}, "", err
@@ -650,7 +712,7 @@ func (s *Service) Login(ctx context.Context, _ string, email string, password st
 	if err != nil {
 		return types.AuthContext{}, "", err
 	}
-	authContext := authContextForUserSession(session, *user)
+	authContext := authContextForUserSession(session, user)
 	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
 		return types.AuthContext{}, "", err
 	} else if tenant != nil {
@@ -833,6 +895,14 @@ func generateSessionSecret() (string, error) {
 		return "", err
 	}
 	return "ags_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func generateOwnerSetupToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return "agos_" + base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
 func generateSetupToken() (string, error) {

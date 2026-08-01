@@ -16,7 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
+var ErrOwnerAlreadyExists = types.ErrOwnerAlreadyExists
+var ErrOwnerSetupTokenInvalid = types.ErrOwnerSetupTokenInvalid
 
 const ownerBootstrapAdvisoryLockID int64 = 0x4167656e744f776e
 
@@ -486,7 +487,97 @@ func (r *Repository) BootstrapOwner(ctx context.Context, email string, displayNa
 	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, ownerBootstrapAdvisoryLockID); err != nil {
 		return types.User{}, fmt.Errorf("lock owner bootstrap: %w", err)
 	}
+	owner, err := bootstrapOwnerTx(ctx, tx, email, displayName, passwordHash, "")
+	if err != nil {
+		return types.User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.User{}, err
+	}
+	return owner, nil
+}
 
+func (r *Repository) CreateOwnerSetupToken(ctx context.Context, tokenHash string, expiresAt time.Time) (types.OwnerSetupToken, error) {
+	if strings.TrimSpace(tokenHash) == "" || !expiresAt.After(time.Now().UTC()) {
+		return types.OwnerSetupToken{}, errors.New("owner setup token hash and future expiry are required")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.OwnerSetupToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, ownerBootstrapAdvisoryLockID); err != nil {
+		return types.OwnerSetupToken{}, fmt.Errorf("lock owner setup token: %w", err)
+	}
+	var ownerExists bool
+	if err := tx.QueryRow(ctx, `select exists (select 1 from users where is_owner)`).Scan(&ownerExists); err != nil {
+		return types.OwnerSetupToken{}, err
+	}
+	purpose := "bootstrap"
+	if ownerExists {
+		purpose = "recovery"
+	}
+	if _, err := tx.Exec(ctx, `
+update owner_setup_tokens
+set revoked_at = now()
+where consumed_at is null and revoked_at is null
+`); err != nil {
+		return types.OwnerSetupToken{}, err
+	}
+	token, err := scanOwnerSetupToken(tx.QueryRow(ctx, `
+insert into owner_setup_tokens (id, token_hash, purpose, expires_at)
+values ($1, $2, $3, $4)
+returning id, purpose, created_at, expires_at, consumed_at, revoked_at
+`, "ost_"+uuid.NewString(), tokenHash, purpose, expiresAt))
+	if err != nil {
+		return types.OwnerSetupToken{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.OwnerSetupToken{}, err
+	}
+	return token, nil
+}
+
+func (r *Repository) UseOwnerSetupToken(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error) {
+	email = strings.TrimSpace(email)
+	displayName = strings.TrimSpace(displayName)
+	if tokenHash == "" || email == "" || displayName == "" || passwordHash == "" {
+		return types.User{}, types.OwnerSetupToken{}, ErrOwnerSetupTokenInvalid
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.User{}, types.OwnerSetupToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock($1)`, ownerBootstrapAdvisoryLockID); err != nil {
+		return types.User{}, types.OwnerSetupToken{}, fmt.Errorf("lock owner setup: %w", err)
+	}
+	token, err := scanOwnerSetupToken(tx.QueryRow(ctx, `
+update owner_setup_tokens
+set consumed_at = now()
+where token_hash = $1
+  and consumed_at is null
+  and revoked_at is null
+  and expires_at > now()
+returning id, purpose, created_at, expires_at, consumed_at, revoked_at
+`, tokenHash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.User{}, types.OwnerSetupToken{}, ErrOwnerSetupTokenInvalid
+	}
+	if err != nil {
+		return types.User{}, types.OwnerSetupToken{}, err
+	}
+	owner, err := bootstrapOwnerTx(ctx, tx, email, displayName, passwordHash, token.Purpose)
+	if err != nil {
+		return types.User{}, types.OwnerSetupToken{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.User{}, types.OwnerSetupToken{}, err
+	}
+	return owner, token, nil
+}
+
+func bootstrapOwnerTx(ctx context.Context, tx pgx.Tx, email string, displayName string, passwordHash string, requiredPurpose string) (types.User, error) {
 	owner, err := scanUser(tx.QueryRow(ctx, `
 select id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 from users
@@ -494,10 +585,13 @@ where is_owner
 for update
 `))
 	if err == nil {
+		if requiredPurpose == "bootstrap" {
+			return types.User{}, ErrOwnerSetupTokenInvalid
+		}
 		if !strings.EqualFold(owner.Email, email) {
 			return types.User{}, ErrOwnerAlreadyExists
 		}
-		owner, err = scanUser(tx.QueryRow(ctx, `
+		return scanUser(tx.QueryRow(ctx, `
 update users
 set display_name = $1,
     password_hash = $2,
@@ -507,16 +601,12 @@ set display_name = $1,
 where id = $3
 returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 `, displayName, passwordHash, owner.ID))
-		if err != nil {
-			return types.User{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return types.User{}, err
-		}
-		return owner, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return types.User{}, err
+	}
+	if requiredPurpose == "recovery" {
+		return types.User{}, ErrOwnerSetupTokenInvalid
 	}
 
 	existing, err := scanUser(tx.QueryRow(ctx, `
@@ -526,7 +616,7 @@ where lower(email) = lower($1)
 for update
 `, email))
 	if err == nil {
-		owner, err = scanUser(tx.QueryRow(ctx, `
+		return scanUser(tx.QueryRow(ctx, `
 update users
 set display_name = $1,
     password_hash = $2,
@@ -537,25 +627,15 @@ set display_name = $1,
 where id = $3
 returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 `, displayName, passwordHash, existing.ID))
-		if err != nil {
-			return types.User{}, err
-		}
-	} else if errors.Is(err, pgx.ErrNoRows) {
-		owner, err = scanUser(tx.QueryRow(ctx, `
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return types.User{}, err
+	}
+	return scanUser(tx.QueryRow(ctx, `
 insert into users (id, tenant_id, email, display_name, password_hash, role, is_owner)
 values ($1, $2, $3, $4, $5, 'admin', true)
 returning id, tenant_id, email, display_name, password_hash, role, is_owner, created_at, updated_at, disabled_at
 `, "usr_"+uuid.NewString(), types.DefaultTenantID, email, displayName, passwordHash))
-		if err != nil {
-			return types.User{}, err
-		}
-	} else {
-		return types.User{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return types.User{}, err
-	}
-	return owner, nil
 }
 
 func (r *Repository) UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
@@ -978,6 +1058,26 @@ func scanCLILoginCode(row threadScanner) (types.CLILoginCode, error) {
 		code.ConsumedAt = &value
 	}
 	return code, err
+}
+
+func scanOwnerSetupToken(row threadScanner) (types.OwnerSetupToken, error) {
+	var createdAt time.Time
+	var expiresAt time.Time
+	var consumedAt *time.Time
+	var revokedAt *time.Time
+	token := types.OwnerSetupToken{}
+	err := row.Scan(&token.ID, &token.Purpose, &createdAt, &expiresAt, &consumedAt, &revokedAt)
+	token.CreatedAt = isoMillis(createdAt)
+	token.ExpiresAt = isoMillis(expiresAt)
+	if consumedAt != nil {
+		value := isoMillis(*consumedAt)
+		token.ConsumedAt = &value
+	}
+	if revokedAt != nil {
+		value := isoMillis(*revokedAt)
+		token.RevokedAt = &value
+	}
+	return token, err
 }
 
 func hashSecret(value string) string {

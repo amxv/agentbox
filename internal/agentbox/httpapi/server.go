@@ -6,8 +6,10 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"agentbox/internal/agentbox/assets"
 	"agentbox/internal/agentbox/auth"
@@ -41,6 +43,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.health)
 	s.mux.HandleFunc("/api/auth/login", s.authLogin)
+	s.mux.HandleFunc("/api/auth/owner/setup", s.authOwnerSetup)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
 	s.mux.HandleFunc("/api/me", s.authMe)
@@ -50,6 +53,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/tenants/", s.adminTenantSubroutes)
 	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
 	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
+	s.mux.HandleFunc("/api/admin/owner/setup-token", s.adminOwnerSetupToken)
 	s.mux.HandleFunc("/api/keys", s.keys)
 	s.mux.HandleFunc("/api/keys/", s.key)
 	s.mux.HandleFunc("/api/threads", s.threads)
@@ -58,6 +62,70 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/viewer/threads", s.viewerThreads)
 	s.mux.HandleFunc("/api/viewer/threads/", s.viewerThread)
 	s.mux.Handle("/api/mcp", s.mcpHandler())
+}
+
+func (s *Server) adminOwnerSetupToken(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		ExpiresInMinutes int `json:"expires_in_minutes"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if input.ExpiresInMinutes < 0 {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "expires_in_minutes must not be negative.")
+		return
+	}
+	ttl := time.Duration(input.ExpiresInMinutes) * time.Minute
+	result, err := s.service.IssueOwnerSetupToken(r.Context(), ttl)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	setupURL := "/owner/setup?token=" + url.QueryEscape(result.Token)
+	if s.cfg.AppPublicURL != "" {
+		setupURL = strings.TrimRight(s.cfg.AppPublicURL, "/") + setupURL
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":      result.Token,
+		"purpose":    result.Purpose,
+		"expires_at": result.ExpiresAt,
+		"setup_url":  setupURL,
+	})
+}
+
+func (s *Server) authOwnerSetup(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Token       string `json:"token"`
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authContext, sessionSecret, owner, err := s.service.CompleteOwnerSetup(r.Context(), input.Token, input.Email, input.DisplayName, input.Password)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	s.setSessionCookie(w, sessionSecret)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auth":  authContext,
+		"owner": owner,
+	})
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
@@ -893,6 +961,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 			status = http.StatusNotFound
 		case "PERMISSION_DENIED":
 			status = http.StatusForbidden
+		case "OWNER_EMAIL_MISMATCH":
+			status = http.StatusConflict
 		case "RATE_LIMITED":
 			status = http.StatusTooManyRequests
 		case "INTERNAL_ERROR":

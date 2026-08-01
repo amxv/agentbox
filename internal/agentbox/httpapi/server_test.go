@@ -653,6 +653,114 @@ func TestAdminKeyRoutesAreDisabled(t *testing.T) {
 	}
 }
 
+func TestOwnerSetupAndRecoveryRequireDeploymentSecretAndRejectReplay(t *testing.T) {
+	repo := &db.MemoryRepository{
+		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
+	}
+	server := NewServer(config.Config{
+		AdminKey:          "deployment-secret",
+		AppPublicURL:      "https://agentbox.example",
+		SessionCookieName: config.DefaultSessionCookieName,
+	}, service.New(repo, &assets.FakeStore{}))
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/admin/owner/setup-token", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized issue status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	issue := func() map[string]any {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/owner/setup-token", strings.NewReader(`{"expires_in_minutes":15}`))
+		request.Header.Set("x-agentbox-admin-key", "deployment-secret")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("issue status=%d body=%s", response.Code, response.Body.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	complete := func(token string, email string, displayName string, password string) *httptest.ResponseRecorder {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{
+			"token":        token,
+			"email":        email,
+			"display_name": displayName,
+			"password":     password,
+		})
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/auth/owner/setup", bytes.NewReader(body)))
+		return response
+	}
+
+	bootstrap := issue()
+	bootstrapToken, _ := bootstrap["token"].(string)
+	if bootstrap["purpose"] != "bootstrap" || !strings.HasPrefix(bootstrapToken, "agos_") || !strings.HasPrefix(bootstrap["setup_url"].(string), "https://agentbox.example/owner/setup?token=") {
+		t.Fatalf("bootstrap payload=%#v", bootstrap)
+	}
+	completed := complete(bootstrapToken, "owner@example.com", "Owner", "initial-password")
+	if completed.Code != http.StatusOK || !strings.Contains(completed.Body.String(), `"is_owner":true`) {
+		t.Fatalf("complete status=%d body=%s", completed.Code, completed.Body.String())
+	}
+	cookies := completed.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == "" {
+		t.Fatalf("owner session cookies=%#v", cookies)
+	}
+	replay := complete(bootstrapToken, "owner@example.com", "Owner", "initial-password")
+	if replay.Code != http.StatusBadRequest || !strings.Contains(replay.Body.String(), "INVALID_OWNER_SETUP_TOKEN") {
+		t.Fatalf("replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+
+	ownerIssueRequest := httptest.NewRequest(http.MethodPost, "/api/admin/owner/setup-token", nil)
+	ownerIssueRequest.AddCookie(cookies[0])
+	ownerIssue := httptest.NewRecorder()
+	server.ServeHTTP(ownerIssue, ownerIssueRequest)
+	if ownerIssue.Code != http.StatusUnauthorized {
+		t.Fatalf("owner browser issued deployment token: status=%d body=%s", ownerIssue.Code, ownerIssue.Body.String())
+	}
+
+	createKeyRequest := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(`{"name":"owner-api","purpose":"custom"}`))
+	createKeyRequest.AddCookie(cookies[0])
+	createKey := httptest.NewRecorder()
+	server.ServeHTTP(createKey, createKeyRequest)
+	if createKey.Code != http.StatusCreated {
+		t.Fatalf("owner key status=%d body=%s", createKey.Code, createKey.Body.String())
+	}
+	var keyPayload struct {
+		Key struct {
+			Secret string `json:"key"`
+		} `json:"key"`
+	}
+	if err := json.Unmarshal(createKey.Body.Bytes(), &keyPayload); err != nil {
+		t.Fatal(err)
+	}
+	keyIssueRequest := httptest.NewRequest(http.MethodPost, "/api/admin/owner/setup-token", nil)
+	keyIssueRequest.Header.Set("authorization", "Bearer "+keyPayload.Key.Secret)
+	keyIssue := httptest.NewRecorder()
+	server.ServeHTTP(keyIssue, keyIssueRequest)
+	if keyIssue.Code != http.StatusUnauthorized {
+		t.Fatalf("owner API key issued deployment token: status=%d body=%s", keyIssue.Code, keyIssue.Body.String())
+	}
+
+	recovery := issue()
+	recoveryToken, _ := recovery["token"].(string)
+	if recovery["purpose"] != "recovery" {
+		t.Fatalf("recovery payload=%#v", recovery)
+	}
+	wrongEmail := complete(recoveryToken, "other@example.com", "Wrong", "recovered-password")
+	if wrongEmail.Code != http.StatusConflict || !strings.Contains(wrongEmail.Body.String(), "OWNER_EMAIL_MISMATCH") {
+		t.Fatalf("wrong email status=%d body=%s", wrongEmail.Code, wrongEmail.Body.String())
+	}
+	recovered := complete(recoveryToken, "OWNER@example.com", "Recovered Owner", "recovered-password")
+	if recovered.Code != http.StatusOK || !strings.Contains(recovered.Body.String(), "Recovered Owner") {
+		t.Fatalf("recovery status=%d body=%s", recovered.Code, recovered.Body.String())
+	}
+}
+
 func TestAdminTenantProvisioningAuthorizationAndIdempotency(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
