@@ -1426,6 +1426,111 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	}
 }
 
+func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	passwordHash, err := authpkg.HashPassword("let-me-in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.Users = append(repo.Users, testUser(types.DefaultTenantID, "usr_onboarding", "onboarding@example.com", "Onboarding User", "member", passwordHash))
+	server := NewServer(config.Config{
+		SessionCookieName: config.DefaultSessionCookieName,
+		AppPublicURL:      "https://agentbox.example",
+	}, svc)
+
+	login := httptest.NewRecorder()
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"email":"onboarding@example.com","password":"let-me-in"}`)))
+	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 1 {
+		t.Fatalf("login status=%d body=%s cookies=%#v", login.Code, login.Body.String(), login.Result().Cookies())
+	}
+	cookie := login.Result().Cookies()[0]
+
+	getState := func() *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/api/onboarding", nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	initial := getState()
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"steps":[]`) || len(repo.APIKeys) != 0 {
+		t.Fatalf("initial onboarding status=%d body=%s keys=%#v", initial.Code, initial.Body.String(), repo.APIKeys)
+	}
+
+	skipRequest := httptest.NewRequest(http.MethodPost, "/api/onboarding/skip", nil)
+	skipRequest.AddCookie(cookie)
+	skipResponse := httptest.NewRecorder()
+	server.ServeHTTP(skipResponse, skipRequest)
+	if skipResponse.Code != http.StatusOK || !strings.Contains(skipResponse.Body.String(), `"dismissed_at"`) {
+		t.Fatalf("skip status=%d body=%s", skipResponse.Code, skipResponse.Body.String())
+	}
+
+	type connectionPayload struct {
+		Connector  string `json:"connector"`
+		Credential struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+			Key  string `json:"key"`
+		} `json:"credential"`
+		MCPURL         string   `json:"mcp_url"`
+		ProfileCommand string   `json:"profile_command"`
+		SetupPrompt    string   `json:"setup_prompt"`
+		Instructions   []string `json:"instructions"`
+	}
+	createConnector := func(connector string, rotate bool) (*httptest.ResponseRecorder, connectionPayload) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]bool{"rotate": rotate})
+		request := httptest.NewRequest(http.MethodPost, "/api/onboarding/connectors/"+connector, bytes.NewReader(body))
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		var payload connectionPayload
+		if response.Code == http.StatusCreated {
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return response, payload
+	}
+
+	chatResponse, chat := createConnector("chatgpt", false)
+	if chatResponse.Code != http.StatusCreated || chat.Connector != "chatgpt" || chat.Credential.Name != "ChatGPT" || chat.Credential.Key == "" || !strings.Contains(chat.MCPURL, "https://agentbox.example/api/mcp?key=") || len(chat.Instructions) == 0 {
+		t.Fatalf("chatgpt status=%d payload=%#v body=%s", chatResponse.Code, chat, chatResponse.Body.String())
+	}
+	duplicateResponse, _ := createConnector("chatgpt", false)
+	if duplicateResponse.Code != http.StatusConflict || !strings.Contains(duplicateResponse.Body.String(), "ONBOARDING_CREDENTIAL_EXISTS") {
+		t.Fatalf("duplicate status=%d body=%s", duplicateResponse.Code, duplicateResponse.Body.String())
+	}
+	rotatedResponse, rotated := createConnector("chatgpt", true)
+	if rotatedResponse.Code != http.StatusCreated || rotated.Credential.ID != chat.Credential.ID || rotated.Credential.Key == chat.Credential.Key {
+		t.Fatalf("rotation status=%d original=%#v rotated=%#v body=%s", rotatedResponse.Code, chat, rotated, rotatedResponse.Body.String())
+	}
+
+	claudeResponse, claude := createConnector("claude", false)
+	if claudeResponse.Code != http.StatusCreated || claude.Credential.Name != "Claude" || claude.Credential.Key == rotated.Credential.Key || !strings.Contains(claude.MCPURL, "/api/mcp?key=") {
+		t.Fatalf("claude status=%d payload=%#v body=%s", claudeResponse.Code, claude, claudeResponse.Body.String())
+	}
+	localResponse, local := createConnector("local", false)
+	if localResponse.Code != http.StatusCreated || local.Credential.Name != "Local CLI" || !strings.Contains(local.ProfileCommand, "--user-id 'usr_onboarding'") || !strings.Contains(local.SetupPrompt, "npm install -g @amxv/agentbox") || !strings.Contains(local.SetupPrompt, "agentbox list") {
+		t.Fatalf("local status=%d payload=%#v body=%s", localResponse.Code, local, localResponse.Body.String())
+	}
+
+	persisted := getState()
+	if persisted.Code != http.StatusOK || strings.Contains(persisted.Body.String(), rotated.Credential.Key) || strings.Contains(persisted.Body.String(), claude.Credential.Key) || strings.Contains(persisted.Body.String(), local.Credential.Key) || !strings.Contains(persisted.Body.String(), `"name":"ChatGPT"`) || !strings.Contains(persisted.Body.String(), `"name":"Claude"`) || !strings.Contains(persisted.Body.String(), `"name":"Local CLI"`) {
+		t.Fatalf("persisted onboarding leaked or missed metadata: status=%d body=%s", persisted.Code, persisted.Body.String())
+	}
+
+	apiRequest := httptest.NewRequest(http.MethodGet, "/api/onboarding", nil)
+	apiRequest.Header.Set("authorization", "Bearer "+claude.Credential.Key)
+	apiResponse := httptest.NewRecorder()
+	server.ServeHTTP(apiResponse, apiRequest)
+	if apiResponse.Code != http.StatusForbidden || !strings.Contains(apiResponse.Body.String(), "BROWSER_SESSION_REQUIRED") {
+		t.Fatalf("API credential accessed onboarding: status=%d body=%s", apiResponse.Code, apiResponse.Body.String())
+	}
+}
+
 func authContext(tenantID string, actorName string) types.AuthContext {
 	return types.AuthContext{
 		TenantID:    tenantID,

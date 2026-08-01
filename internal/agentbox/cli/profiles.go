@@ -96,16 +96,26 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 		fs := newFlagSet("profiles add")
 		baseURL := fs.String("base-url", "", "Agentbox deployment base URL")
 		apiKey := fs.String("api-key", "", "Agentbox API key")
+		userID := fs.String("user-id", "", "deployment-global user ID metadata")
+		keyName := fs.String("key-name", "", "credential label metadata")
+		authType := fs.String("auth-type", "api_key", "profile authentication type metadata")
 		activate := fs.Bool("activate", false, "make this the active stored profile")
 		jsonOut := fs.Bool("json", false, "print raw JSON")
 		if err := parseFlags(fs, args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 || *baseURL == "" || *apiKey == "" {
-			return errors.New("Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--activate] [--json]")
+			return errors.New("Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--user-id <id>] [--key-name <name>] [--auth-type <type>] [--activate] [--json]")
 		}
 		name := fs.Arg(0)
-		store, err := profiles.SaveProfile(profiles.Profile{Name: name, BaseURL: *baseURL, APIKey: *apiKey}, *activate)
+		store, err := profiles.SaveProfile(profiles.Profile{
+			Name:     name,
+			BaseURL:  *baseURL,
+			APIKey:   *apiKey,
+			UserID:   strings.TrimSpace(*userID),
+			KeyName:  strings.TrimSpace(*keyName),
+			AuthType: strings.TrimSpace(*authType),
+		}, *activate)
 		if err != nil {
 			return err
 		}
@@ -197,7 +207,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 
 func (r *Runner) printProfilesSubcommandHelp(command string) {
 	usage := map[string]string{
-		"add": `Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--activate] [--json]
+		"add": `Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--user-id <id>] [--key-name <name>] [--auth-type <type>] [--activate] [--json]
 
 Create or update a stored CLI profile.`,
 		"remove": `Usage: agentbox profiles remove <name> [--json]

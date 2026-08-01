@@ -144,6 +144,43 @@ func TestCLIMCPURLPrintsFullKeyURL(t *testing.T) {
 	}
 }
 
+func TestCLIProfilesAddPersistsOnboardingIdentityMetadata(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{
+		"profiles", "add", "local",
+		"--base-url", server.URL,
+		"--api-key", "dev-key",
+		"--user-id", "usr_onboarding",
+		"--key-name", "Local CLI",
+		"--auth-type", "api_key",
+		"--activate",
+	}); code != 0 {
+		t.Fatalf("profiles add failed: code=%d stderr=%s", code, stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"profiles", "show", "local", "--json"}); code != 0 {
+		t.Fatalf("profiles show failed: code=%d stderr=%s", code, stderr.String())
+	}
+	profileJSON := out.String()
+	if !strings.Contains(profileJSON, `"user_id": "usr_onboarding"`) || !strings.Contains(profileJSON, `"key_name": "Local CLI"`) || !strings.Contains(profileJSON, `"auth_type": "api_key"`) {
+		t.Fatalf("profile metadata output=%s", profileJSON)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"list"}); code != 0 {
+		t.Fatalf("onboarding profile could not list: code=%d stderr=%s", code, stderr.String())
+	}
+}
+
 func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)

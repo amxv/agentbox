@@ -461,6 +461,182 @@ returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_
 	return created, nil
 }
 
+func (r *Repository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+insert into user_onboarding (user_id)
+values ($1)
+on conflict (user_id) do nothing
+`, userID); err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+
+	var lockedUserID string
+	if err := tx.QueryRow(ctx, `
+select user_id
+from user_onboarding
+where user_id = $1
+for update
+`, userID).Scan(&lockedUserID); err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+	if !rotate {
+		var activeExists bool
+		if err := tx.QueryRow(ctx, `
+select exists (
+  select 1
+  from user_onboarding_steps s
+  join api_keys k on k.id = s.credential_id
+  where s.user_id = $1
+    and s.connector = $2
+    and k.revoked_at is null
+)
+`, userID, connector).Scan(&activeExists); err != nil {
+			return types.APIKey{}, types.OnboardingState{}, err
+		}
+		if activeExists {
+			return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialExists
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+update user_onboarding
+set dismissed_at = null,
+    updated_at = now()
+where user_id = $1
+`, userID); err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+
+	created, err := scanAPIKey(tx.QueryRow(ctx, `
+insert into api_keys (id, user_id, name, purpose, token_prefix, token_hash, scopes)
+values ($1, $2, $3, $4, $5, $6, $7)
+on conflict (user_id, lower(name)) where revoked_at is null do update
+set purpose = excluded.purpose,
+    token_prefix = excluded.token_prefix,
+    token_hash = excluded.token_hash,
+    scopes = excluded.scopes,
+    updated_at = now(),
+    last_used_at = null
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+`, "key_"+uuid.NewString(), userID, name, purpose, tokenPrefix, tokenHash, scopes))
+	if err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+insert into user_onboarding_steps (user_id, connector, credential_id)
+values ($1, $2, $3)
+on conflict (user_id, connector) do update
+set credential_id = excluded.credential_id,
+    updated_at = now()
+`, userID, connector, created.ID); err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+	state, err := r.GetOnboardingState(ctx, userID)
+	if err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+	return created, state, nil
+}
+
+func (r *Repository) GetOnboardingState(ctx context.Context, userID string) (types.OnboardingState, error) {
+	state := types.OnboardingState{UserID: userID, Steps: []types.OnboardingStep{}}
+	var dismissedAt *time.Time
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := r.pool.QueryRow(ctx, `
+select dismissed_at, created_at, updated_at
+from user_onboarding
+where user_id = $1
+`, userID).Scan(&dismissedAt, &createdAt, &updatedAt)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return types.OnboardingState{}, err
+	}
+	if err == nil {
+		state.DismissedAt = optionalISOTime(dismissedAt)
+		created := isoMillis(createdAt)
+		updated := isoMillis(updatedAt)
+		state.CreatedAt = &created
+		state.UpdatedAt = &updated
+	}
+
+	rows, err := r.pool.Query(ctx, `
+select connector, credential_id, completed_at, updated_at
+from user_onboarding_steps
+where user_id = $1
+order by case connector when 'chatgpt' then 1 when 'claude' then 2 else 3 end
+`, userID)
+	if err != nil {
+		return types.OnboardingState{}, err
+	}
+	defer rows.Close()
+	type storedStep struct {
+		step         types.OnboardingStep
+		credentialID *string
+	}
+	stored := []storedStep{}
+	for rows.Next() {
+		var connector string
+		var credentialID *string
+		var completedAt time.Time
+		var stepUpdatedAt time.Time
+		if err := rows.Scan(&connector, &credentialID, &completedAt, &stepUpdatedAt); err != nil {
+			return types.OnboardingState{}, err
+		}
+		completed := isoMillis(completedAt)
+		updated := isoMillis(stepUpdatedAt)
+		stored = append(stored, storedStep{
+			step:         types.OnboardingStep{Connector: connector, CompletedAt: &completed, UpdatedAt: &updated},
+			credentialID: credentialID,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return types.OnboardingState{}, err
+	}
+
+	keys, err := r.ListAPIKeys(ctx, userID)
+	if err != nil {
+		return types.OnboardingState{}, err
+	}
+	keysByID := make(map[string]types.APIKey, len(keys))
+	for _, key := range keys {
+		keysByID[key.ID] = key
+	}
+	for _, item := range stored {
+		step := item.step
+		if item.credentialID != nil {
+			if key, ok := keysByID[*item.credentialID]; ok {
+				keyCopy := key
+				step.Credential = &keyCopy
+			}
+		}
+		state.Steps = append(state.Steps, step)
+	}
+	return state, nil
+}
+
+func (r *Repository) DismissOnboarding(ctx context.Context, userID string) (types.OnboardingState, error) {
+	if _, err := r.pool.Exec(ctx, `
+insert into user_onboarding (user_id, dismissed_at)
+values ($1, now())
+on conflict (user_id) do update
+set dismissed_at = now(),
+    updated_at = now()
+`, userID); err != nil {
+		return types.OnboardingState{}, err
+	}
+	return r.GetOnboardingState(ctx, userID)
+}
+
 func (r *Repository) ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error) {
 	rows, err := r.pool.Query(ctx, `
 select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
@@ -1757,6 +1933,14 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func optionalISOTime(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := isoMillis(*value)
+	return &formatted
 }
 
 func uniqueNonEmptyStrings(values []string) []string {

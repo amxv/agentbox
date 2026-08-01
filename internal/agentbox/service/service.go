@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
@@ -37,6 +38,9 @@ type Repository interface {
 	MarkPendingUploadsConsumed(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) error
 	PostMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
 	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
+	CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error)
+	GetOnboardingState(ctx context.Context, userID string) (types.OnboardingState, error)
+	DismissOnboarding(ctx context.Context, userID string) (types.OnboardingState, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
 	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
@@ -429,6 +433,77 @@ func (s *Service) CreateAPIKeyWithPurposeAndScopes(ctx context.Context, auth typ
 	return created, nil
 }
 
+func (s *Service) GetOnboardingState(ctx context.Context, auth types.AuthContext) (types.OnboardingState, error) {
+	if err := requireBrowserSession(auth); err != nil {
+		return types.OnboardingState{}, err
+	}
+	return s.repo.GetOnboardingState(ctx, auth.UserID)
+}
+
+func (s *Service) DismissOnboarding(ctx context.Context, auth types.AuthContext) (types.OnboardingState, error) {
+	if err := requireBrowserSession(auth); err != nil {
+		return types.OnboardingState{}, err
+	}
+	return s.repo.DismissOnboarding(ctx, auth.UserID)
+}
+
+func (s *Service) CreateOnboardingConnection(ctx context.Context, auth types.AuthContext, connector string, baseURL string, rotate bool) (OnboardingConnectionResult, error) {
+	if err := requireBrowserSession(auth); err != nil {
+		return OnboardingConnectionResult{}, err
+	}
+	connector, name, purpose, scopes, err := onboardingCredentialSpec(connector)
+	if err != nil {
+		return OnboardingConnectionResult{}, err
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return OnboardingConnectionResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "deployment base URL is required."}
+	}
+	secret, err := generateSecret()
+	if err != nil {
+		return OnboardingConnectionResult{}, err
+	}
+	credential, state, err := s.repo.CreateOnboardingCredential(ctx, auth.UserID, connector, name, purpose, hashSecret(secret), tokenPrefix(secret), scopes, rotate)
+	if errors.Is(err, types.ErrOnboardingCredentialExists) {
+		return OnboardingConnectionResult{}, CodedError{Code: "ONBOARDING_CREDENTIAL_EXISTS", Message: "This connector already has an active credential. Choose rotate to replace it.", Err: err}
+	}
+	if err != nil {
+		return OnboardingConnectionResult{}, err
+	}
+	credential.Key = secret
+	result := OnboardingConnectionResult{Connector: connector, Credential: credential, State: state}
+	switch connector {
+	case "chatgpt":
+		result.MCPURL, err = mcpURLWithSecret(baseURL, secret)
+		result.Instructions = []string{
+			"Open ChatGPT settings and go to Apps & Connectors, then Advanced settings.",
+			"Create a custom remote MCP connector and paste the complete URL below.",
+			"Choose no authentication. The credential is already carried in the URL query string.",
+			"Save the connector, then ask ChatGPT to list your AgentBox threads as a connection test.",
+		}
+	case "claude":
+		result.MCPURL, err = mcpURLWithSecret(baseURL, secret)
+		result.Instructions = []string{
+			"Open Claude's connector or integrations settings and add a custom remote MCP server.",
+			"Paste the complete URL below without adding a separate authorization header.",
+			"Name the connector AgentBox and finish the connection flow.",
+			"Ask Claude to list your AgentBox threads as a connection test.",
+		}
+	case "local":
+		result.ProfileCommand = localProfileCommand(baseURL, secret, auth.UserID, credential.Name)
+		result.SetupPrompt = localAgentSetupPrompt(baseURL, secret, auth.UserID, credential.Name)
+		result.Instructions = []string{
+			"Copy the generated prompt and paste it into one local coding-agent session on the machine you want to connect.",
+			"The agent will install the public npm package, save an active local profile, and run agentbox list.",
+			"Use a separate credential later for each additional machine.",
+		}
+	}
+	if err != nil {
+		return OnboardingConnectionResult{}, err
+	}
+	return result, nil
+}
+
 func (s *Service) ListAPIKeys(ctx context.Context, auth types.AuthContext) ([]types.APIKey, error) {
 	if err := requireUserAuthContext(auth); err != nil {
 		return nil, err
@@ -499,6 +574,16 @@ type SignupInvitationTokenResult struct {
 type SignupInvitationInspection struct {
 	Valid     bool   `json:"valid"`
 	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+type OnboardingConnectionResult struct {
+	Connector      string                `json:"connector"`
+	Credential     types.APIKey          `json:"credential"`
+	State          types.OnboardingState `json:"state"`
+	MCPURL         string                `json:"mcp_url,omitempty"`
+	ProfileCommand string                `json:"profile_command,omitempty"`
+	SetupPrompt    string                `json:"setup_prompt,omitempty"`
+	Instructions   []string              `json:"instructions"`
 }
 
 type ProvisionUserParams struct {
@@ -1083,6 +1168,8 @@ func ConnectorAPIKeyScopes(purpose string) []string {
 	switch strings.ToLower(strings.TrimSpace(purpose)) {
 	case "chatgpt", "raycast":
 		return defaultAPIKeyScopes()
+	case "local", "cli":
+		return cliAPIKeyScopes()
 	default:
 		return defaultAPIKeyScopes()
 	}
@@ -1279,6 +1366,13 @@ func requireUserAuthContext(auth types.AuthContext) error {
 	return nil
 }
 
+func requireBrowserSession(auth types.AuthContext) error {
+	if auth.SubjectType != types.AuthSubjectUserSession || strings.TrimSpace(auth.UserID) == "" || strings.TrimSpace(auth.SessionID) == "" {
+		return CodedError{Code: "BROWSER_SESSION_REQUIRED", Message: "An authenticated browser session is required."}
+	}
+	return nil
+}
+
 func requireOwnerBrowser(auth types.AuthContext) error {
 	if auth.SubjectType != types.AuthSubjectUserSession || !auth.IsOwner || strings.TrimSpace(auth.UserID) == "" || strings.TrimSpace(auth.SessionID) == "" {
 		return CodedError{Code: "OWNER_BROWSER_REQUIRED", Message: "A permanent-owner browser session is required."}
@@ -1292,6 +1386,70 @@ func normalizeCredentialPurpose(value string) string {
 		return "custom"
 	}
 	return value
+}
+
+func onboardingCredentialSpec(value string) (connector string, name string, purpose string, scopes []string, err error) {
+	connector = strings.ToLower(strings.TrimSpace(value))
+	switch connector {
+	case "chatgpt":
+		return connector, "ChatGPT", "chatgpt", ConnectorAPIKeyScopes("chatgpt"), nil
+	case "claude":
+		return connector, "Claude", "claude", ConnectorAPIKeyScopes("claude"), nil
+	case "local":
+		return connector, "Local CLI", "local", ConnectorAPIKeyScopes("local"), nil
+	default:
+		return "", "", "", nil, CodedError{Code: "INVALID_ONBOARDING_CONNECTOR", Message: "connector must be chatgpt, claude, or local.", Err: types.ErrInvalidOnboardingConnector}
+	}
+}
+
+func mcpURLWithSecret(baseURL string, secret string) (string, error) {
+	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + "/api/mcp")
+	if err != nil {
+		return "", err
+	}
+	query := endpoint.Query()
+	query.Set("key", secret)
+	endpoint.RawQuery = query.Encode()
+	return endpoint.String(), nil
+}
+
+func localProfileCommand(baseURL string, secret string, userID string, keyName string) string {
+	return strings.Join([]string{
+		"agentbox profiles add local",
+		"--base-url " + shellQuote(baseURL),
+		"--api-key " + shellQuote(secret),
+		"--user-id " + shellQuote(userID),
+		"--key-name " + shellQuote(keyName),
+		"--auth-type api_key",
+		"--activate",
+	}, " ")
+}
+
+func localAgentSetupPrompt(baseURL string, secret string, userID string, keyName string) string {
+	profileCommand := localProfileCommand(baseURL, secret, userID, keyName)
+	return fmt.Sprintf(`Set up AgentBox on this machine for me.
+
+AgentBox is a shared threaded inbox between me and my AI agents. Use the dedicated credential below only for this machine; do not reuse it for ChatGPT, Claude, or another computer.
+
+Run these commands exactly:
+
+1. Install the public CLI package:
+   npm install -g @amxv/agentbox
+
+2. Save and activate my local profile for this deployment:
+   %s
+
+3. Verify the connection by listing the threads I can access:
+   agentbox list
+
+Deployment: %s
+User ID: %s
+
+Do not ask for or use the deployment-owner secret. Do not print the credential again after saving it. Report whether installation, profile creation, and the final thread-list test each succeeded; include the exact error for any failed step.`, profileCommand, baseURL, userID)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 func requireScope(auth types.AuthContext, scope string) error {

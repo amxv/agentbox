@@ -63,6 +63,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/owner/teams/", s.ownerTeam)
 	s.mux.HandleFunc("/api/keys", s.keys)
 	s.mux.HandleFunc("/api/keys/", s.key)
+	s.mux.HandleFunc("/api/onboarding", s.onboarding)
+	s.mux.HandleFunc("/api/onboarding/skip", s.onboardingSkip)
+	s.mux.HandleFunc("/api/onboarding/connectors/", s.onboardingConnector)
 	s.mux.HandleFunc("/api/threads", s.threads)
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
@@ -654,6 +657,76 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) onboarding(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	state, err := s.service.GetOnboardingState(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"onboarding": state})
+}
+
+func (s *Server) onboardingSkip(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	state, err := s.service.DismissOnboarding(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"onboarding": state})
+}
+
+func (s *Server) onboardingConnector(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	connector := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/onboarding/connectors/"), "/")
+	if connector == "" || strings.Contains(connector, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	var input struct {
+		Rotate bool `json:"rotate"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	result, err := s.service.CreateOnboardingConnection(r.Context(), *authContext, connector, s.requestBaseURL(r), input.Rotate)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"connector":       result.Connector,
+		"credential":      apiKeyResponse(result.Credential),
+		"onboarding":      result.State,
+		"mcp_url":         result.MCPURL,
+		"profile_command": result.ProfileCommand,
+		"setup_prompt":    result.SetupPrompt,
+		"instructions":    result.Instructions,
+	})
+}
+
 func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 	authContext, ok := s.requireAuth(w, r)
 	if !ok {
@@ -682,6 +755,28 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) requestBaseURL(r *http.Request) string {
+	if strings.TrimSpace(s.cfg.AppPublicURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(s.cfg.AppPublicURL), "/")
+	}
+	scheme := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host == "" {
+		return ""
+	}
+	return scheme + "://" + host
 }
 
 func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
@@ -1140,9 +1235,9 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		switch coded.Code {
 		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND":
 			status = http.StatusNotFound
-		case "PERMISSION_DENIED":
+		case "PERMISSION_DENIED", "BROWSER_SESSION_REQUIRED", "OWNER_BROWSER_REQUIRED":
 			status = http.StatusForbidden
-		case "OWNER_EMAIL_MISMATCH":
+		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS":
 			status = http.StatusConflict
 		case "TEAM_SLUG_CONFLICT":
 			status = http.StatusConflict

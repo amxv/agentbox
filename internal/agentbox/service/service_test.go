@@ -497,6 +497,130 @@ func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	}
 }
 
+func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+	user := types.User{
+		ID:          "usr_onboarding",
+		TenantID:    types.DefaultTenantID,
+		Email:       "onboarding@example.com",
+		DisplayName: "Onboarding User",
+		Role:        "member",
+		CreatedAt:   "2026-08-02T00:00:00.000Z",
+		UpdatedAt:   "2026-08-02T00:00:00.000Z",
+	}
+	repo.Users = append(repo.Users, user)
+	browser := types.AuthContext{
+		UserID:          user.ID,
+		UserDisplayName: user.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		SessionID:       "sess_onboarding",
+		ActorID:         "sess_onboarding",
+		ActorName:       "Web dashboard",
+	}
+
+	state, err := svc.GetOnboardingState(context.Background(), browser)
+	if err != nil || len(state.Steps) != 0 {
+		t.Fatalf("initial onboarding state=%#v err=%v", state, err)
+	}
+	if keys, err := svc.ListAPIKeys(context.Background(), browser); err != nil || len(keys) != 0 {
+		t.Fatalf("onboarding read pre-created credentials: keys=%#v err=%v", keys, err)
+	}
+	if dismissed, err := svc.DismissOnboarding(context.Background(), browser); err != nil || dismissed.DismissedAt == nil {
+		t.Fatalf("dismiss onboarding state=%#v err=%v", dismissed, err)
+	}
+
+	chatgpt, err := svc.CreateOnboardingConnection(context.Background(), browser, "chatgpt", "https://agentbox.example", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatgpt.Credential.Name != "ChatGPT" || chatgpt.Credential.Key == "" || !strings.Contains(chatgpt.MCPURL, "/api/mcp?key=") || len(chatgpt.State.Steps) != 1 || chatgpt.State.DismissedAt != nil {
+		t.Fatalf("chatgpt connection=%#v", chatgpt)
+	}
+	if chatgpt.State.Steps[0].Credential == nil || chatgpt.State.Steps[0].Credential.Key != "" {
+		t.Fatalf("persisted onboarding state exposed secret: %#v", chatgpt.State)
+	}
+	if _, err := svc.CreateOnboardingConnection(context.Background(), browser, "chatgpt", "https://agentbox.example", false); !hasCodedError(err, "ONBOARDING_CREDENTIAL_EXISTS") {
+		t.Fatalf("duplicate initial connector did not require rotation: %v", err)
+	}
+
+	claude, err := svc.CreateOnboardingConnection(context.Background(), browser, "claude", "https://agentbox.example", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := svc.CreateOnboardingConnection(context.Background(), browser, "local", "https://agentbox.example", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatgpt.Credential.Key == claude.Credential.Key || chatgpt.Credential.Key == local.Credential.Key || claude.Credential.Key == local.Credential.Key {
+		t.Fatal("onboarding connectors reused credential material")
+	}
+	if !strings.Contains(local.ProfileCommand, "agentbox profiles add local") || !strings.Contains(local.ProfileCommand, "--user-id '"+user.ID+"'") || !strings.Contains(local.ProfileCommand, "--key-name 'Local CLI'") || !strings.Contains(local.SetupPrompt, "npm install -g @amxv/agentbox") || !strings.Contains(local.SetupPrompt, "agentbox list") {
+		t.Fatalf("local setup output=%#v", local)
+	}
+
+	thread, err := svc.CreateThread(context.Background(), browser, "same user, separate actors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{chatgpt.Credential.Key, claude.Credential.Key, local.Credential.Key}
+	expectedActors := []string{"ChatGPT", "Claude", "Local CLI"}
+	for index, secret := range secrets {
+		authContext, err := svc.AuthenticateAPIKey(context.Background(), secret)
+		if err != nil || authContext == nil {
+			t.Fatalf("connector %s auth=%#v err=%v", expectedActors[index], authContext, err)
+		}
+		if authContext.UserID != user.ID || authContext.ActorName != expectedActors[index] {
+			t.Fatalf("connector attribution=%#v", authContext)
+		}
+		message, err := svc.PostMessage(context.Background(), *authContext, PostMessageParams{ThreadID: thread.ID, Body: "from " + expectedActors[index]})
+		if err != nil || message.CreatedByUserID == nil || *message.CreatedByUserID != user.ID || message.CreatedByActorName == nil || *message.CreatedByActorName != expectedActors[index] {
+			t.Fatalf("connector post=%#v err=%v", message, err)
+		}
+	}
+
+	rotated, err := svc.CreateOnboardingConnection(context.Background(), browser, "chatgpt", "https://agentbox.example", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.Credential.ID != chatgpt.Credential.ID || rotated.Credential.Key == chatgpt.Credential.Key {
+		t.Fatalf("chatgpt rotation=%#v original=%#v", rotated.Credential, chatgpt.Credential)
+	}
+	if oldAuth, err := svc.AuthenticateAPIKey(context.Background(), chatgpt.Credential.Key); err != nil || oldAuth != nil {
+		t.Fatalf("rotated secret remained active: auth=%#v err=%v", oldAuth, err)
+	}
+	if claudeAuth, err := svc.AuthenticateAPIKey(context.Background(), claude.Credential.Key); err != nil || claudeAuth == nil || claudeAuth.ActorName != "Claude" {
+		t.Fatalf("rotating ChatGPT affected Claude: auth=%#v err=%v", claudeAuth, err)
+	}
+
+	if err := svc.RevokeAPIKey(context.Background(), browser, "Local CLI"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = svc.GetOnboardingState(context.Background(), browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localStep := state.Steps[2]
+	if localStep.Connector != "local" || localStep.CompletedAt == nil || localStep.Credential != nil {
+		t.Fatalf("revoked local step=%#v", localStep)
+	}
+	recreated, err := svc.CreateOnboardingConnection(context.Background(), browser, "local", "https://agentbox.example", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recreated.Credential.ID == local.Credential.ID || recreated.Credential.Key == local.Credential.Key {
+		t.Fatalf("revoked local credential was not recreated independently: %#v", recreated.Credential)
+	}
+
+	apiAuth, err := svc.AuthenticateAPIKey(context.Background(), claude.Credential.Key)
+	if err != nil || apiAuth == nil {
+		t.Fatal("expected active Claude API auth")
+	}
+	if _, err := svc.GetOnboardingState(context.Background(), *apiAuth); !hasCodedError(err, "BROWSER_SESSION_REQUIRED") {
+		t.Fatalf("API credential accessed onboarding state: %v", err)
+	}
+}
+
 func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})

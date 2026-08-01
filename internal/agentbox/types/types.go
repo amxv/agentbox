@@ -11,6 +11,8 @@ var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
 var ErrThreadNotFound = errors.New("Thread not found.")
 var ErrTeamNotFound = errors.New("team not found")
 var ErrTeamSlugConflict = errors.New("team slug is already in use")
+var ErrInvalidOnboardingConnector = errors.New("invalid onboarding connector")
+var ErrOnboardingCredentialExists = errors.New("onboarding credential already exists")
 
 const DefaultTenantID = "ten_default"
 
@@ -121,6 +123,21 @@ type TeamMembership struct {
 type TeamWithMembers struct {
 	Team
 	Members []User `json:"members"`
+}
+
+type OnboardingStep struct {
+	Connector   string  `json:"connector"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	UpdatedAt   *string `json:"updated_at,omitempty"`
+	Credential  *APIKey `json:"credential,omitempty"`
+}
+
+type OnboardingState struct {
+	UserID      string           `json:"user_id"`
+	DismissedAt *string          `json:"dismissed_at,omitempty"`
+	CreatedAt   *string          `json:"created_at,omitempty"`
+	UpdatedAt   *string          `json:"updated_at,omitempty"`
+	Steps       []OnboardingStep `json:"steps"`
 }
 
 type Thread struct {

@@ -860,6 +860,123 @@ func TestMigrateRejectsAppliedMigrationDrift(t *testing.T) {
 	}
 }
 
+func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initial, err := repository.GetOnboardingState(ctx, owner.ID)
+	if err != nil || len(initial.Steps) != 0 {
+		t.Fatalf("initial onboarding=%#v err=%v", initial, err)
+	}
+	keys, err := repository.ListAPIKeys(ctx, owner.ID)
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("onboarding read created keys=%#v err=%v", keys, err)
+	}
+	dismissed, err := repository.DismissOnboarding(ctx, owner.ID)
+	if err != nil || dismissed.DismissedAt == nil {
+		t.Fatalf("dismissed onboarding=%#v err=%v", dismissed, err)
+	}
+
+	chatSecret := "agb_onboarding_chat"
+	chat, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(chatSecret), "agb_chat", []string{"threads:read", "mcp:use"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat.Name != "ChatGPT" || state.DismissedAt != nil || len(state.Steps) != 1 || state.Steps[0].Credential == nil || state.Steps[0].Credential.ID != chat.ID || state.Steps[0].Credential.Key != "" {
+		t.Fatalf("chat onboarding key=%#v state=%#v", chat, state)
+	}
+	if _, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret("duplicate"), "agb_dupe", []string{"threads:read"}, false); !errors.Is(err, types.ErrOnboardingCredentialExists) {
+		t.Fatalf("duplicate onboarding credential error=%v", err)
+	}
+
+	claude, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "claude", "Claude", "claude", hashSecret("agb_onboarding_claude"), "agb_claude", []string{"threads:read", "mcp:use"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local"), "agb_local", []string{"threads:read", "threads:write", "keys:read", "keys:write"}, false)
+	if err != nil || len(state.Steps) != 3 {
+		t.Fatalf("local onboarding key=%#v state=%#v err=%v", local, state, err)
+	}
+	if chat.ID == claude.ID || chat.ID == local.ID || claude.ID == local.ID {
+		t.Fatalf("connectors collapsed credentials: chat=%s claude=%s local=%s", chat.ID, claude.ID, local.ID)
+	}
+
+	rotatedSecret := "agb_onboarding_chat_rotated"
+	rotated, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(rotatedSecret), "agb_rotate", []string{"threads:read", "mcp:use"}, true)
+	if err != nil || rotated.ID != chat.ID {
+		t.Fatalf("rotation=%#v original=%#v err=%v", rotated, chat, err)
+	}
+	if oldKey, _, err := repository.FindAPIKeyBySecret(ctx, chatSecret); err != nil || oldKey != nil {
+		t.Fatalf("old rotated secret active: key=%#v err=%v", oldKey, err)
+	}
+	if newKey, user, err := repository.FindAPIKeyBySecret(ctx, rotatedSecret); err != nil || newKey == nil || user == nil || newKey.ID != chat.ID || user.ID != owner.ID {
+		t.Fatalf("rotated secret lookup key=%#v user=%#v err=%v", newKey, user, err)
+	}
+	if claudeKey, _, err := repository.FindAPIKeyBySecret(ctx, "agb_onboarding_claude"); err != nil || claudeKey == nil || claudeKey.ID != claude.ID {
+		t.Fatalf("chat rotation affected Claude: key=%#v err=%v", claudeKey, err)
+	}
+
+	if revoked, err := repository.RevokeAPIKey(ctx, owner.ID, "Local CLI"); err != nil || !revoked {
+		t.Fatalf("revoke local revoked=%t err=%v", revoked, err)
+	}
+	state, err = repository.GetOnboardingState(ctx, owner.ID)
+	if err != nil || state.Steps[2].Connector != "local" || state.Steps[2].CompletedAt == nil || state.Steps[2].Credential != nil {
+		t.Fatalf("revoked local onboarding state=%#v err=%v", state, err)
+	}
+	recreated, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local_new"), "agb_local_new", []string{"threads:read"}, false)
+	if err != nil || recreated.ID == local.ID {
+		t.Fatalf("recreated local=%#v original=%#v err=%v", recreated, local, err)
+	}
+
+	concurrentUser, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "concurrent-onboarding@example.com", "Concurrent", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		key types.APIKey
+		err error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	for index := 0; index < 2; index++ {
+		index := index
+		go func() {
+			<-start
+			key, _, err := repository.CreateOnboardingCredential(context.Background(), concurrentUser.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(fmt.Sprintf("concurrent-%d", index)), fmt.Sprintf("agb_%d", index), []string{"threads:read"}, false)
+			results <- result{key: key, err: err}
+		}()
+	}
+	close(start)
+	successes := 0
+	conflicts := 0
+	for index := 0; index < 2; index++ {
+		result := <-results
+		switch {
+		case result.err == nil:
+			successes++
+			if result.key.ID == "" {
+				t.Fatal("concurrent onboarding success had empty key ID")
+			}
+		case errors.Is(result.err, types.ErrOnboardingCredentialExists):
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent onboarding error=%v", result.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent onboarding successes=%d conflicts=%d", successes, conflicts)
+	}
+	if keys, err := repository.ListAPIKeys(ctx, concurrentUser.ID); err != nil || len(keys) != 1 || keys[0].Name != "ChatGPT" {
+		t.Fatalf("concurrent onboarding keys=%#v err=%v", keys, err)
+	}
+}
+
 func TestListThreadsDoesNotRunMigrations(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

@@ -25,6 +25,7 @@ type MemoryRepository struct {
 	SignupInvitations []memorySignupInvitation
 	Teams             []types.Team
 	TeamMemberships   []types.TeamMembership
+	Onboarding        []types.OnboardingState
 }
 
 type memoryOwnerSetupToken struct {
@@ -382,6 +383,117 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, userID string, name s
 		return m.APIKeys[i].Name < m.APIKeys[j].Name
 	})
 	return created, nil
+}
+
+func (m *MemoryRepository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error) {
+	if !rotate {
+		state, err := m.GetOnboardingState(ctx, userID)
+		if err != nil {
+			return types.APIKey{}, types.OnboardingState{}, err
+		}
+		for _, step := range state.Steps {
+			if step.Connector == connector && step.Credential != nil {
+				return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialExists
+			}
+		}
+	}
+	created, err := m.CreateAPIKey(ctx, userID, name, purpose, tokenHash, tokenPrefix, scopes)
+	if err != nil {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+	now := isoMillis(time.Now().UTC())
+	index := m.onboardingIndex(userID)
+	if index < 0 {
+		m.Onboarding = append(m.Onboarding, types.OnboardingState{UserID: userID, CreatedAt: &now, UpdatedAt: &now, Steps: []types.OnboardingStep{}})
+		index = len(m.Onboarding) - 1
+	}
+	state := &m.Onboarding[index]
+	state.DismissedAt = nil
+	state.UpdatedAt = &now
+	updated := false
+	for stepIndex := range state.Steps {
+		if state.Steps[stepIndex].Connector != connector {
+			continue
+		}
+		state.Steps[stepIndex].Credential = &created
+		state.Steps[stepIndex].UpdatedAt = &now
+		if state.Steps[stepIndex].CompletedAt == nil {
+			state.Steps[stepIndex].CompletedAt = &now
+		}
+		updated = true
+		break
+	}
+	if !updated {
+		state.Steps = append(state.Steps, types.OnboardingStep{Connector: connector, CompletedAt: &now, UpdatedAt: &now, Credential: &created})
+	}
+	sort.SliceStable(state.Steps, func(i, j int) bool {
+		return onboardingConnectorOrder(state.Steps[i].Connector) < onboardingConnectorOrder(state.Steps[j].Connector)
+	})
+	return created, m.onboardingStateCopy(*state), nil
+}
+
+func (m *MemoryRepository) GetOnboardingState(_ context.Context, userID string) (types.OnboardingState, error) {
+	index := m.onboardingIndex(userID)
+	if index < 0 {
+		return types.OnboardingState{UserID: userID, Steps: []types.OnboardingStep{}}, nil
+	}
+	return m.onboardingStateCopy(m.Onboarding[index]), nil
+}
+
+func (m *MemoryRepository) DismissOnboarding(_ context.Context, userID string) (types.OnboardingState, error) {
+	now := isoMillis(time.Now().UTC())
+	index := m.onboardingIndex(userID)
+	if index < 0 {
+		m.Onboarding = append(m.Onboarding, types.OnboardingState{UserID: userID, CreatedAt: &now, UpdatedAt: &now, DismissedAt: &now, Steps: []types.OnboardingStep{}})
+		index = len(m.Onboarding) - 1
+	} else {
+		m.Onboarding[index].DismissedAt = &now
+		m.Onboarding[index].UpdatedAt = &now
+	}
+	return m.onboardingStateCopy(m.Onboarding[index]), nil
+}
+
+func (m *MemoryRepository) onboardingIndex(userID string) int {
+	for index := range m.Onboarding {
+		if m.Onboarding[index].UserID == userID {
+			return index
+		}
+	}
+	return -1
+}
+
+func (m *MemoryRepository) onboardingStateCopy(state types.OnboardingState) types.OnboardingState {
+	copyState := state
+	copyState.Steps = make([]types.OnboardingStep, 0, len(state.Steps))
+	activeKeys := map[string]types.APIKey{}
+	for _, key := range m.APIKeys {
+		if key.UserID == state.UserID && key.RevokedAt == nil {
+			activeKeys[key.ID] = key
+		}
+	}
+	for _, step := range state.Steps {
+		copyStep := step
+		copyStep.Credential = nil
+		if step.Credential != nil {
+			if key, ok := activeKeys[step.Credential.ID]; ok {
+				keyCopy := key
+				copyStep.Credential = &keyCopy
+			}
+		}
+		copyState.Steps = append(copyState.Steps, copyStep)
+	}
+	return copyState
+}
+
+func onboardingConnectorOrder(connector string) int {
+	switch connector {
+	case "chatgpt":
+		return 1
+	case "claude":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func (m *MemoryRepository) ListAPIKeys(_ context.Context, userID string) ([]types.APIKey, error) {
