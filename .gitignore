@@ -11,3 +11,4 @@ npm/agentbox/bin/agentbox.exe
 *.tsbuildinfo
 .DS_Store
 tmp/
+.agents/gg/queue.md
