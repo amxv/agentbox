@@ -62,3 +62,13 @@ func TestLoadFromEnvAuthSettings(t *testing.T) {
 		t.Fatal("expected secure cookie override")
 	}
 }
+
+func TestLoadFromEnvMaintenanceSettings(t *testing.T) {
+	t.Setenv("AGENTBOX_MAINTENANCE_MODE", "true")
+	t.Setenv("AGENTBOX_MAINTENANCE_BYPASS_KEY", "  cutover-secret  ")
+
+	cfg := LoadFromEnv()
+	if !cfg.MaintenanceMode || cfg.MaintenanceBypassKey != "cutover-secret" {
+		t.Fatalf("maintenance config = %#v", cfg)
+	}
+}

@@ -891,22 +891,22 @@ func TestOwnerContentContextIsBrowserOnlyAndDoesNotBypassNormalAccess(t *testing
 func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
-	tenantA := testAuth("global", "shared")
-	tenantA.UserID = "usr_a"
-	tenantA.UserDisplayName = "User A"
-	tenantB := testAuth("global", "shared")
-	tenantB.UserID = "usr_b"
-	tenantB.UserDisplayName = "User B"
+	userA := testAuth("global", "shared")
+	userA.UserID = "usr_a"
+	userA.UserDisplayName = "User A"
+	userB := testAuth("global", "shared")
+	userB.UserID = "usr_b"
+	userB.UserDisplayName = "User B"
 	repo.Users = append(repo.Users,
-		types.User{ID: tenantA.UserID, Email: "a@example.com", DisplayName: "User A"},
-		types.User{ID: tenantB.UserID, Email: "b@example.com", DisplayName: "User B"},
+		types.User{ID: userA.UserID, Email: "a@example.com", DisplayName: "User A"},
+		types.User{ID: userB.UserID, Email: "b@example.com", DisplayName: "User B"},
 	)
 
-	keyA, err := svc.CreateAPIKey(context.Background(), tenantA, "shared")
+	keyA, err := svc.CreateAPIKey(context.Background(), userA, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyB, err := svc.CreateAPIKey(context.Background(), tenantB, "shared")
+	keyB, err := svc.CreateAPIKey(context.Background(), userB, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -925,15 +925,15 @@ func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authA == nil || authA.UserID != tenantA.UserID || authA.ActorName != "shared" || authB == nil || authB.UserID != tenantB.UserID {
+	if authA == nil || authA.UserID != userA.UserID || authA.ActorName != "shared" || authB == nil || authB.UserID != userB.UserID {
 		t.Fatalf("auth contexts: %#v %#v", authA, authB)
 	}
 
-	threadA, err := svc.CreateThread(context.Background(), *authA, "Tenant A")
+	threadA, err := svc.CreateThread(context.Background(), *authA, "User A private")
 	if err != nil {
 		t.Fatal(err)
 	}
-	threadB, err := svc.CreateThread(context.Background(), *authB, "Tenant B")
+	threadB, err := svc.CreateThread(context.Background(), *authB, "User B private")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -943,16 +943,16 @@ func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(threadsA) != 1 || threadsA[0].ID != threadA.ID {
-		t.Fatalf("tenant A list leaked or missed data: %#v", threadsA)
+		t.Fatalf("user A list leaked or missed data: %#v", threadsA)
 	}
 	if _, err := svc.GetThread(context.Background(), *authA, threadB.ID); !errors.Is(err, ErrThreadNotFound) {
-		t.Fatalf("tenant A get tenant B err = %v", err)
+		t.Fatalf("user A get user B err = %v", err)
 	}
 	if _, err := svc.PostMessage(context.Background(), *authA, PostMessageParams{ThreadID: threadB.ID, Body: "nope"}); !errors.Is(err, ErrThreadNotFound) {
-		t.Fatalf("tenant A post tenant B err = %v", err)
+		t.Fatalf("user A post user B err = %v", err)
 	}
 
-	if err := svc.RevokeAPIKey(context.Background(), tenantA, "shared"); err != nil {
+	if err := svc.RevokeAPIKey(context.Background(), userA, "shared"); err != nil {
 		t.Fatal(err)
 	}
 	revokedA, err := svc.AuthenticateAPIKey(context.Background(), keyA.Key)
@@ -963,7 +963,7 @@ func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revokedA != nil || stillB == nil || stillB.UserID != tenantB.UserID {
+	if revokedA != nil || stillB == nil || stillB.UserID != userB.UserID {
 		t.Fatalf("revoke result revokedA=%#v stillB=%#v", revokedA, stillB)
 	}
 }

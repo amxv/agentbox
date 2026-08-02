@@ -53,7 +53,6 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"profiles", "--help"}, []string{"Usage: agentbox profiles [options] [command]", "add <name>"}},
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
-		{[]string{"init", "--help"}, []string{"Usage: agentbox init", "existing user credential"}},
 		{[]string{"owner", "--help"}, []string{"Usage: agentbox owner setup-token", "permanent deployment owner"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
 		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "user-owned credential"}},
@@ -612,35 +611,6 @@ func TestCLIDoctorChecksSignedDownloadURL(t *testing.T) {
 	}
 }
 
-func TestCLIInitSavesProfile(t *testing.T) {
-	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
-	server := newTestServer(t)
-	defer server.Close()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	runner := &Runner{
-		Stdout:     &out,
-		Stderr:     &stderr,
-		Stdin:      bytes.NewReader(nil),
-		HTTPClient: server.Client(),
-	}
-
-	if code := runner.Run([]string{"init", "--profile-name", "prod", "--base-url", server.URL, "--api-key", "dev-key", "--local-key-name", "workstation", "--chatgpt-key-name", "chatgpt", "--skip-doctor"}); code != 0 {
-		t.Fatalf("init failed: code=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), `Saved profile "prod"`) || !strings.Contains(out.String(), `Created ChatGPT API key "chatgpt"`) {
-		t.Fatalf("init output = %s", out.String())
-	}
-	resolved, err := profiles.Resolve("prod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.APIKey == "adm" {
-		t.Fatalf("resolved profile = %#v", resolved)
-	}
-}
-
 func TestCLIConnectChatGPTPrintsMCPInstructions(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
@@ -722,7 +692,7 @@ func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 		t.Fatalf("deploy vercel failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "vercel env add APP_PUBLIC_URL production") || !strings.Contains(output, "agentbox owner setup-token --base-url") {
+	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "vercel env add AGENTBOX_APP_PUBLIC_URL production") || !strings.Contains(output, "agentbox owner setup-token --base-url") {
 		t.Fatalf("deploy output = %s", output)
 	}
 	if called {
@@ -776,12 +746,12 @@ func TestCLIOwnerSetupTokenPrintsBrowserLinkWithoutDeploymentSecret(t *testing.T
 	}
 }
 
-func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
+func TestCLIKeysListAndRevokeUseUserProfile(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
 	defer server.Close()
 	if _, err := profiles.SaveProfile(profiles.Profile{
-		Name:     "tenant",
+		Name:     "user",
 		BaseURL:  server.URL,
 		APIKey:   "dev-key",
 		KeyName:  "dev",
@@ -794,12 +764,12 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	var stderr bytes.Buffer
 	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
 
-	if code := runner.Run([]string{"--profile", "tenant", "keys", "create", "tenant-managed"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "create", "user-managed"}); code != 0 {
 		t.Fatalf("profile keys create failed: code=%d stderr=%s", code, stderr.String())
 	}
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"--profile", "tenant", "keys", "list", "--json"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "list", "--json"}); code != 0 {
 		t.Fatalf("profile keys list failed: code=%d stderr=%s", code, stderr.String())
 	}
 	var listed struct {
@@ -810,20 +780,20 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	}
 	found := false
 	for _, key := range listed.Keys {
-		if key.Name == "tenant-managed" {
+		if key.Name == "user-managed" {
 			found = true
 			if key.UserID != "usr_seed" {
-				t.Fatalf("tenant-managed key user_id=%q", key.UserID)
+				t.Fatalf("user-managed key user_id=%q", key.UserID)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("tenant-managed key missing from tenant list: %#v", listed.Keys)
+		t.Fatalf("user-managed key missing from user list: %#v", listed.Keys)
 	}
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"--profile", "tenant", "keys", "revoke", "tenant-managed", "--json"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "revoke", "user-managed", "--json"}); code != 0 {
 		t.Fatalf("profile keys revoke failed: code=%d stderr=%s", code, stderr.String())
 	}
 	var revoked struct {
@@ -832,7 +802,7 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &revoked); err != nil {
 		t.Fatalf("revoke output is not JSON: %v output=%s", err, out.String())
 	}
-	if revoked.Revoked != "tenant-managed" {
+	if revoked.Revoked != "user-managed" {
 		t.Fatalf("revoked payload = %#v", revoked)
 	}
 }

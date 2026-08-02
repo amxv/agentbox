@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -38,119 +37,6 @@ func defaultExternalCommand(name string, args []string, stdin string, env map[st
 	return stdout.String(), stderr.String(), err
 }
 
-func (r *Runner) runInit(args []string, globalProfileName string) error {
-	fs := newFlagSet("init")
-	profileName := fs.String("profile-name", defaultString(globalProfileName, "local"), "stored profile name")
-	baseURL := fs.String("base-url", "", "Agentbox base URL")
-	apiKey := fs.String("api-key", "", "existing user API key with keys:write scope")
-	adminKey := fs.String("admin-key", "", "deprecated; deployment-wide key management is disabled")
-	localKeyName := fs.String("local-key-name", "local", "API key name for this CLI")
-	chatgptKeyName := fs.String("chatgpt-key-name", "chatgpt", "API key name for ChatGPT")
-	skipDoctor := fs.Bool("skip-doctor", false, "skip the doctor verification step")
-	jsonOut := fs.Bool("json", false, "print raw JSON")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*adminKey) != "" {
-		return errors.New("--admin-key is no longer supported by init. Sign in first or provide --api-key for an existing user credential with keys:write scope.")
-	}
-
-	reader := bufio.NewReader(r.Stdin)
-	if strings.TrimSpace(*baseURL) == "" {
-		value, err := promptRequired(reader, r.Stdout, "Agentbox base URL")
-		if err != nil {
-			return err
-		}
-		*baseURL = value
-	}
-	if strings.TrimSpace(*apiKey) == "" {
-		if value := strings.TrimSpace(os.Getenv("AGENTBOX_API_KEY")); value != "" {
-			*apiKey = value
-		}
-	}
-	if strings.TrimSpace(*apiKey) == "" {
-		value, err := promptRequired(reader, r.Stdout, "Existing user API key")
-		if err != nil {
-			return err
-		}
-		*apiKey = value
-	}
-	if strings.TrimSpace(*profileName) == "" {
-		value, err := promptWithDefault(reader, r.Stdout, "Profile name", "local")
-		if err != nil {
-			return err
-		}
-		*profileName = value
-	}
-	if strings.TrimSpace(*localKeyName) == "" {
-		value, err := promptWithDefault(reader, r.Stdout, "Local API key name", "local")
-		if err != nil {
-			return err
-		}
-		*localKeyName = value
-	}
-	if strings.TrimSpace(*chatgptKeyName) == "" {
-		value, err := promptWithDefault(reader, r.Stdout, "ChatGPT API key name", "chatgpt")
-		if err != nil {
-			return err
-		}
-		*chatgptKeyName = value
-	}
-
-	localKey, err := r.createUserAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*apiKey), strings.TrimSpace(*localKeyName), "local")
-	if err != nil {
-		return err
-	}
-	chatgptKey, err := r.createUserAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*apiKey), strings.TrimSpace(*chatgptKeyName), "chatgpt")
-	if err != nil {
-		return err
-	}
-
-	store, err := profiles.SaveProfile(profiles.Profile{
-		Name:     strings.TrimSpace(*profileName),
-		BaseURL:  strings.TrimSpace(*baseURL),
-		APIKey:   localKey.Secret,
-		UserID:   localKey.UserID,
-		KeyName:  localKey.Name,
-		AuthType: "api_key",
-	}, true)
-	if err != nil {
-		return err
-	}
-
-	result := map[string]any{
-		"profile":         strings.TrimSpace(*profileName),
-		"base_url":        strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
-		"config_path":     profiles.DefaultConfigPath(),
-		"active_profile":  nullString(store.ActiveProfileName),
-		"doctor_skipped":  *skipDoctor,
-		"api_key_name":    localKey.Name,
-		"api_key_masked":  localKey.KeyMasked,
-		"chatgpt_key":     chatgptKey.Secret,
-		"chatgpt_name":    chatgptKey.Name,
-		"resolved_source": "config",
-		"mcp_url":         strings.TrimRight(strings.TrimSpace(*baseURL), "/") + "/api/mcp?key=" + url.QueryEscape(chatgptKey.Secret),
-	}
-	if *jsonOut {
-		if !*skipDoctor {
-			result["checks"] = r.doctorChecks(strings.TrimSpace(*profileName))
-		}
-		return printJSON(r.Stdout, result)
-	}
-
-	fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", *profileName, profiles.DefaultConfigPath())
-	fmt.Fprintf(r.Stdout, "Created local API key %q and saved it to the profile.\n", localKey.Name)
-	fmt.Fprintf(r.Stdout, "Created ChatGPT API key %q. Store this secret now: %s\n", chatgptKey.Name, chatgptKey.Secret)
-	fmt.Fprintf(r.Stdout, "ChatGPT MCP URL: %s\n\n", result["mcp_url"])
-	printChatGPTSteps(r.Stdout)
-	if !*skipDoctor {
-		if err := r.runDoctor(nil, strings.TrimSpace(*profileName)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *Runner) runConnect(args []string, profileName string) error {
 	if len(args) == 0 || args[0] != "chatgpt" {
 		return errors.New(`Usage: agentbox connect chatgpt [--json]`)
@@ -160,7 +46,7 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	if err := parseFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	key, err := r.createTenantAPIKeyForProfile(profileName, "chatgpt", "chatgpt")
+	key, err := r.createProfileAPIKey(profileName, "chatgpt", "chatgpt")
 	if err != nil {
 		return err
 	}
@@ -275,7 +161,7 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel link --yes --project agentbox-go",
 		"vercel env add DATABASE_URL production",
 		"vercel env add AGENTBOX_ADMIN_KEY production",
-		"printf 'https://YOUR-DASHBOARD.vercel.app' | vercel env add APP_PUBLIC_URL production",
+		"printf 'https://YOUR-DASHBOARD.vercel.app' | vercel env add AGENTBOX_APP_PUBLIC_URL production",
 		"vercel env add R2_ACCOUNT_ID production",
 		"vercel env add R2_ACCESS_KEY_ID production",
 		"vercel env add R2_SECRET_ACCESS_KEY production",
@@ -308,30 +194,6 @@ type remoteAPIKey struct {
 	KeyMasked string `json:"key_masked"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
-}
-
-type remoteTenant struct {
-	ID        string `json:"id"`
-	Slug      string `json:"slug"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-}
-
-type remoteUser struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Role        string `json:"role"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-type remoteProvisionTenantResult struct {
-	Tenant     remoteTenant `json:"tenant"`
-	User       remoteUser   `json:"user"`
-	APIKey     remoteAPIKey `json:"api_key"`
-	SetupToken string       `json:"setup_token"`
 }
 
 func (r *Runner) runKeys(args []string, profileName string) error {
@@ -376,7 +238,7 @@ func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	if strings.EqualFold(name, "raycast") {
 		return r.printRaycastKey(profileName, *jsonOut)
 	}
-	key, err := r.createTenantAPIKeyForProfile(profileName, name, "custom")
+	key, err := r.createProfileAPIKey(profileName, name, "custom")
 	if err != nil {
 		return err
 	}
@@ -411,7 +273,7 @@ func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
-	key, err := r.createTenantAPIKeyForProfile(profileName, "raycast", "raycast")
+	key, err := r.createProfileAPIKey(profileName, "raycast", "raycast")
 	if err != nil {
 		return err
 	}
@@ -496,7 +358,7 @@ func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 	return nil
 }
 
-func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, purpose string) (remoteAPIKey, error) {
+func (r *Runner) createProfileAPIKey(profileName string, name string, purpose string) (remoteAPIKey, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return remoteAPIKey{}, errors.New("API key name is required.")
@@ -510,60 +372,6 @@ func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, p
 		Key remoteAPIKey `json:"key"`
 	}
 	if err := r.request("/api/keys", http.MethodPost, bytes.NewReader(payloadBytes), map[string]string{"content-type": "application/json"}, profileName, &data); err != nil {
-		return remoteAPIKey{}, err
-	}
-	return data.Key, nil
-}
-
-func (r *Runner) createUserAPIKey(baseURL string, apiKey string, name string, purpose string) (remoteAPIKey, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return remoteAPIKey{}, errors.New("API key name is required.")
-	}
-	if strings.TrimSpace(apiKey) == "" {
-		return remoteAPIKey{}, errors.New("An existing user API key is required.")
-	}
-	payload, _ := json.Marshal(map[string]string{
-		"name":    name,
-		"purpose": strings.TrimSpace(purpose),
-	})
-	endpoint, err := url.JoinPath(strings.TrimRight(baseURL, "/"), "/api/keys")
-	if err != nil {
-		return remoteAPIKey{}, err
-	}
-	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return remoteAPIKey{}, err
-	}
-	request.Header.Set("authorization", "Bearer "+strings.TrimSpace(apiKey))
-	request.Header.Set("content-type", "application/json")
-	response, err := r.HTTPClient.Do(request)
-	if err != nil {
-		return remoteAPIKey{}, err
-	}
-	defer response.Body.Close()
-	contents, err := io.ReadAll(response.Body)
-	if err != nil {
-		return remoteAPIKey{}, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		var failure struct {
-			Code  string `json:"code"`
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(contents, &failure)
-		if failure.Error != "" {
-			if failure.Code != "" {
-				return remoteAPIKey{}, fmt.Errorf("%s: %s", failure.Code, failure.Error)
-			}
-			return remoteAPIKey{}, errors.New(failure.Error)
-		}
-		return remoteAPIKey{}, fmt.Errorf("Request failed with HTTP %d", response.StatusCode)
-	}
-	var data struct {
-		Key remoteAPIKey `json:"key"`
-	}
-	if err := json.Unmarshal(contents, &data); err != nil {
 		return remoteAPIKey{}, err
 	}
 	return data.Key, nil
@@ -610,6 +418,9 @@ func (r *Runner) adminRequest(baseURL string, adminKey string, path string, meth
 		return err
 	}
 	req.Header.Set("x-agentbox-admin-key", adminKey)
+	if maintenanceKey := strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")); maintenanceKey != "" {
+		req.Header.Set("x-agentbox-maintenance-key", maintenanceKey)
+	}
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
 	}
@@ -676,36 +487,4 @@ func printNumberedSteps(output io.Writer, title string, steps []string) {
 	for i, step := range steps {
 		fmt.Fprintf(output, "%d. %s\n", i+1, step)
 	}
-}
-
-func promptRequired(reader *bufio.Reader, output io.Writer, label string) (string, error) {
-	for {
-		value, err := promptWithDefault(reader, output, label, "")
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value), nil
-		}
-	}
-}
-
-func promptWithDefault(reader *bufio.Reader, output io.Writer, label string, fallback string) (string, error) {
-	prompt := label
-	if fallback != "" {
-		prompt += " [" + fallback + "]"
-	}
-	prompt += ": "
-	if _, err := fmt.Fprint(output, prompt); err != nil {
-		return "", err
-	}
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	value := strings.TrimSpace(line)
-	if value == "" {
-		return fallback, nil
-	}
-	return value, nil
 }

@@ -238,6 +238,9 @@ func (r *Runner) exchangeCLILoginCode(baseURL string, code string, state string,
 		return cliLoginExchangeResponse{}, err
 	}
 	req.Header.Set("content-type", "application/json")
+	if maintenanceKey := strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")); maintenanceKey != "" {
+		req.Header.Set("x-agentbox-maintenance-key", maintenanceKey)
+	}
 	res, err := r.HTTPClient.Do(req)
 	if err != nil {
 		return cliLoginExchangeResponse{}, err

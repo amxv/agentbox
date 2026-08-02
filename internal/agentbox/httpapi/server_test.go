@@ -39,6 +39,81 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestMaintenanceModeBlocksProductRoutesButAllowsCutoverPathsAndExplicitBypass(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	server := NewServer(config.Config{
+		AdminKey:             "admin-secret",
+		MaintenanceMode:      true,
+		MaintenanceBypassKey: "bypass-secret",
+		SessionCookieName:    config.DefaultSessionCookieName,
+	}, svc)
+
+	blocked := httptest.NewRecorder()
+	server.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, "/api/threads", nil))
+	if blocked.Code != http.StatusServiceUnavailable || !strings.Contains(blocked.Body.String(), `"code":"MAINTENANCE_MODE"`) {
+		t.Fatalf("blocked status=%d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	health := httptest.NewRecorder()
+	server.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", health.Code, health.Body.String())
+	}
+
+	setupToken := httptest.NewRecorder()
+	setupRequest := httptest.NewRequest(http.MethodPost, "/api/admin/owner/setup-token", strings.NewReader(`{}`))
+	setupRequest.Header.Set("x-agentbox-admin-key", "admin-secret")
+	server.ServeHTTP(setupToken, setupRequest)
+	if setupToken.Code != http.StatusCreated {
+		t.Fatalf("setup-token status=%d body=%s", setupToken.Code, setupToken.Body.String())
+	}
+
+	bypassed := httptest.NewRecorder()
+	bypassRequest := httptest.NewRequest(http.MethodGet, "/api/threads", nil)
+	bypassRequest.Header.Set("x-agentbox-maintenance-key", "bypass-secret")
+	server.ServeHTTP(bypassed, bypassRequest)
+	if bypassed.Code != http.StatusUnauthorized {
+		t.Fatalf("bypass should reach normal auth boundary: status=%d body=%s", bypassed.Code, bypassed.Body.String())
+	}
+
+	owner := types.User{ID: "usr_maintenance_owner", Email: "owner@example.com", DisplayName: "Owner", IsOwner: true}
+	repo.Users = append(repo.Users, owner)
+	ownerSecret := "maintenance-owner-session"
+	if _, err := repo.CreateUserSession(t.Context(), types.UserSession{
+		ID:         "sess_maintenance_owner",
+		UserID:     owner.ID,
+		SecretHash: dbHashForTest(ownerSecret),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ownerRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
+	ownerRequest.AddCookie(&http.Cookie{Name: config.DefaultSessionCookieName, Value: ownerSecret})
+	ownerResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerResponse, ownerRequest)
+	if ownerResponse.Code != http.StatusOK {
+		t.Fatalf("owner browser should pass maintenance gate: status=%d body=%s", ownerResponse.Code, ownerResponse.Body.String())
+	}
+
+	ownerKey, err := svc.CreateAPIKey(t.Context(), types.AuthContext{
+		UserID:          owner.ID,
+		UserDisplayName: owner.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		SessionID:       "sess_maintenance_owner",
+		ActorName:       "Web dashboard",
+		IsOwner:         true,
+	}, "owner-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKeyRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users?key="+url.QueryEscape(ownerKey.Key), nil)
+	ownerKeyResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerKeyResponse, ownerKeyRequest)
+	if ownerKeyResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("owner API key bypassed maintenance: status=%d body=%s", ownerKeyResponse.Code, ownerKeyResponse.Body.String())
+	}
+}
+
 func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
@@ -284,7 +359,7 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 	}
 }
 
-func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
+func TestBrowserSessionAuthLifecycleAndUserKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
 	passwordHash, err := authpkg.HashPassword("let-me-in")
@@ -623,31 +698,6 @@ func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
 	server.ServeHTTP(reuse, httptest.NewRequest(http.MethodPost, "/api/auth/cli/exchange", strings.NewReader(`{"code":"`+authorized.Code+`","state":"state","redirect_uri":"http://127.0.0.1:3456/callback","key_name":"cli-test"}`)))
 	if reuse.Code != http.StatusForbidden {
 		t.Fatalf("reuse status=%d body=%s", reuse.Code, reuse.Body.String())
-	}
-}
-
-func TestAdminKeyRoutesAreDisabled(t *testing.T) {
-	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
-	server := NewServer(config.Config{AdminKey: "adm"}, svc)
-
-	unauthorized := httptest.NewRecorder()
-	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil))
-	if unauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status = %d", unauthorized.Code)
-	}
-
-	for _, request := range []*http.Request{
-		httptest.NewRequest(http.MethodGet, "/api/admin/keys", nil),
-		httptest.NewRequest(http.MethodPost, "/api/admin/keys", strings.NewReader(`{"name":"chatgpt"}`)),
-		httptest.NewRequest(http.MethodDelete, "/api/admin/keys/chatgpt", nil),
-	} {
-		request.Header.Set("x-agentbox-admin-key", "adm")
-		response := httptest.NewRecorder()
-		server.ServeHTTP(response, request)
-		if response.Code != http.StatusGone || !strings.Contains(response.Body.String(), "LEGACY_ADMIN_KEY_DISABLED") {
-			t.Fatalf("%s %s status=%d body=%s", request.Method, request.URL.Path, response.Code, response.Body.String())
-		}
 	}
 }
 
@@ -1487,7 +1537,7 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payloadA.Thread.OwnerUserID != authA.UserID || strings.Contains(createA.Body.String(), `tenant_id`) {
-		t.Fatalf("createA leaked tenant or wrong owner: %s", createA.Body.String())
+		t.Fatalf("createA leaked internal identity or used wrong owner: %s", createA.Body.String())
 	}
 
 	createB := httptest.NewRecorder()
@@ -2210,18 +2260,4 @@ func testUser(_ string, userID string, email string, displayName string, _ strin
 func dbHashForTest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-func TestLegacyTenantProvisioningRoutesAreRetired(t *testing.T) {
-	repository := &db.MemoryRepository{}
-	server := NewServer(config.Config{AdminKey: "deployment-secret"}, service.New(repository, &assets.FakeStore{}))
-	for _, path := range []string{"/api/admin/tenants", "/api/admin/tenants/default", "/api/admin/tenants/default/users"} {
-		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"name":"legacy"}`))
-		request.Header.Set("x-agentbox-admin-key", "deployment-secret")
-		response := httptest.NewRecorder()
-		server.ServeHTTP(response, request)
-		if response.Code != http.StatusNotFound {
-			t.Fatalf("legacy tenant route %s status=%d body=%s", path, response.Code, response.Body.String())
-		}
-	}
 }

@@ -10,7 +10,7 @@ const repoUrl = "https://github.com/amxv/agentbox";
 
 const requirements = [
   ["01", "Vercel account", "Deploy the Go service and optional dashboard."],
-  ["02", "Postgres", "Store tenants, identities, threads, messages, and metadata."],
+  ["02", "Postgres", "Store users, teams, threads, messages, and metadata."],
   ["03", "Cloudflare R2", "Store attachment bytes outside the application server."],
   ["04", "Agentbox CLI", "Provision, diagnose, and connect every participant surface."]
 ];
@@ -48,7 +48,7 @@ const chapters = [
       {
         title: "Configure the backend project",
         body: "Link the Vercel backend project and add the required production environment values.",
-        code: "vercel link --yes --project agentbox-go\nvercel env add DATABASE_URL production\nvercel env add AGENTBOX_ADMIN_KEY production\nvercel env add APP_PUBLIC_URL production\nvercel env add R2_ACCOUNT_ID production\nvercel env add R2_ACCESS_KEY_ID production\nvercel env add R2_SECRET_ACCESS_KEY production\nvercel env add R2_BUCKET production\nvercel env add AGENTBOX_ENV production"
+        code: "vercel link --yes --project agentbox-go\nvercel env add DATABASE_URL production\nvercel env add AGENTBOX_ADMIN_KEY production\nvercel env add AGENTBOX_APP_PUBLIC_URL production\nvercel env add R2_ACCOUNT_ID production\nvercel env add R2_ACCESS_KEY_ID production\nvercel env add R2_SECRET_ACCESS_KEY production\nvercel env add R2_BUCKET production\nvercel env add AGENTBOX_ENV production"
       },
       {
         title: "Deploy and migrate",
@@ -96,8 +96,8 @@ const chapters = [
   }
 ];
 
-const requiredEnv = ["DATABASE_URL", "AGENTBOX_ADMIN_KEY", "APP_PUBLIC_URL", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "AGENTBOX_ENV=production"];
-const optionalEnv = ["AGENTBOX_ALLOWED_ORIGINS", "AGENTBOX_AUTO_MIGRATE", "AGENTBOX_DB_POOL_SIZE", "AGENTBOX_MAX_FILE_SIZE_BYTES", "R2_PUBLIC_BASE_URL"];
+const requiredEnv = ["DATABASE_URL", "AGENTBOX_ADMIN_KEY", "AGENTBOX_APP_PUBLIC_URL", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "AGENTBOX_ENV=production"];
+const optionalEnv = ["AGENTBOX_ALLOWED_ORIGINS", "AGENTBOX_AUTO_MIGRATE", "AGENTBOX_DB_POOL_SIZE", "AGENTBOX_MAX_FILE_SIZE_BYTES"];
 
 const checks = [
   "agentbox doctor checks profile resolution, service health, authenticated access, MCP URL construction, and signed attachment downloads.",

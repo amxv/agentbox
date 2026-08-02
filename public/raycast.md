@@ -43,4 +43,4 @@ npm run lint
 npm run build
 ```
 
-Raycast is not downstream from MCP or upstream from CLI. It is another client surface for the same tenant-scoped threads, messages, files, and identities.
+Raycast is not downstream from MCP or upstream from CLI. It is another client surface for the same user-accessible threads, messages, files, and identities.

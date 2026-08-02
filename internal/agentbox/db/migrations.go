@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	migrationfiles "agentbox/migrations"
@@ -22,6 +24,17 @@ func (r *Repository) Migrate(ctx context.Context) error {
 	return r.migrateThrough(ctx, "")
 }
 
+// MigrateThrough applies canonical migrations through one exact checked-in
+// version. It is used by the production cutover to stop immediately before the
+// owner-required point-of-no-return migration.
+func (r *Repository) MigrateThrough(ctx context.Context, maxVersion string) error {
+	maxVersion = strings.TrimSpace(maxVersion)
+	if maxVersion == "" {
+		return errors.New("migration version is required")
+	}
+	return r.migrateThrough(ctx, maxVersion)
+}
+
 // migrateThrough applies migrations up to and including maxVersion. An empty
 // maxVersion applies the full checked-in set. The bounded form exists so the
 // legacy-fixture test can prove the explicit owner-setup boundary immediately
@@ -30,6 +43,18 @@ func (r *Repository) migrateThrough(ctx context.Context, maxVersion string) erro
 	migrations, err := migrationfiles.Load()
 	if err != nil {
 		return err
+	}
+	if maxVersion != "" {
+		found := false
+		for _, migration := range migrations {
+			if migration.Version == maxVersion {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("unknown migration version %q", maxVersion)
+		}
 	}
 
 	connection, err := r.pool.Acquire(ctx)

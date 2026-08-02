@@ -14,46 +14,50 @@ const (
 )
 
 type Config struct {
-	DatabaseURL         string
-	DBPoolSize          int32
-	AllowedOrigins      []string
-	AdminKey            string
-	R2AccountID         string
-	R2AccessKeyID       string
-	R2SecretAccessKey   string
-	R2Bucket            string
-	MaxFileSizeBytes    int64
-	MultipartLimitBytes int64
-	Environment         string
-	VercelEnvironment   string
-	AutoMigrate         bool
-	AppPublicURL        string
-	SessionCookieName   string
-	SessionSecret       string
-	TokenHashPepper     string
-	SecureCookies       bool
+	DatabaseURL          string
+	DBPoolSize           int32
+	AllowedOrigins       []string
+	AdminKey             string
+	R2AccountID          string
+	R2AccessKeyID        string
+	R2SecretAccessKey    string
+	R2Bucket             string
+	MaxFileSizeBytes     int64
+	MultipartLimitBytes  int64
+	Environment          string
+	VercelEnvironment    string
+	AutoMigrate          bool
+	MaintenanceMode      bool
+	MaintenanceBypassKey string
+	AppPublicURL         string
+	SessionCookieName    string
+	SessionSecret        string
+	TokenHashPepper      string
+	SecureCookies        bool
 }
 
 func LoadFromEnv() Config {
 	maxFileSize := int64FromEnv("AGENTBOX_MAX_FILE_SIZE_BYTES", DefaultMaxFileSizeBytes)
 	cfg := Config{
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		DBPoolSize:          int32FromEnv("AGENTBOX_DB_POOL_SIZE", DefaultDBPoolSize),
-		AllowedOrigins:      commaList(os.Getenv("AGENTBOX_ALLOWED_ORIGINS")),
-		AdminKey:            os.Getenv("AGENTBOX_ADMIN_KEY"),
-		R2AccountID:         os.Getenv("R2_ACCOUNT_ID"),
-		R2AccessKeyID:       os.Getenv("R2_ACCESS_KEY_ID"),
-		R2SecretAccessKey:   os.Getenv("R2_SECRET_ACCESS_KEY"),
-		R2Bucket:            os.Getenv("R2_BUCKET"),
-		MaxFileSizeBytes:    maxFileSize,
-		MultipartLimitBytes: multipartLimit(maxFileSize),
-		Environment:         firstNonEmpty(os.Getenv("AGENTBOX_ENV"), os.Getenv("NODE_ENV")),
-		VercelEnvironment:   os.Getenv("VERCEL_ENV"),
-		AutoMigrate:         truthy(os.Getenv("AGENTBOX_AUTO_MIGRATE")),
-		AppPublicURL:        strings.TrimRight(os.Getenv("AGENTBOX_APP_PUBLIC_URL"), "/"),
-		SessionCookieName:   firstNonEmpty(os.Getenv("AGENTBOX_SESSION_COOKIE_NAME"), DefaultSessionCookieName),
-		SessionSecret:       os.Getenv("AGENTBOX_SESSION_SECRET"),
-		TokenHashPepper:     os.Getenv("AGENTBOX_TOKEN_HASH_PEPPER"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		DBPoolSize:           int32FromEnv("AGENTBOX_DB_POOL_SIZE", DefaultDBPoolSize),
+		AllowedOrigins:       commaList(os.Getenv("AGENTBOX_ALLOWED_ORIGINS")),
+		AdminKey:             os.Getenv("AGENTBOX_ADMIN_KEY"),
+		R2AccountID:          os.Getenv("R2_ACCOUNT_ID"),
+		R2AccessKeyID:        os.Getenv("R2_ACCESS_KEY_ID"),
+		R2SecretAccessKey:    os.Getenv("R2_SECRET_ACCESS_KEY"),
+		R2Bucket:             os.Getenv("R2_BUCKET"),
+		MaxFileSizeBytes:     maxFileSize,
+		MultipartLimitBytes:  multipartLimit(maxFileSize),
+		Environment:          firstNonEmpty(os.Getenv("AGENTBOX_ENV"), os.Getenv("NODE_ENV")),
+		VercelEnvironment:    os.Getenv("VERCEL_ENV"),
+		AutoMigrate:          truthy(os.Getenv("AGENTBOX_AUTO_MIGRATE")),
+		MaintenanceMode:      truthy(os.Getenv("AGENTBOX_MAINTENANCE_MODE")),
+		MaintenanceBypassKey: strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")),
+		AppPublicURL:         strings.TrimRight(os.Getenv("AGENTBOX_APP_PUBLIC_URL"), "/"),
+		SessionCookieName:    firstNonEmpty(os.Getenv("AGENTBOX_SESSION_COOKIE_NAME"), DefaultSessionCookieName),
+		SessionSecret:        os.Getenv("AGENTBOX_SESSION_SECRET"),
+		TokenHashPepper:      os.Getenv("AGENTBOX_TOKEN_HASH_PEPPER"),
 	}
 	cfg.SecureCookies = cfg.IsProduction()
 	if value := strings.TrimSpace(os.Getenv("AGENTBOX_SECURE_COOKIES")); value != "" {

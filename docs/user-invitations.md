@@ -56,7 +56,7 @@ user must sign in again and create new credentials as needed.
 
 ## Production configuration
 
-Set `APP_PUBLIC_URL` on the Go backend to the dashboard origin so invitation
+Set `AGENTBOX_APP_PUBLIC_URL` on the Go backend to the dashboard origin so invitation
 responses contain complete public signup URLs in split Vercel deployments. The
 owner dashboard also converts relative signup paths to its current origin as a
 safe fallback.

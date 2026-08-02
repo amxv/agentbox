@@ -69,8 +69,8 @@ Required production env on `agentbox-go`:
 
 ```text
 DATABASE_URL
-AGENTBOX_API_KEYS
-AGENTBOX_ADMIN_KEYS or AGENTBOX_ADMIN_KEY
+AGENTBOX_ADMIN_KEY
+AGENTBOX_APP_PUBLIC_URL
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -85,7 +85,6 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
-R2_PUBLIC_BASE_URL
 ```
 
 Verify backend:
@@ -120,6 +119,16 @@ the canonical schema history. Applied versions and checksums are recorded in
 
 Do not rely on `AGENTBOX_AUTO_MIGRATE=true` for production by default.
 
+For the user/team production cutover, the migration CLI can stop immediately
+before the irreversible migration:
+
+```bash
+bun run db:migrate -- --through 0016 --timeout 5m
+```
+
+After permanent-owner setup succeeds, run the unbounded command to apply
+`0017`. Never bypass the owner prerequisite or hand-edit the removed columns.
+
 ## Permanent Owner Setup
 
 The deployment admin secret is not a daily actor credential. Use it only from a
@@ -132,7 +141,7 @@ agentbox owner setup-token \
   --expires 30m
 ```
 
-Set `APP_PUBLIC_URL` on the Go backend to the Next.js dashboard origin when the
+Set `AGENTBOX_APP_PUBLIC_URL` on the Go backend to the Next.js dashboard origin when the
 projects are deployed separately. The token is hash-only in PostgreSQL,
 single-use, expiring, and replaced whenever a new token is issued. Recovery is
 restricted to the same permanent owner email. Browser sessions and API keys
@@ -163,6 +172,14 @@ manifest semantics, and restore verification. The Zodex machine has no productio
 credentials; the real backup and recorded production counts are a credentialed
 local-agent gate.
 
+The complete maintenance-mode, migration, preservation, smoke, reopen, and
+rollback sequence is in `docs/user-team-sharing-production-cutover.md`. Run the
+credential-free branch gate before handing off to the local operator:
+
+```bash
+bun run verify:cutover
+```
+
 ## Invitation-backed Users
 
 After the permanent owner is established, open `/owner/users` in the dashboard
@@ -176,14 +193,13 @@ Re-enabling does not restore old credentials. See `docs/user-invitations.md`.
 
 ## Deployment-global Login
 
-Login is deployment-global and accepts only email and password. Do not add a
-tenant selector to browser, CLI, API, or profile contracts. Saved CLI profiles
-must not contain `tenant_id` or `tenant_slug`.
+Login is deployment-global and accepts only email and password. Do not add an
+account-partition selector to browser, CLI, API, or profile contracts. Saved
+CLI profiles contain only service, user, actor, and credential metadata.
 
-The legacy `/api/admin/tenants` provisioning surface and
-`agentbox provision tenant` command are retired. Normal users can be created
-only through owner-issued invitations; the permanent owner can be established
-or recovered only through the one-time operator token flow. See
+Normal users can be created only through owner-issued invitations; the
+permanent owner can be established or recovered only through the one-time
+operator token flow. See
 `docs/deployment-global-identity.md`.
 
 ## Deploy Dashboard

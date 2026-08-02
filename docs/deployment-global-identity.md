@@ -1,7 +1,7 @@
 # Deployment-global identity
 
-AgentBox no longer asks a person or client to select a tenant when signing in.
-An email address identifies exactly one deployment-global user, and every
+AgentBox uses one deployment-global user directory. An email address identifies
+exactly one user, and every
 browser session, CLI credential, ChatGPT credential, Claude credential, and
 other API key acts for that user with its own actor attribution.
 
@@ -14,8 +14,8 @@ There are only two account-establishment paths:
 2. The permanent owner creates a one-time signup invitation from
    `/owner/users` for every non-owner account.
 
-The previous deployment-secret tenant provisioning API and
-`agentbox provision tenant` command are retired. `AGENTBOX_ADMIN_KEY` cannot
+The removed deployment-secret account-provisioning API and compatibility CLI
+commands are unavailable. `AGENTBOX_ADMIN_KEY` cannot
 create normal users, daily API credentials, or access the owner browser API.
 
 ## Login
@@ -25,29 +25,22 @@ Browser login accepts only:
 - email;
 - password.
 
-The backend performs a deployment-wide case-insensitive email lookup. A tenant
-identifier in an old client request is ignored by JSON decoding and cannot
-change which account is selected. Current dashboard and CLI clients do not send
-one.
+The backend performs a deployment-wide case-insensitive email lookup. Unknown
+legacy request fields are ignored by JSON decoding and cannot change which
+account is selected.
 
 ## CLI profiles
 
 Saved CLI profiles contain the backend URL, user/actor metadata, and the active
-user-owned credential. They no longer persist `tenant_id` or `tenant_slug`.
+user-owned credential. They contain no account-partition metadata.
 
 Existing accounts, sessions, credentials, and local profiles are explicitly
 resettable during this feature cutover. Operators should remove or recreate any
-legacy profile that predates deployment-global identity rather than relying on
-tenant metadata.
+profile that predates deployment-global identity.
 
-## Transitional database note
+## Final authorization boundary
 
-Some content tables and internal authorization contexts still carry tenant
-columns while Phase 3 replaces tenant-wide content visibility with thread
-ownership and team grants. Those columns are migration scaffolding only; they
-are no longer a product identity boundary and must not be exposed as an account
-selector.
-
-The final cleanup phase deletes the remaining tenant-era schema and internal
-code after content ownership, teams, public links, attachments, MCP, CLI, and
-dashboard flows all use the canonical user/team authorization predicate.
+Content access is determined only by stable thread ownership and current team
+membership. Public links are separate revocable read-only capabilities. The
+permanent owner's deployment-wide content viewer is browser-session-only and is
+not inherited by API keys.

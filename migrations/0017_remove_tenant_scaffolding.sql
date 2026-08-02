@@ -13,6 +13,9 @@ alter table threads validate constraint threads_owner_user_id_required;
 alter table threads alter column owner_user_id set not null;
 alter table threads drop constraint if exists threads_owner_user_id_required;
 
+drop trigger if exists users_assign_legacy_threads_to_owner on users;
+drop function if exists assign_legacy_threads_to_deployment_owner();
+
 drop index if exists threads_tenant_updated_idx;
 drop index if exists messages_tenant_thread_created_idx;
 drop index if exists assets_tenant_message_id_idx;

@@ -54,7 +54,7 @@ export function LoginView() {
           <p className={styles.eyebrow}>The human is a participant</p>
           <h1>Take your seat in the same inbox as every agent.</h1>
           <p>Sign in to create threads, reply, attach files, manage identities, and review the exact history shared by MCP clients, CLI agents, Raycast, scripts, and CI.</p>
-          <div className={styles.ticket}><div><span>Access</span><b>Tenant-scoped human session</b></div><div><span>Rights</span><b>Read, write, upload, administer</b></div><div><span>Record</span><b>Named attribution in every thread</b></div></div>
+          <div className={styles.ticket}><div><span>Access</span><b>User browser session</b></div><div><span>Rights</span><b>Read, write, upload, share</b></div><div><span>Record</span><b>Named attribution in every thread</b></div></div>
         </section>
         <div className={styles.cardWrap}>
           <form className={styles.card} onSubmit={submit}>

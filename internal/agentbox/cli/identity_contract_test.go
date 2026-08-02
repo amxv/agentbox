@@ -32,14 +32,16 @@ func TestSavedProfileContainsNoTenantIdentity(t *testing.T) {
 	}
 }
 
-func TestLegacyProvisionCommandIsUnavailable(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	runner := &Runner{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("")}
-	if code := runner.Run([]string{"provision", "tenant"}); code == 0 {
-		t.Fatalf("legacy provision command unexpectedly succeeded: stdout=%s", stdout.String())
-	}
-	if !strings.Contains(strings.ToLower(stderr.String()), "unknown command") {
-		t.Fatalf("legacy provision command error=%s", stderr.String())
+func TestRemovedCompatibilityCommandsAreUnavailable(t *testing.T) {
+	for _, command := range [][]string{{"provision", "tenant"}, {"init"}} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		runner := &Runner{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("")}
+		if code := runner.Run(command); code == 0 {
+			t.Fatalf("removed command %v unexpectedly succeeded: stdout=%s", command, stdout.String())
+		}
+		if !strings.Contains(strings.ToLower(stderr.String()), "unknown command") {
+			t.Fatalf("removed command %v error=%s", command, stderr.String())
+		}
 	}
 }

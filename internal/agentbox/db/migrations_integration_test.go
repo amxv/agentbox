@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -192,6 +194,32 @@ from schema_migrations
 	}
 	if secondLedgerSnapshot != firstLedgerSnapshot {
 		t.Fatalf("migration retry changed ledger\nfirst:  %s\nsecond: %s", firstLedgerSnapshot, secondLedgerSnapshot)
+	}
+}
+
+func TestMigrateThroughRejectsUnknownVersionBeforeOpeningPostgres(t *testing.T) {
+	repository := &Repository{}
+	err := repository.MigrateThrough(t.Context(), "9999")
+	if err == nil || !strings.Contains(err.Error(), "unknown migration version") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCutoverPostcheckSQLPassesFinalSchema(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if _, err := repository.BootstrapOwner(ctx, "postcheck-owner@example.com", "Postcheck Owner", "hash"); err != nil {
+		t.Fatal(err)
+	}
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve migration test source path")
+	}
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "../../../scripts/user-team-cutover-postcheck.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, string(contents)); err != nil {
+		t.Fatalf("execute cutover postcheck: %v", err)
 	}
 }
 

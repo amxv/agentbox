@@ -9,11 +9,11 @@ single-use browser token. The deployment secret never enters the browser.
 
 ## Backend configuration
 
-Set `APP_PUBLIC_URL` on the Go backend to the public dashboard origin. This is
+Set `AGENTBOX_APP_PUBLIC_URL` on the Go backend to the public dashboard origin. This is
 required when the backend and Next.js dashboard are separate Vercel projects:
 
 ```bash
-printf 'https://agentbox.example.com' | vercel env add APP_PUBLIC_URL production
+printf 'https://agentbox.example.com' | vercel env add AGENTBOX_APP_PUBLIC_URL production
 ```
 
 The backend uses that origin when it returns the browser setup link. For local

@@ -191,8 +191,6 @@ func (r *Runner) run(args []string) error {
 		return r.runDoctor(cmdArgs, *profileName)
 	case "mcp-url":
 		return r.runMCPURL(cmdArgs, *profileName)
-	case "init":
-		return r.runInit(cmdArgs, *profileName)
 	case "owner":
 		return r.runOwner(cmdArgs, *profileName)
 	case "connect":
@@ -237,7 +235,6 @@ Commands:
   login                   sign in through the browser and save a user-owned profile
   doctor                  check profile, API, MCP, and attachment access
   mcp-url                 print the full MCP URL for the selected profile
-  init                    save a local profile and optionally verify it
   owner                   issue one-time owner bootstrap or recovery links
   connect                 print ChatGPT MCP setup instructions
   raycast-key             create a Raycast API key and print preferences
@@ -278,9 +275,6 @@ Check profile, health, authenticated API access, signed download URLs, and MCP U
 		"mcp-url": `Usage: agentbox mcp-url [--json]
 
 Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized user and actor diagnostics when available.`,
-		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--api-key <existing-user-key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
-
-Use an existing user credential with keys:write scope to create local and ChatGPT credentials for that same user, save the local credential as the active profile, and optionally run doctor.`,
 		"owner": `Usage: agentbox owner setup-token [--base-url <url>] [--app-url <url>] [--admin-key <key>] [--expires 30m] [--json]
 
 Issue a short-lived, one-time browser link that creates the permanent deployment owner or recovers that same owner account. The deployment secret is sent only to the backend and is never embedded in the browser URL.`,
@@ -396,6 +390,9 @@ func (r *Runner) request(path string, method string, body io.Reader, headers map
 	}
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	if maintenanceKey := strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")); maintenanceKey != "" {
+		req.Header.Set("x-agentbox-maintenance-key", maintenanceKey)
 	}
 	res, err := r.HTTPClient.Do(req)
 	if err != nil {

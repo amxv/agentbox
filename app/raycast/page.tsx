@@ -20,7 +20,7 @@ const commands = [
 const installSteps = [
   {
     title: "Create a Raycast identity",
-    body: "Run this from an authenticated tenant profile. The printed actor key is scoped to the same tenant and appears as its own participant in thread attribution.",
+    body: "Run this from an authenticated user profile. The printed actor key belongs to that user and appears as its own participant in thread attribution.",
     code: "agentbox login --base-url https://youragentbox.vercel.app --profile-name prod\nagentbox raycast-key"
   },
   {

@@ -90,7 +90,7 @@ Agentbox includes a simple browser viewer for inspecting threads and attachments
 https://your-agentbox.vercel.app/threads
 ```
 
-Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no tenant selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. The unified inbox can filter accessible threads by Private, Shared with me, one of the signed-in user's teams, or active Public state; each card shows its current visibility and stable `User · Actor` attribution. Thread pages use the same attribution snapshots and render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
+Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no account-partition selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. The unified inbox can filter accessible threads by Private, Shared with me, one of the signed-in user's teams, or active Public state; each card shows its current visibility and stable `User · Actor` attribution. Thread pages use the same attribution snapshots and render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
 
 ## API
 
@@ -117,6 +117,7 @@ bun run typecheck
 bun run lint
 bun run build
 bun run build:cli
+bun run verify:cutover
 ```
 
 The active backend and CLI are implemented in Go:
@@ -153,7 +154,6 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
-R2_PUBLIC_BASE_URL
 ```
 
 Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. The permanent-owner browser can inspect deployment-wide credential metadata and force-revoke any credential from `/owner/users`, but secrets are never recoverable. Disabling a user revokes sessions, credentials, and pending CLI codes and removes every team membership in one transaction without deleting that user's threads, messages, assets, shares, or attribution snapshots. Enabling the account does not restore any of those access paths. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
@@ -170,10 +170,14 @@ After a non-owner user is disabled, the owner browser can separately purge that 
 
 The permanent-owner browser also has a separate read-only deployment content viewer at `/owner/content`. It can list, search, and inspect every thread, including another user's private threads, with optional user and team filters and non-purged attachment downloads. This bypass is intentionally isolated from the normal inbox and API authorization path: ordinary users, MCP/CLI/API credentials, owner API keys, and the deployment admin secret cannot use it, and the owner viewer exposes no posting, upload, or visibility controls.
 
-Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. Tenant provisioning and tenant metadata in CLI profiles are retired.
+Production upgrades to the user/team model must follow [`docs/user-team-sharing-production-cutover.md`](docs/user-team-sharing-production-cutover.md). It defines the verified backup gate, maintenance mode, the migration stop at `0016`, permanent-owner setup, irreversible migration `0017`, postcheck SQL, smoke matrix, and full-restore rollback procedure.
+
+Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. There is no account-partition selector or deployment-wide daily credential.
 
 ## Docs
 
-- [`docs/first-time-setup.md`](docs/first-time-setup.md)
-- [`docs/agentbox-spec.md`](docs/agentbox-spec.md)
-- [`docs/go-rollout.md`](docs/go-rollout.md)
+- [`public/setup-self-host.md`](public/setup-self-host.md)
+- [`docs/user-team-sharing-spec.md`](docs/user-team-sharing-spec.md)
+- [`docs/owner-setup.md`](docs/owner-setup.md)
+- [`docs/user-invitations.md`](docs/user-invitations.md)
+- [`docs/user-team-sharing-production-cutover.md`](docs/user-team-sharing-production-cutover.md)

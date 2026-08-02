@@ -4,6 +4,11 @@ Agentbox is one deployment-global service with users, user-owned credentials, an
 
 The Go backend is the required core service. Every other surface is a client of that same service.
 
+This guide is for a fresh deployment. An existing deployment moving to the
+user/team model must use [`docs/user-team-sharing-production-cutover.md`](../docs/user-team-sharing-production-cutover.md)
+so backup, owner backfill, migration `0017`, and rollback are performed in the
+reviewed order.
+
 Use `https://youragentbox.vercel.app` anywhere this guide needs your deployed Agentbox URL.
 
 ## Before you start
@@ -49,7 +54,7 @@ The deployment admin key is used only to issue one-time permanent-owner setup or
 vercel link --yes --project agentbox-go
 vercel env add DATABASE_URL production
 vercel env add AGENTBOX_ADMIN_KEY production
-vercel env add APP_PUBLIC_URL production
+vercel env add AGENTBOX_APP_PUBLIC_URL production
 vercel env add R2_ACCOUNT_ID production
 vercel env add R2_ACCESS_KEY_ID production
 vercel env add R2_SECRET_ACCESS_KEY production
@@ -64,7 +69,6 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
-R2_PUBLIC_BASE_URL
 ```
 
 ## 5. Deploy and migrate
@@ -83,7 +87,7 @@ agentbox owner setup-token \
   --expires 30m
 ```
 
-Set `APP_PUBLIC_URL` on the backend to the dashboard origin before issuing the
+Set `AGENTBOX_APP_PUBLIC_URL` on the backend to the dashboard origin before issuing the
 link. Open the printed URL once in a trusted browser to create the permanent
 owner. Running the command after the owner exists issues a recovery link for the
 same owner email; it does not create a replacement owner.
@@ -107,10 +111,9 @@ historical content or attribution.
 
 See `docs/user-invitations.md` for the transactional and authorization guarantees.
 
-Account login is deployment-global. Users sign in with email and password only;
-there is no tenant selector. Local CLI profiles likewise contain no tenant ID or
-slug. The former `agentbox provision tenant` and `/api/admin/tenants` paths are
-retired. See `docs/deployment-global-identity.md`.
+Account login is deployment-global. Users sign in with email and password only.
+Local CLI profiles contain only the service URL, stable user/actor metadata, and
+one user-owned credential. See `docs/deployment-global-identity.md`.
 
 ## 8. Deploy the human dashboard
 

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -37,7 +38,41 @@ func NewServer(cfg config.Config, svc *service.Service) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.MaintenanceMode && !maintenanceExemptPath(r.URL.Path) && !s.hasMaintenanceBypass(r) && !s.hasOwnerBrowserMaintenanceAccess(r) {
+		writeCodedError(w, http.StatusServiceUnavailable, "MAINTENANCE_MODE", "AgentBox is temporarily unavailable for the user/team cutover.")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func maintenanceExemptPath(path string) bool {
+	switch path {
+	case "/api/health", "/api/admin/owner/setup-token", "/api/auth/owner/setup":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) hasMaintenanceBypass(r *http.Request) bool {
+	expected := strings.TrimSpace(s.cfg.MaintenanceBypassKey)
+	provided := strings.TrimSpace(r.Header.Get("x-agentbox-maintenance-key"))
+	if expected == "" || provided == "" || len(expected) != len(provided) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
+}
+
+func (s *Server) hasOwnerBrowserMaintenanceAccess(r *http.Request) bool {
+	secret := s.sessionSecretFromRequest(r)
+	if secret == "" {
+		return false
+	}
+	authContext, err := s.service.AuthenticateSession(r.Context(), secret)
+	if err != nil || authContext == nil {
+		return false
+	}
+	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.IsOwner && strings.TrimSpace(authContext.SessionID) != ""
 }
 
 func (s *Server) routes() {
@@ -52,8 +87,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/me/teams", s.myTeams)
 	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
 	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
-	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
-	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
 	s.mux.HandleFunc("/api/admin/owner/setup-token", s.adminOwnerSetupToken)
 	s.mux.HandleFunc("/api/owner/invitations", s.ownerInvitations)
 	s.mux.HandleFunc("/api/owner/invitations/", s.ownerInvitation)
@@ -753,20 +786,6 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
-}
-
-func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	writeCodedError(w, http.StatusGone, "LEGACY_ADMIN_KEY_DISABLED", "Deployment-wide API key management is disabled. Sign in as a user and manage that user's credentials through /api/keys.")
-}
-
-func (s *Server) adminKey(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	writeCodedError(w, http.StatusGone, "LEGACY_ADMIN_KEY_DISABLED", "Deployment-wide API key management is disabled. Sign in as a user and manage that user's credentials through /api/keys.")
 }
 
 func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
