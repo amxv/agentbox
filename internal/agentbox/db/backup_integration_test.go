@@ -24,13 +24,17 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	statements := []string{
-		`insert into messages (id, tenant_id, thread_id, author, body) values ('msg_snapshot', 'ten_default', 'thr_snapshot', 'test', 'body')`,
-		`insert into assets (id, tenant_id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'ten_default', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`,
-		`insert into pending_uploads (id, tenant_id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'ten_default', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`,
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{sql: `insert into messages (id, tenant_id, thread_id, author, body) values ('msg_snapshot', 'ten_default', 'thr_snapshot', 'test', 'body')`},
+		{sql: `insert into assets (id, tenant_id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'ten_default', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`},
+		{sql: `insert into assets (id, tenant_id, message_id, storage_key, file_name, size_bytes, created_by, created_by_user_id, purged_at, purged_by_user_id) values ('ast_snapshot_purged', 'ten_default', 'msg_snapshot', 'agentbox/deleted.bin', 'deleted.bin', 9, 'test', $1, now(), $1)`, args: []any{owner.ID}},
+		{sql: `insert into pending_uploads (id, tenant_id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'ten_default', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`},
 	}
 	for _, statement := range statements {
-		if _, err := repository.pool.Exec(ctx, statement); err != nil {
+		if _, err := repository.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -43,7 +47,7 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 	if data.SnapshotID == "" {
 		t.Fatal("PostgreSQL snapshot ID is empty")
 	}
-	if data.Counts != (backup.TableCounts{Threads: 1, Messages: 1, Assets: 1, PendingUploads: 1}) {
+	if data.Counts != (backup.TableCounts{Threads: 1, Messages: 1, Assets: 2, PendingUploads: 1}) {
 		t.Fatalf("unexpected counts: %#v", data.Counts)
 	}
 	if data.Orphans.Total() != 0 {

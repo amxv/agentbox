@@ -90,6 +90,7 @@ export function OwnerUsersView() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const activeInvitations = useMemo(
@@ -211,6 +212,27 @@ export function OwnerUsersView() {
     }
   }
 
+  async function purgeAttachments(user: User) {
+    if (!window.confirm(`Permanently delete every attachment uploaded by ${user.display_name}? Thread and message tombstones will remain.`)) return;
+    setBusy(`purge:${user.id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const data = await responseJSON(await fetch(`/api/owner/users/${encodeURIComponent(user.id)}/purge-attachments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ limit: 50 })
+      }));
+      const purge = data.purge as { purged: number; failed: number; remaining: number; complete: boolean };
+      setNotice(`Purged ${purge.purged} attachment${purge.purged === 1 ? "" : "s"}. ${purge.failed} failed; ${purge.remaining} remain.${purge.complete ? " Purge complete." : " Run the purge again to continue or retry failures."}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function revokeCredential(credential: Credential) {
     setBusy(`credential:${credential.id}`);
     setError(null);
@@ -319,6 +341,7 @@ export function OwnerUsersView() {
         </section>
 
         {error && <div className={styles.error}><strong>Owner action failed.</strong><span>{error}</span></div>}
+        {notice && <div className={styles.notice}><strong>Attachment purge updated.</strong><span>{notice}</span></div>}
 
         <section className={styles.invitePanel}>
           <div><p className={styles.sectionLabel}>Invite a user</p><h2>Create a one-time signup link.</h2><p>Choose zero or more initial teams. The account, browser session, memberships, and invitation consumption commit together.</p></div>
@@ -378,7 +401,7 @@ export function OwnerUsersView() {
                 return <article className={styles.userRow} key={user.id}>
                   <div className={styles.avatar}>{user.display_name.slice(0, 1).toUpperCase()}</div>
                   <div className={styles.identity}><div><strong>{user.display_name}</strong>{user.is_owner && <span className={styles.ownerBadge}>Owner</span>}{user.disabled_at && <span className={styles.disabledBadge}>Disabled</span>}</div><span>{user.email}</span><div className={styles.tags}>{userTeams.length === 0 ? <em className={styles.noTeam}>No teams</em> : userTeams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}</div><code>{user.id}</code></div>
-                  <div className={styles.rowAction}>{user.is_owner ? <span>Protected</span> : <button type="button" disabled={busy === `user:${user.id}`} onClick={()=>setDisabled(user, !user.disabled_at)}>{busy === `user:${user.id}` ? "Saving…" : user.disabled_at ? "Enable" : "Disable"}</button>}</div>
+                  <div className={styles.rowAction}>{user.is_owner ? <span>Protected</span> : <><button type="button" disabled={busy === `user:${user.id}`} onClick={()=>setDisabled(user, !user.disabled_at)}>{busy === `user:${user.id}` ? "Saving…" : user.disabled_at ? "Enable" : "Disable"}</button>{user.disabled_at && <button className={styles.danger} type="button" disabled={busy === `purge:${user.id}`} onClick={()=>purgeAttachments(user)}>{busy === `purge:${user.id}` ? "Purging…" : "Purge attachments"}</button>}</>}</div>
                   <div className={styles.credentialList}>
                     <div className={styles.credentialHeading}><span>Credentials</span><small>{userCredentials.filter((credential) => !credential.revoked_at).length} active</small></div>
                     {userCredentials.length === 0 && <p>No credentials created.</p>}

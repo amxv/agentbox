@@ -250,7 +250,8 @@ type PublicAsset struct {
 	CreatedBy                string  `json:"created_by"`
 	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
 	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
-	DownloadPath             string  `json:"download_path"`
+	PurgedAt                 *string `json:"purged_at,omitempty"`
+	DownloadPath             string  `json:"download_path,omitempty"`
 }
 
 type PublicMessage struct {
@@ -279,7 +280,7 @@ type Asset struct {
 	ID                       string  `json:"id"`
 	TenantID                 string  `json:"-"`
 	MessageID                string  `json:"message_id"`
-	StorageKey               string  `json:"storage_key"`
+	StorageKey               string  `json:"-"`
 	FileName                 string  `json:"file_name"`
 	Filename                 string  `json:"filename"`
 	MimeType                 *string `json:"mime_type"`
@@ -292,6 +293,30 @@ type Asset struct {
 	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
 	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
 	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	PurgedAt                 *string `json:"purged_at,omitempty"`
+	PurgedByUserID           *string `json:"-"`
+	PurgeLastAttemptAt       *string `json:"-"`
+	PurgeError               *string `json:"-"`
+}
+
+type AssetPurgeCandidate struct {
+	AssetID    string
+	StorageKey string
+}
+
+type AttachmentPurgeFailure struct {
+	AssetID string `json:"asset_id"`
+	Error   string `json:"error"`
+}
+
+type AttachmentPurgeResult struct {
+	UserID    string                   `json:"user_id"`
+	Attempted int                      `json:"attempted"`
+	Purged    int                      `json:"purged"`
+	Failed    int                      `json:"failed"`
+	Remaining int                      `json:"remaining"`
+	Complete  bool                     `json:"complete"`
+	Failures  []AttachmentPurgeFailure `json:"failures"`
 }
 
 type Message struct {

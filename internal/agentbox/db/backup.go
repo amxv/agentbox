@@ -63,6 +63,7 @@ select
 	rows, err := transaction.Query(ctx, `
 select 'asset' as kind, id, storage_key, size_bytes::bigint
 from assets
+where purged_at is null
 union all
 select 'pending_upload' as kind, id, storage_key, size_bytes::bigint
 from pending_uploads

@@ -20,9 +20,11 @@ type FakeStore struct {
 	Uploads          []types.NewAsset
 	Buckets          map[string]map[string]backup.ObjectMetadata
 	CopyCalls        []backup.CopyObjectRequest
+	DeleteCalls      []string
 	HeadFailures     map[string]error
 	ListFailures     map[string]error
 	CopyFailures     map[string]error
+	DeleteFailures   map[string]error
 	mutex            sync.Mutex
 }
 
@@ -163,6 +165,24 @@ func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params Signe
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+func (f *FakeStore) DeleteAssetObject(_ context.Context, storageKey string) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return errors.New("asset storage key is required")
+	}
+	f.DeleteCalls = append(f.DeleteCalls, storageKey)
+	if err := f.DeleteFailures[storageKey]; err != nil {
+		return err
+	}
+	for bucket, objects := range f.Buckets {
+		delete(objects, storageKey)
+		f.Buckets[bucket] = objects
+	}
+	return nil
 }
 
 func (f *FakeStore) UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (types.NewAsset, error) {

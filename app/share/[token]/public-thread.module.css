@@ -204,6 +204,8 @@
 
 .attachment:hover { border-color: var(--line-strong); background: var(--soft); }
 .attachment:disabled { opacity: .55; cursor: wait; }
+.attachmentPurged { cursor: default; opacity: .72; }
+.attachmentPurged:hover { border-color: var(--line); background: transparent; }
 .fileIcon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 9px; background: var(--soft); font-size: 14px; }
 .attachment > span:nth-child(2) { display: grid; min-width: 0; gap: 3px; }
 .attachment strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }

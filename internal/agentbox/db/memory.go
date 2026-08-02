@@ -724,6 +724,70 @@ func (m *MemoryRepository) GetAsset(_ context.Context, userID string, assetID st
 	return nil, nil
 }
 
+func (m *MemoryRepository) ListAssetPurgeCandidates(_ context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error) {
+	if limit < 1 {
+		limit = 25
+	}
+	candidates := []types.AssetPurgeCandidate{}
+	for _, asset := range m.Assets {
+		if asset.CreatedByUserID == nil || *asset.CreatedByUserID != strings.TrimSpace(uploaderUserID) || asset.PurgedAt != nil {
+			continue
+		}
+		candidates = append(candidates, types.AssetPurgeCandidate{AssetID: asset.ID, StorageKey: asset.StorageKey})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].AssetID < candidates[j].AssetID
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates, nil
+}
+
+func (m *MemoryRepository) MarkAssetPurged(_ context.Context, assetID string, ownerUserID string) (bool, error) {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.Assets {
+		asset := &m.Assets[index]
+		if asset.ID != strings.TrimSpace(assetID) {
+			continue
+		}
+		if asset.PurgedAt == nil {
+			asset.PurgedAt = &now
+		}
+		if asset.PurgedByUserID == nil {
+			asset.PurgedByUserID = optionalString(ownerUserID)
+		}
+		asset.PurgeLastAttemptAt = &now
+		asset.PurgeError = nil
+		asset.PublicURL = nil
+		return true, nil
+	}
+	return false, nil
+}
+
+func (m *MemoryRepository) MarkAssetPurgeFailure(_ context.Context, assetID string, message string) error {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.Assets {
+		asset := &m.Assets[index]
+		if asset.ID == strings.TrimSpace(assetID) && asset.PurgedAt == nil {
+			asset.PurgeLastAttemptAt = &now
+			asset.PurgeError = optionalString(strings.TrimSpace(message))
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *MemoryRepository) CountUnpurgedAssetsByUploader(_ context.Context, uploaderUserID string) (int, error) {
+	count := 0
+	for _, asset := range m.Assets {
+		if asset.CreatedByUserID != nil && *asset.CreatedByUserID == strings.TrimSpace(uploaderUserID) && asset.PurgedAt == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (m *MemoryRepository) CreatePendingUpload(_ context.Context, userID string, upload types.PendingUpload) (types.PendingUpload, error) {
 	access, _ := m.ResolveThreadAccess(context.Background(), userID, upload.ThreadID)
 	if access == nil {
@@ -1617,6 +1681,16 @@ func (m *MemoryRepository) ListUsers(context.Context) ([]types.User, error) {
 		return users[i].ID < users[j].ID
 	})
 	return users, nil
+}
+
+func (m *MemoryRepository) GetUserByID(_ context.Context, userID string) (*types.User, error) {
+	for _, user := range m.Users {
+		if user.ID == strings.TrimSpace(userID) {
+			copyUser := user
+			return &copyUser, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *MemoryRepository) SetUserDisabled(_ context.Context, userID string, disabled bool) (types.User, error) {

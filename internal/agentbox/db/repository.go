@@ -714,7 +714,11 @@ select
   a.created_by_user_id,
   a.created_by_key_id,
   a.created_by_user_display_name,
-  a.created_by_actor_name
+  a.created_by_actor_name,
+  a.purged_at,
+  a.purged_by_user_id,
+  a.purge_last_attempt_at,
+  a.purge_error
 from thread_public_links link
 join messages m on m.thread_id = link.thread_id
 join assets a on a.message_id = m.id
@@ -782,7 +786,11 @@ select
   a.created_by_user_id,
   a.created_by_key_id,
   a.created_by_user_display_name,
-  a.created_by_actor_name
+  a.created_by_actor_name,
+  a.purged_at,
+  a.purged_by_user_id,
+  a.purge_last_attempt_at,
+  a.purge_error
 from assets a
 join messages m on m.id = a.message_id
 where m.thread_id = $1
@@ -1067,7 +1075,8 @@ order by created_at asc
 		assetRows, err := r.pool.Query(ctx, `
 select id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url,
        created_at, created_by, created_by_user_id, created_by_key_id,
-       created_by_user_display_name, created_by_actor_name
+       created_by_user_display_name, created_by_actor_name,
+       purged_at, purged_by_user_id, purge_last_attempt_at, purge_error
 from assets
 where message_id = any($1)
 order by created_at asc
@@ -1110,7 +1119,8 @@ func (r *Repository) GetAsset(ctx context.Context, userID string, assetID string
 	asset, err := scanAsset(r.pool.QueryRow(ctx, `
 select a.id, a.tenant_id, a.message_id, a.storage_key, a.file_name, a.mime_type, a.size_bytes, a.public_url,
        a.created_at, a.created_by, a.created_by_user_id, a.created_by_key_id,
-       a.created_by_user_display_name, a.created_by_actor_name
+       a.created_by_user_display_name, a.created_by_actor_name,
+       a.purged_at, a.purged_by_user_id, a.purge_last_attempt_at, a.purge_error
 from assets a
 join messages m on m.id = a.message_id
 join threads t on t.id = m.thread_id
@@ -1123,6 +1133,67 @@ where `+normalThreadAccessPredicate+` and a.id = $2
 		return nil, err
 	}
 	return &asset, nil
+}
+
+func (r *Repository) ListAssetPurgeCandidates(ctx context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error) {
+	if limit < 1 {
+		limit = 25
+	}
+	rows, err := r.pool.Query(ctx, `
+select id, storage_key
+from assets
+where created_by_user_id = $1 and purged_at is null
+order by created_at, id
+limit $2
+`, strings.TrimSpace(uploaderUserID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	candidates := []types.AssetPurgeCandidate{}
+	for rows.Next() {
+		var candidate types.AssetPurgeCandidate
+		if err := rows.Scan(&candidate.AssetID, &candidate.StorageKey); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, rows.Err()
+}
+
+func (r *Repository) MarkAssetPurged(ctx context.Context, assetID string, ownerUserID string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+update assets
+set purged_at = coalesce(purged_at, now()),
+    purged_by_user_id = coalesce(purged_by_user_id, $2),
+    purge_last_attempt_at = now(),
+    purge_error = null,
+    public_url = null
+where id = $1
+`, strings.TrimSpace(assetID), strings.TrimSpace(ownerUserID))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) MarkAssetPurgeFailure(ctx context.Context, assetID string, message string) error {
+	_, err := r.pool.Exec(ctx, `
+update assets
+set purge_last_attempt_at = now(), purge_error = $2
+where id = $1 and purged_at is null
+`, strings.TrimSpace(assetID), strings.TrimSpace(message))
+	return err
+}
+
+func (r *Repository) CountUnpurgedAssetsByUploader(ctx context.Context, uploaderUserID string) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx, `
+select count(*)::int
+from assets
+where created_by_user_id = $1 and purged_at is null
+`, strings.TrimSpace(uploaderUserID)).Scan(&count)
+	return count, err
 }
 
 func (r *Repository) CreatePendingUpload(ctx context.Context, userID string, upload types.PendingUpload) (types.PendingUpload, error) {
@@ -1242,7 +1313,8 @@ insert into assets (
 values ($1, $2, $3, $4, $5, $6, $7, null, $8, $9, $10, $11, $12)
 returning id, tenant_id, message_id, storage_key, file_name, mime_type, size_bytes, public_url,
           created_at, created_by, created_by_user_id, created_by_key_id,
-          created_by_user_display_name, created_by_actor_name
+          created_by_user_display_name, created_by_actor_name,
+          purged_at, purged_by_user_id, purge_last_attempt_at, purge_error
 `, assetID, tenantID, messageID, asset.StorageKey, asset.FileName, asset.MimeType, asset.SizeBytes, auth.ActorName, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)))
 		if err != nil {
 			return types.Message{}, err
@@ -2175,6 +2247,21 @@ order by is_owner desc, created_at asc, id asc
 	return users, nil
 }
 
+func (r *Repository) GetUserByID(ctx context.Context, userID string) (*types.User, error) {
+	user, err := scanUser(r.pool.QueryRow(ctx, `
+select id, tenant_id, email, display_name, password_hash, role, is_owner, disabled_at, created_at, updated_at
+from users
+where id = $1
+`, strings.TrimSpace(userID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (r *Repository) SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -2499,6 +2586,8 @@ func scanMessage(row threadScanner, assets []types.Asset) (types.Message, error)
 
 func scanAsset(row threadScanner) (types.Asset, error) {
 	var createdAt time.Time
+	var purgedAt *time.Time
+	var purgeLastAttemptAt *time.Time
 	var mimeType *string
 	var ignoredPublicURL *string
 	var asset types.Asset
@@ -2517,12 +2606,18 @@ func scanAsset(row threadScanner) (types.Asset, error) {
 		&asset.CreatedByKeyID,
 		&asset.CreatedByUserDisplayName,
 		&asset.CreatedByActorName,
+		&purgedAt,
+		&asset.PurgedByUserID,
+		&purgeLastAttemptAt,
+		&asset.PurgeError,
 	)
 	asset.MimeType = mimeType
 	asset.PublicURL = nil
 	asset.Filename = asset.FileName
 	asset.DownloadURL = nil
 	asset.CreatedAt = isoMillis(createdAt)
+	asset.PurgedAt = optionalISOTime(purgedAt)
+	asset.PurgeLastAttemptAt = optionalISOTime(purgeLastAttemptAt)
 	return asset, err
 }
 

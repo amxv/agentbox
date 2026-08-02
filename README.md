@@ -166,6 +166,8 @@ agentbox owner setup-token \
   --expires 30m
 ```
 
+After a non-owner user is disabled, the owner browser can separately purge that user's uploaded attachment objects from `/owner/users`. Purge runs in bounded, resumable batches using each asset's exact stored R2 key. Thread/message rows, filenames, and attribution remain as tombstones; authenticated and public readers display `Attachment deleted by deployment owner` and receive no download or preview URL. Attachments uploaded by other users are never selected merely because they appear in the disabled user's threads.
+
 Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. Tenant provisioning and tenant metadata in CLI profiles are retired.
 
 ## Docs

@@ -673,6 +673,139 @@ func TestOwnerCredentialAdministrationAndDisablementPreserveSharedContent(t *tes
 	}
 }
 
+func TestOwnerAttachmentPurgeIsUploaderScopedResumableAndTombstoned(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{DeleteFailures: map[string]error{}}
+	svc := New(repo, store)
+	owner := types.User{ID: "usr_purge_owner", TenantID: types.DefaultTenantID, Email: "purge-owner@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
+	target := types.User{ID: "usr_purge_target", TenantID: types.DefaultTenantID, Email: "purge-target@example.com", DisplayName: "Target", Role: "member"}
+	other := types.User{ID: "usr_purge_other", TenantID: types.DefaultTenantID, Email: "purge-other@example.com", DisplayName: "Other", Role: "member"}
+	repo.Users = append(repo.Users, owner, target, other)
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_purge_owner", ActorName: "Web dashboard", IsOwner: true}
+	targetAuth := types.AuthContext{UserID: target.ID, UserDisplayName: target.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_purge_target", ActorName: "Web dashboard"}
+	otherAuth := types.AuthContext{UserID: other.ID, UserDisplayName: other.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_purge_other", ActorName: "Web dashboard"}
+
+	team, err := repo.CreateTeam(context.Background(), "purge-team", "Purge Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.ID, target.ID, other.ID} {
+		if _, err := repo.AddTeamMember(context.Background(), team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetThread, err := svc.CreateThread(context.Background(), targetAuth, "Target-owned shared thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(context.Background(), target.ID, targetThread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	otherThread, err := svc.CreateThread(context.Background(), otherAuth, "Other-owned shared thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(context.Background(), other.ID, otherThread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	targetKey := "agentbox/purge/target-owned.txt"
+	crossThreadTargetKey := "agentbox/purge/target-in-other-thread.txt"
+	otherKey := "agentbox/purge/other-in-target-thread.txt"
+	targetMessage, err := repo.PostMessage(context.Background(), target.ID, targetThread.ID, targetAuth, "target upload", nil, []types.NewAsset{{StorageKey: targetKey, FileName: "target-owned.txt", SizeBytes: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherMessage, err := repo.PostMessage(context.Background(), other.ID, targetThread.ID, otherAuth, "other upload", nil, []types.NewAsset{{StorageKey: otherKey, FileName: "other-owned.txt", SizeBytes: 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossThreadMessage, err := repo.PostMessage(context.Background(), target.ID, otherThread.ID, targetAuth, "target upload elsewhere", nil, []types.NewAsset{{StorageKey: crossThreadTargetKey, FileName: "cross-thread.txt", SizeBytes: 30}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicToken := "agpub_purge_fixture"
+	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: targetThread.ID, Token: publicToken, TokenHash: hashSecret(publicToken), TokenPrefix: tokenPrefix(publicToken), CreatedAt: targetThread.CreatedAt, UpdatedAt: targetThread.UpdatedAt})
+
+	if _, err := svc.PurgeUserAttachments(context.Background(), ownerAuth, target.ID, 10); !hasCodedError(err, "USER_ACTIVE") {
+		t.Fatalf("active user purge error=%v", err)
+	}
+	if _, err := svc.PurgeUserAttachments(context.Background(), ownerAuth, owner.ID, 10); !hasCodedError(err, "OWNER_IMMUTABLE") {
+		t.Fatalf("owner purge error=%v", err)
+	}
+	if _, err := svc.PurgeUserAttachments(context.Background(), otherAuth, target.ID, 10); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("ordinary user purge error=%v", err)
+	}
+	if _, err := svc.SetUserDisabled(context.Background(), ownerAuth, target.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	store.DeleteFailures[crossThreadTargetKey] = errors.New("simulated R2 outage")
+	first, err := svc.PurgeUserAttachments(context.Background(), ownerAuth, target.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Attempted != 2 || first.Purged != 1 || first.Failed != 1 || first.Remaining != 1 || first.Complete || len(first.Failures) != 1 {
+		t.Fatalf("first purge=%#v", first)
+	}
+	if !reflect.DeepEqual(store.DeleteCalls, []string{targetKey, crossThreadTargetKey}) && !reflect.DeepEqual(store.DeleteCalls, []string{crossThreadTargetKey, targetKey}) {
+		t.Fatalf("delete calls=%v", store.DeleteCalls)
+	}
+	for _, call := range store.DeleteCalls {
+		if call == otherKey {
+			t.Fatalf("purge deleted another user's object: %v", store.DeleteCalls)
+		}
+	}
+
+	publicView, err := svc.GetPublicThread(context.Background(), publicToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var purgedPublic *types.PublicAsset
+	var retainedPublic *types.PublicAsset
+	for messageIndex := range publicView.Messages {
+		for assetIndex := range publicView.Messages[messageIndex].Assets {
+			asset := &publicView.Messages[messageIndex].Assets[assetIndex]
+			switch asset.ID {
+			case targetMessage.Assets[0].ID:
+				purgedPublic = asset
+			case otherMessage.Assets[0].ID:
+				retainedPublic = asset
+			}
+		}
+	}
+	if purgedPublic == nil || purgedPublic.PurgedAt == nil || purgedPublic.DownloadPath != "" {
+		t.Fatalf("public purge tombstone=%#v", purgedPublic)
+	}
+	if retainedPublic == nil || retainedPublic.PurgedAt != nil || retainedPublic.DownloadPath == "" {
+		t.Fatalf("retained public asset=%#v", retainedPublic)
+	}
+	if _, err := svc.PublicAssetDownloadURL(context.Background(), publicToken, targetMessage.Assets[0].ID); !hasCodedError(err, "ATTACHMENT_PURGED") {
+		t.Fatalf("purged public asset signed: %v", err)
+	}
+	if _, err := svc.SignedAssetDownloadURL(context.Background(), ownerAuth, targetMessage.Assets[0].ID, 300); !hasCodedError(err, "ATTACHMENT_PURGED") {
+		t.Fatalf("purged authenticated asset signed: %v", err)
+	}
+	if _, err := svc.PublicAssetDownloadURL(context.Background(), publicToken, otherMessage.Assets[0].ID); err != nil {
+		t.Fatalf("retained public asset did not sign: %v", err)
+	}
+
+	delete(store.DeleteFailures, crossThreadTargetKey)
+	second, err := svc.PurgeUserAttachments(context.Background(), ownerAuth, target.ID, 1)
+	if err != nil || second.Purged != 1 || second.Failed != 0 || second.Remaining != 0 || !second.Complete {
+		t.Fatalf("second purge=%#v err=%v", second, err)
+	}
+	if crossThreadMessage.Assets[0].CreatedByUserID == nil || *crossThreadMessage.Assets[0].CreatedByUserID != target.ID {
+		t.Fatalf("cross-thread uploader attribution=%#v", crossThreadMessage.Assets[0])
+	}
+	deleteCount := len(store.DeleteCalls)
+	completed, err := svc.PurgeUserAttachments(context.Background(), ownerAuth, target.ID, 10)
+	if err != nil || !completed.Complete || completed.Attempted != 0 || completed.Purged != 0 || completed.Remaining != 0 {
+		t.Fatalf("completed retry=%#v err=%v", completed, err)
+	}
+	if len(store.DeleteCalls) != deleteCount {
+		t.Fatalf("completed retry issued more deletes: before=%d after=%v", deleteCount, store.DeleteCalls)
+	}
+}
+
 func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})

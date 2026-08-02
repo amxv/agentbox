@@ -1399,6 +1399,13 @@ pre,
   border-bottom: 1px solid var(--ink);
 }
 
+.asset-tombstone {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

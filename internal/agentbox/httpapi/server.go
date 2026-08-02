@@ -332,6 +332,23 @@ func (s *Server) ownerUserAction(w http.ResponseWriter, r *http.Request) {
 		disabled = true
 	case "enable":
 		disabled = false
+	case "purge-attachments":
+		var input struct {
+			Limit int `json:"limit"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			if err := parseJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		result, err := s.service.PurgeUserAttachments(r.Context(), *authContext, parts[0], input.Limit)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"purge": result})
+		return
 	default:
 		http.NotFound(w, r)
 		return
@@ -1424,6 +1441,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 			status = http.StatusForbidden
 		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS":
 			status = http.StatusConflict
+		case "ATTACHMENT_PURGED":
+			status = http.StatusGone
 		case "TEAM_SLUG_CONFLICT":
 			status = http.StatusConflict
 		case "RATE_LIMITED":
@@ -1528,8 +1547,8 @@ type viewerMessage struct {
 
 type viewerAsset struct {
 	types.Asset
-	DownloadURL string  `json:"download_url"`
-	PreviewURL  *string `json:"preview_url"`
+	DownloadURL *string `json:"download_url,omitempty"`
+	PreviewURL  *string `json:"preview_url,omitempty"`
 }
 
 func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext types.AuthContext, thread *types.ThreadWithMessages) (viewerThread, error) {
@@ -1537,6 +1556,10 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 	for _, message := range thread.Messages {
 		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
 		for _, asset := range message.Assets {
+			if asset.PurgedAt != nil {
+				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+				continue
+			}
 			expires := 300
 			isImage := asset.MimeType != nil && strings.HasPrefix(*asset.MimeType, "image/")
 			if isImage {
@@ -1552,7 +1575,7 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 			}
 			vm.Assets = append(vm.Assets, viewerAsset{
 				Asset:       asset,
-				DownloadURL: downloadURL,
+				DownloadURL: &downloadURL,
 				PreviewURL:  previewURL,
 			})
 		}

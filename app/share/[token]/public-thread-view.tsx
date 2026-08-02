@@ -17,7 +17,8 @@ type PublicAsset = {
   created_by: string;
   created_by_user_display_name?: string;
   created_by_actor_name?: string;
-  download_path: string;
+  purged_at?: string;
+  download_path?: string;
 };
 
 type PublicMessage = {
@@ -92,6 +93,7 @@ export function PublicThreadView({ token }: { token: string }) {
   }, [load]);
 
   async function download(asset: PublicAsset) {
+    if (!asset.download_path || asset.purged_at) return;
     setDownloadBusy(asset.id);
     setError(null);
     try {
@@ -145,7 +147,11 @@ export function PublicThreadView({ token }: { token: string }) {
                     {message.assets.length > 0 && (
                       <div className={styles.attachments}>
                         {message.assets.map((asset) => (
-                          <button type="button" className={styles.attachment} key={asset.id} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
+                          asset.purged_at ? <div className={`${styles.attachment} ${styles.attachmentPurged}`} key={asset.id}>
+                            <span className={styles.fileIcon}>×</span>
+                            <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                            <em>Attachment deleted by deployment owner</em>
+                          </div> : <button type="button" className={styles.attachment} key={asset.id} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
                             <span className={styles.fileIcon}>↧</span>
                             <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
                             <em>{downloadBusy === asset.id ? "Signing…" : "Download"}</em>

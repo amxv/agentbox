@@ -57,6 +57,7 @@ type AssetStore interface {
 	UploadAssetBytes(ctx context.Context, params UploadBytesParams) (agenttypes.NewAsset, error)
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
+	DeleteAssetObject(ctx context.Context, storageKey string) error
 	UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
 
@@ -294,6 +295,21 @@ func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params Signe
 		return "", err
 	}
 	return out.URL, nil
+}
+
+func (s *R2Store) DeleteAssetObject(ctx context.Context, storageKey string) error {
+	if s.cfg.R2Bucket == "" {
+		return errors.New("R2_BUCKET is required for asset deletion.")
+	}
+	storageKey = strings.TrimSpace(storageKey)
+	if storageKey == "" {
+		return errors.New("asset storage key is required")
+	}
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.cfg.R2Bucket),
+		Key:    aws.String(storageKey),
+	})
+	return err
 }
 
 func (s *R2Store) UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error) {

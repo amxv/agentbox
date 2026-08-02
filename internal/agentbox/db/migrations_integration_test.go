@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1085,6 +1087,177 @@ func TestManageThreadVisibilityIsAtomicMembershipBoundAndSelfRevoking(t *testing
 	}
 	if publicThread, err := repository.GetThreadByPublicTokenHash(ctx, hashSecret(firstToken)); err != nil || publicThread != nil {
 		t.Fatalf("unpublished token remained active thread=%#v err=%v", publicThread, err)
+	}
+}
+
+func TestAttachmentPurgeCandidatesAndTombstonesAreUploaderScopedAndIndexed(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "purge-owner@example.com", "Purge Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "purge-target@example.com", "Purge Target", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "purge-other@example.com", "Purge Other", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := repository.CreateTeam(ctx, "purge-fixture", "Purge Fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.ID, target.ID, other.ID} {
+		if _, err := repository.AddTeamMember(ctx, team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetAuth := types.AuthContext{UserID: target.ID, UserDisplayName: target.DisplayName, ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
+	otherAuth := types.AuthContext{UserID: other.ID, UserDisplayName: other.DisplayName, ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
+	targetThread, err := repository.CreateThread(ctx, target.ID, "Target purge fixture", targetAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SetThreadVisibility(ctx, target.ID, targetThread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	otherThread, err := repository.CreateThread(ctx, other.ID, "Other purge fixture", otherAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SetThreadVisibility(ctx, other.ID, otherThread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	targetOwnedKey := "agentbox/purge-db/target-owned.bin"
+	targetCrossThreadKey := "agentbox/purge-db/target-cross-thread.bin"
+	otherOwnedKey := "agentbox/purge-db/other-owned.bin"
+	targetOwnedMessage, err := repository.PostMessage(ctx, target.ID, targetThread.ID, targetAuth, "target owned", nil, []types.NewAsset{{StorageKey: targetOwnedKey, FileName: "target-owned.bin", SizeBytes: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetCrossThreadMessage, err := repository.PostMessage(ctx, target.ID, otherThread.ID, targetAuth, "target cross thread", nil, []types.NewAsset{{StorageKey: targetCrossThreadKey, FileName: "target-cross-thread.bin", SizeBytes: 20}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwnedMessage, err := repository.PostMessage(ctx, other.ID, targetThread.ID, otherAuth, "other owned", nil, []types.NewAsset{{StorageKey: otherOwnedKey, FileName: "other-owned.bin", SizeBytes: 30}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := repository.ListAssetPurgeCandidates(ctx, target.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("target purge candidates=%#v", candidates)
+	}
+	candidateKeys := []string{candidates[0].StorageKey, candidates[1].StorageKey}
+	sort.Strings(candidateKeys)
+	if !reflect.DeepEqual(candidateKeys, []string{targetCrossThreadKey, targetOwnedKey}) {
+		t.Fatalf("candidate keys=%v", candidateKeys)
+	}
+	otherCandidates, err := repository.ListAssetPurgeCandidates(ctx, other.ID, 50)
+	if err != nil || len(otherCandidates) != 1 || otherCandidates[0].StorageKey != otherOwnedKey {
+		t.Fatalf("other purge candidates=%#v err=%v", otherCandidates, err)
+	}
+
+	targetOwnedAssetID := targetOwnedMessage.Assets[0].ID
+	targetCrossThreadAssetID := targetCrossThreadMessage.Assets[0].ID
+	otherOwnedAssetID := otherOwnedMessage.Assets[0].ID
+	if err := repository.MarkAssetPurgeFailure(ctx, targetCrossThreadAssetID, "simulated exact-key delete failure"); err != nil {
+		t.Fatal(err)
+	}
+	failedAsset, err := repository.GetAsset(ctx, owner.ID, targetCrossThreadAssetID)
+	if err != nil || failedAsset == nil || failedAsset.PurgedAt != nil || failedAsset.PurgeLastAttemptAt == nil || failedAsset.PurgeError == nil || *failedAsset.PurgeError != "simulated exact-key delete failure" {
+		t.Fatalf("failed purge state=%#v err=%v", failedAsset, err)
+	}
+	marked, err := repository.MarkAssetPurged(ctx, targetOwnedAssetID, owner.ID)
+	if err != nil || !marked {
+		t.Fatalf("mark first asset purged=%t err=%v", marked, err)
+	}
+	marked, err = repository.MarkAssetPurged(ctx, targetOwnedAssetID, owner.ID)
+	if err != nil || !marked {
+		t.Fatalf("idempotent tombstone=%t err=%v", marked, err)
+	}
+	remaining, err := repository.CountUnpurgedAssetsByUploader(ctx, target.ID)
+	if err != nil || remaining != 1 {
+		t.Fatalf("remaining target assets=%d err=%v", remaining, err)
+	}
+	if marked, err := repository.MarkAssetPurged(ctx, targetCrossThreadAssetID, owner.ID); err != nil || !marked {
+		t.Fatalf("mark retry asset purged=%t err=%v", marked, err)
+	}
+	remaining, err = repository.CountUnpurgedAssetsByUploader(ctx, target.ID)
+	if err != nil || remaining != 0 {
+		t.Fatalf("completed target purge remaining=%d err=%v", remaining, err)
+	}
+	completed, err := repository.ListAssetPurgeCandidates(ctx, target.ID, 50)
+	if err != nil || len(completed) != 0 {
+		t.Fatalf("completed purge candidates=%#v err=%v", completed, err)
+	}
+
+	purgedOwned, err := repository.GetAsset(ctx, owner.ID, targetOwnedAssetID)
+	if err != nil || purgedOwned == nil || purgedOwned.PurgedAt == nil || purgedOwned.PurgedByUserID == nil || *purgedOwned.PurgedByUserID != owner.ID || purgedOwned.PurgeError != nil || purgedOwned.StorageKey != targetOwnedKey || purgedOwned.FileName != "target-owned.bin" || purgedOwned.CreatedByUserID == nil || *purgedOwned.CreatedByUserID != target.ID {
+		t.Fatalf("purged owned asset=%#v err=%v", purgedOwned, err)
+	}
+	purgedCrossThread, err := repository.GetAsset(ctx, owner.ID, targetCrossThreadAssetID)
+	if err != nil || purgedCrossThread == nil || purgedCrossThread.PurgedAt == nil || purgedCrossThread.PurgeError != nil || purgedCrossThread.CreatedByUserID == nil || *purgedCrossThread.CreatedByUserID != target.ID {
+		t.Fatalf("purged cross-thread asset=%#v err=%v", purgedCrossThread, err)
+	}
+	retainedOther, err := repository.GetAsset(ctx, owner.ID, otherOwnedAssetID)
+	if err != nil || retainedOther == nil || retainedOther.PurgedAt != nil || retainedOther.StorageKey != otherOwnedKey || retainedOther.CreatedByUserID == nil || *retainedOther.CreatedByUserID != other.ID {
+		t.Fatalf("retained other asset=%#v err=%v", retainedOther, err)
+	}
+
+	var indexPredicate string
+	if err := repository.pool.QueryRow(ctx, `
+select pg_get_expr(indpred, indrelid)
+from pg_index
+where indexrelid = 'assets_uploader_unpurged_idx'::regclass
+`).Scan(&indexPredicate); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexPredicate, "created_by_user_id") || !strings.Contains(indexPredicate, "purged_at IS NULL") {
+		t.Fatalf("unexpected purge index predicate=%q", indexPredicate)
+	}
+	planTx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planTx.Rollback(ctx)
+	if _, err := planTx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	planRows, err := planTx.Query(ctx, `explain (costs off)
+select id, storage_key
+from assets
+where created_by_user_id = $1 and purged_at is null
+order by created_at, id
+limit $2
+`, other.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := strings.Builder{}
+	for planRows.Next() {
+		var line string
+		if err := planRows.Scan(&line); err != nil {
+			planRows.Close()
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	planRows.Close()
+	if err := planRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "assets_uploader_unpurged_idx") {
+		t.Fatalf("purge candidate plan did not use uploader index:\n%s", plan.String())
 	}
 }
 

@@ -41,6 +41,10 @@ type Repository interface {
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
 	GetAsset(ctx context.Context, userID string, assetID string) (*types.Asset, error)
+	ListAssetPurgeCandidates(ctx context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error)
+	MarkAssetPurged(ctx context.Context, assetID string, ownerUserID string) (bool, error)
+	MarkAssetPurgeFailure(ctx context.Context, assetID string, message string) error
+	CountUnpurgedAssetsByUploader(ctx context.Context, uploaderUserID string) (int, error)
 	CreatePendingUpload(ctx context.Context, userID string, upload types.PendingUpload) (types.PendingUpload, error)
 	GetPendingUploads(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error)
 	MarkPendingUploadsConsumed(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) error
@@ -74,6 +78,7 @@ type Repository interface {
 	FindSignupInvitation(ctx context.Context, tokenHash string) (*types.SignupInvitation, error)
 	RegisterWithSignupInvitation(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string, sessionSecretHash string, sessionExpiresAt time.Time) (types.User, types.UserSession, types.SignupInvitation, error)
 	ListUsers(ctx context.Context) ([]types.User, error)
+	GetUserByID(ctx context.Context, userID string) (*types.User, error)
 	SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error)
 	CreateTeam(ctx context.Context, slug string, name string) (types.Team, error)
 	RenameTeam(ctx context.Context, teamID string, name string) (types.Team, error)
@@ -413,6 +418,9 @@ func (s *Service) PublicAssetDownloadURL(ctx context.Context, token string, asse
 	if asset == nil {
 		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
 	}
+	if asset.PurgedAt != nil {
+		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
+	}
 	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
 		StorageKey:       asset.StorageKey,
 		FileName:         asset.FileName,
@@ -651,6 +659,9 @@ func (s *Service) SignedAssetDownloadURL(ctx context.Context, auth types.AuthCon
 	}
 	if asset == nil {
 		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset not found."}
+	}
+	if asset.PurgedAt != nil {
+		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
 	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
 		StorageKey:       asset.StorageKey,
@@ -1058,6 +1069,77 @@ func (s *Service) SetUserDisabled(ctx context.Context, authContext types.AuthCon
 		return types.User{}, err
 	}
 	return user, nil
+}
+
+func (s *Service) PurgeUserAttachments(ctx context.Context, authContext types.AuthContext, userID string, limit int) (types.AttachmentPurgeResult, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.AttachmentPurgeResult{}, err
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "user_id is required."}
+	}
+	if limit == 0 {
+		limit = 25
+	}
+	if limit < 1 || limit > 100 {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "limit must be between 1 and 100."}
+	}
+	target, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return types.AttachmentPurgeResult{}, err
+	}
+	if target == nil {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: types.ErrUserNotFound}
+	}
+	if target.IsOwner {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "OWNER_IMMUTABLE", Message: "The permanent deployment owner's attachments cannot be purged."}
+	}
+	if target.DisabledAt == nil {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "USER_ACTIVE", Message: "Attachments can be purged only after the user is disabled."}
+	}
+
+	candidates, err := s.repo.ListAssetPurgeCandidates(ctx, userID, limit)
+	if err != nil {
+		return types.AttachmentPurgeResult{}, err
+	}
+	result := types.AttachmentPurgeResult{UserID: userID, Failures: []types.AttachmentPurgeFailure{}}
+	for _, candidate := range candidates {
+		result.Attempted++
+		if err := s.assets.DeleteAssetObject(ctx, candidate.StorageKey); err != nil {
+			message := boundedPurgeError(err)
+			_ = s.repo.MarkAssetPurgeFailure(ctx, candidate.AssetID, message)
+			result.Failed++
+			result.Failures = append(result.Failures, types.AttachmentPurgeFailure{AssetID: candidate.AssetID, Error: message})
+			continue
+		}
+		marked, err := s.repo.MarkAssetPurged(ctx, candidate.AssetID, authContext.UserID)
+		if err != nil || !marked {
+			message := "failed to record attachment tombstone"
+			if err != nil {
+				message = boundedPurgeError(err)
+			}
+			_ = s.repo.MarkAssetPurgeFailure(ctx, candidate.AssetID, message)
+			result.Failed++
+			result.Failures = append(result.Failures, types.AttachmentPurgeFailure{AssetID: candidate.AssetID, Error: message})
+			continue
+		}
+		result.Purged++
+	}
+	result.Remaining, err = s.repo.CountUnpurgedAssetsByUploader(ctx, userID)
+	if err != nil {
+		return types.AttachmentPurgeResult{}, err
+	}
+	result.Complete = result.Remaining == 0
+	return result, nil
+}
+
+func boundedPurgeError(err error) string {
+	message := err.Error()
+	if len(message) > 500 {
+		return message[:500]
+	}
+	return message
 }
 
 func (s *Service) CreateTeam(ctx context.Context, authContext types.AuthContext, slug string, name string) (types.Team, error) {
@@ -1470,7 +1552,7 @@ func sanitizePublicThread(token string, thread types.ThreadWithMessages) types.P
 			Assets:                   make([]types.PublicAsset, 0, len(message.Assets)),
 		}
 		for _, asset := range message.Assets {
-			publicMessage.Assets = append(publicMessage.Assets, types.PublicAsset{
+			publicAsset := types.PublicAsset{
 				ID:                       asset.ID,
 				FileName:                 asset.FileName,
 				MimeType:                 asset.MimeType,
@@ -1479,8 +1561,12 @@ func sanitizePublicThread(token string, thread types.ThreadWithMessages) types.P
 				CreatedBy:                asset.CreatedBy,
 				CreatedByUserDisplayName: asset.CreatedByUserDisplayName,
 				CreatedByActorName:       asset.CreatedByActorName,
-				DownloadPath:             "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID) + "/download",
-			})
+				PurgedAt:                 asset.PurgedAt,
+			}
+			if asset.PurgedAt == nil {
+				publicAsset.DownloadPath = "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID) + "/download"
+			}
+			publicMessage.Assets = append(publicMessage.Assets, publicAsset)
 		}
 		view.Messages = append(view.Messages, publicMessage)
 	}

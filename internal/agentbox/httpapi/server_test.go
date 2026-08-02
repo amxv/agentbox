@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -762,6 +763,123 @@ func TestOwnerSetupAndRecoveryRequireDeploymentSecretAndRejectReplay(t *testing.
 	recovered := complete(recoveryToken, "OWNER@example.com", "Recovered Owner", "recovered-password")
 	if recovered.Code != http.StatusOK || !strings.Contains(recovered.Body.String(), "Recovered Owner") {
 		t.Fatalf("recovery status=%d body=%s", recovered.Code, recovered.Body.String())
+	}
+}
+
+func TestOwnerAttachmentPurgeHTTPIsBrowserOnlyAndRendersTombstones(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{DeleteFailures: map[string]error{}}
+	owner := types.User{ID: "usr_http_purge_owner", TenantID: types.DefaultTenantID, Email: "http-purge-owner@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
+	target := types.User{ID: "usr_http_purge_target", TenantID: types.DefaultTenantID, Email: "http-purge-target@example.com", DisplayName: "Target", Role: "member"}
+	other := types.User{ID: "usr_http_purge_other", TenantID: types.DefaultTenantID, Email: "http-purge-other@example.com", DisplayName: "Other", Role: "member"}
+	repo.Users = append(repo.Users, owner, target, other)
+	ownerSecret := "owner-purge-session"
+	otherSecret := "other-purge-session"
+	for _, session := range []types.UserSession{
+		{ID: "sess_http_purge_owner", UserID: owner.ID, SecretHash: dbHashForTest(ownerSecret)},
+		{ID: "sess_http_purge_other", UserID: other.ID, SecretHash: dbHashForTest(otherSecret)},
+	} {
+		if _, err := repo.CreateUserSession(t.Context(), session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	team, err := repo.CreateTeam(t.Context(), "http-purge-team", "HTTP Purge Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.ID, target.ID, other.ID} {
+		if _, err := repo.AddTeamMember(t.Context(), team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetAuth := types.AuthContext{UserID: target.ID, UserDisplayName: target.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_target", ActorName: "Web dashboard"}
+	thread, err := repo.CreateThread(t.Context(), target.ID, "HTTP purge thread", targetAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(t.Context(), target.ID, thread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	storageKey := "agentbox/http-purge/exact.bin"
+	message, err := repo.PostMessage(t.Context(), target.ID, thread.ID, targetAuth, "attachment", nil, []types.NewAsset{{StorageKey: storageKey, FileName: "exact.bin", SizeBytes: 42}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetID := message.Assets[0].ID
+	publicToken := "agpub_http_purge"
+	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: thread.ID, Token: publicToken, TokenHash: dbHashForTest(publicToken), TokenPrefix: "agpub_http_p", CreatedAt: thread.CreatedAt, UpdatedAt: thread.UpdatedAt})
+	ownerKeySecret := "owner-purge-api-key"
+	if _, err := repo.CreateAPIKey(t.Context(), owner.ID, "owner-purge-key", "custom", dbHashForTest(ownerKeySecret), "owner-purge", []string{"threads:read"}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, service.New(repo, store))
+	ownerCookie := &http.Cookie{Name: config.DefaultSessionCookieName, Value: ownerSecret}
+	otherCookie := &http.Cookie{Name: config.DefaultSessionCookieName, Value: otherSecret}
+
+	requestPurge := func(cookie *http.Cookie, bearer string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/api/owner/users/"+target.ID+"/purge-attachments", strings.NewReader(`{"limit":10}`))
+		request.Header.Set("content-type", "application/json")
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		if bearer != "" {
+			request.Header.Set("authorization", "Bearer "+bearer)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	active := requestPurge(ownerCookie, "")
+	if active.Code != http.StatusBadRequest || !strings.Contains(active.Body.String(), "USER_ACTIVE") {
+		t.Fatalf("active purge status=%d body=%s", active.Code, active.Body.String())
+	}
+	ordinary := requestPurge(otherCookie, "")
+	if ordinary.Code != http.StatusForbidden || !strings.Contains(ordinary.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("ordinary purge status=%d body=%s", ordinary.Code, ordinary.Body.String())
+	}
+	ownerKey := requestPurge(nil, ownerKeySecret)
+	if ownerKey.Code != http.StatusForbidden || !strings.Contains(ownerKey.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner key purge status=%d body=%s", ownerKey.Code, ownerKey.Body.String())
+	}
+	if _, err := repo.SetUserDisabled(t.Context(), target.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	purged := requestPurge(ownerCookie, "")
+	if purged.Code != http.StatusOK || !strings.Contains(purged.Body.String(), `"purged":1`) || !strings.Contains(purged.Body.String(), `"complete":true`) {
+		t.Fatalf("purge status=%d body=%s", purged.Code, purged.Body.String())
+	}
+	if !reflect.DeepEqual(store.DeleteCalls, []string{storageKey}) {
+		t.Fatalf("delete calls=%v", store.DeleteCalls)
+	}
+	repeated := requestPurge(ownerCookie, "")
+	if repeated.Code != http.StatusOK || !strings.Contains(repeated.Body.String(), `"attempted":0`) || len(store.DeleteCalls) != 1 {
+		t.Fatalf("repeated purge status=%d body=%s calls=%v", repeated.Code, repeated.Body.String(), store.DeleteCalls)
+	}
+
+	authenticatedThreadRequest := httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID, nil)
+	authenticatedThreadRequest.AddCookie(ownerCookie)
+	authenticatedThread := httptest.NewRecorder()
+	server.ServeHTTP(authenticatedThread, authenticatedThreadRequest)
+	if authenticatedThread.Code != http.StatusOK || !strings.Contains(authenticatedThread.Body.String(), "exact.bin") || !strings.Contains(authenticatedThread.Body.String(), `"purged_at":`) || strings.Contains(authenticatedThread.Body.String(), "download_url") || strings.Contains(authenticatedThread.Body.String(), "preview_url") || strings.Contains(authenticatedThread.Body.String(), "storage_key") {
+		t.Fatalf("authenticated tombstone status=%d body=%s", authenticatedThread.Code, authenticatedThread.Body.String())
+	}
+	authenticatedDownloadRequest := httptest.NewRequest(http.MethodGet, "/api/assets/"+assetID+"/download", nil)
+	authenticatedDownloadRequest.AddCookie(ownerCookie)
+	authenticatedDownload := httptest.NewRecorder()
+	server.ServeHTTP(authenticatedDownload, authenticatedDownloadRequest)
+	if authenticatedDownload.Code != http.StatusGone || !strings.Contains(authenticatedDownload.Body.String(), "ATTACHMENT_PURGED") {
+		t.Fatalf("authenticated purged download status=%d body=%s", authenticatedDownload.Code, authenticatedDownload.Body.String())
+	}
+	publicThread := httptest.NewRecorder()
+	server.ServeHTTP(publicThread, httptest.NewRequest(http.MethodGet, "/api/public/threads/"+publicToken, nil))
+	if publicThread.Code != http.StatusOK || !strings.Contains(publicThread.Body.String(), "exact.bin") || !strings.Contains(publicThread.Body.String(), `"purged_at":`) || strings.Contains(publicThread.Body.String(), "download_path") {
+		t.Fatalf("public tombstone status=%d body=%s", publicThread.Code, publicThread.Body.String())
+	}
+	publicDownload := httptest.NewRecorder()
+	server.ServeHTTP(publicDownload, httptest.NewRequest(http.MethodGet, "/api/public/threads/"+publicToken+"/assets/"+assetID+"/download", nil))
+	if publicDownload.Code != http.StatusGone || !strings.Contains(publicDownload.Body.String(), "ATTACHMENT_PURGED") {
+		t.Fatalf("public purged download status=%d body=%s", publicDownload.Code, publicDownload.Body.String())
 	}
 }
 
