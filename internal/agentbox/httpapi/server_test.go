@@ -217,7 +217,7 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 }
 
-func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
+func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) {
 	imageType := "image/png"
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
@@ -246,7 +246,7 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	server := NewServer(config.Config{AdminKey: "adm", Environment: "production", SessionCookieName: config.DefaultSessionCookieName}, svc)
 
 	unauthorized := httptest.NewRecorder()
-	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/viewer/threads", nil))
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.ID+"/view", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status = %d", unauthorized.Code)
 	}
@@ -258,7 +258,7 @@ func TestViewerRoutesRequireAdminAndAddPreviewURLs(t *testing.T) {
 	}
 	sessionCookie := login.Result().Cookies()[0]
 
-	req := httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.ID+"/view", nil)
 	req.AddCookie(sessionCookie)
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, req)
@@ -857,7 +857,7 @@ func TestOwnerAttachmentPurgeHTTPIsBrowserOnlyAndRendersTombstones(t *testing.T)
 		t.Fatalf("repeated purge status=%d body=%s calls=%v", repeated.Code, repeated.Body.String(), store.DeleteCalls)
 	}
 
-	authenticatedThreadRequest := httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID, nil)
+	authenticatedThreadRequest := httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.ID+"/view", nil)
 	authenticatedThreadRequest.AddCookie(ownerCookie)
 	authenticatedThread := httptest.NewRecorder()
 	server.ServeHTTP(authenticatedThread, authenticatedThreadRequest)
@@ -880,6 +880,115 @@ func TestOwnerAttachmentPurgeHTTPIsBrowserOnlyAndRendersTombstones(t *testing.T)
 	server.ServeHTTP(publicDownload, httptest.NewRequest(http.MethodGet, "/api/public/threads/"+publicToken+"/assets/"+assetID+"/download", nil))
 	if publicDownload.Code != http.StatusGone || !strings.Contains(publicDownload.Body.String(), "ATTACHMENT_PURGED") {
 		t.Fatalf("public purged download status=%d body=%s", publicDownload.Code, publicDownload.Body.String())
+	}
+}
+
+func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	owner := types.User{ID: "usr_http_content_owner", TenantID: types.DefaultTenantID, Email: "content-owner@example.com", DisplayName: "Content Owner", Role: "admin", IsOwner: true}
+	member := types.User{ID: "usr_http_content_member", TenantID: types.DefaultTenantID, Email: "content-member@example.com", DisplayName: "Content Member", Role: "member"}
+	repo.Users = append(repo.Users, owner, member)
+	ownerSecret := "owner-content-session-secret"
+	memberSecret := "member-content-session-secret"
+	for _, session := range []types.UserSession{
+		{ID: "sess_http_content_owner", UserID: owner.ID, SecretHash: dbHashForTest(ownerSecret)},
+		{ID: "sess_http_content_member", UserID: member.ID, SecretHash: dbHashForTest(memberSecret)},
+	} {
+		if _, err := repo.CreateUserSession(t.Context(), session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_member", ActorName: "Web dashboard"}
+	privateThread, err := repo.CreateThread(t.Context(), member.ID, "Private owner-view audit marker", memberAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := repo.PostMessage(t.Context(), member.ID, privateThread.ID, memberAuth, "secret searchable message", nil, []types.NewAsset{{StorageKey: "agentbox/owner-view/secret.txt", FileName: "secret.txt", SizeBytes: 21}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKeySecret := "owner-content-api-key"
+	if _, err := repo.CreateAPIKey(t.Context(), owner.ID, "owner-content-key", "custom", dbHashForTest(ownerKeySecret), "owner-cont", []string{"threads:read", "assets:read"}); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, service.New(repo, store))
+	ownerCookie := &http.Cookie{Name: config.DefaultSessionCookieName, Value: ownerSecret}
+	memberCookie := &http.Cookie{Name: config.DefaultSessionCookieName, Value: memberSecret}
+
+	request := func(method string, path string, cookie *http.Cookie, bearer string, adminKey string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		if bearer != "" {
+			req.Header.Set("authorization", "Bearer "+bearer)
+		}
+		if adminKey != "" {
+			req.Header.Set("x-agentbox-admin-key", adminKey)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, req)
+		return response
+	}
+
+	ownerNormal := request(http.MethodGet, "/api/threads/"+privateThread.ID, ownerCookie, "", "")
+	if ownerNormal.Code != http.StatusNotFound {
+		t.Fatalf("normal owner thread bypass status=%d body=%s", ownerNormal.Code, ownerNormal.Body.String())
+	}
+	ownerNormalView := request(http.MethodGet, "/api/threads/"+privateThread.ID+"/view", ownerCookie, "", "")
+	if ownerNormalView.Code != http.StatusNotFound {
+		t.Fatalf("normal owner view bypass status=%d body=%s", ownerNormalView.Code, ownerNormalView.Body.String())
+	}
+	ownerKeyNormal := request(http.MethodGet, "/api/threads/"+privateThread.ID+"/view", nil, ownerKeySecret, "")
+	if ownerKeyNormal.Code != http.StatusNotFound {
+		t.Fatalf("owner API key normal bypass status=%d body=%s", ownerKeyNormal.Code, ownerKeyNormal.Body.String())
+	}
+	memberView := request(http.MethodGet, "/api/threads/"+privateThread.ID+"/view", memberCookie, "", "")
+	if memberView.Code != http.StatusOK || !strings.Contains(memberView.Body.String(), "secret.txt") || !strings.Contains(memberView.Body.String(), "download_url") {
+		t.Fatalf("member normal view status=%d body=%s", memberView.Code, memberView.Body.String())
+	}
+	legacyViewer := request(http.MethodGet, "/api/viewer/threads/"+privateThread.ID, memberCookie, "", "")
+	if legacyViewer.Code != http.StatusNotFound {
+		t.Fatalf("legacy viewer route status=%d body=%s", legacyViewer.Code, legacyViewer.Body.String())
+	}
+
+	ownerList := request(http.MethodGet, "/api/owner/content/threads", ownerCookie, "", "")
+	if ownerList.Code != http.StatusOK || !strings.Contains(ownerList.Body.String(), privateThread.ID) || !strings.Contains(ownerList.Body.String(), member.Email) || strings.Contains(ownerList.Body.String(), "password_hash") {
+		t.Fatalf("owner content list status=%d body=%s", ownerList.Code, ownerList.Body.String())
+	}
+	ownerFiltered := request(http.MethodGet, "/api/owner/content/threads?user_id="+url.QueryEscape(member.ID), ownerCookie, "", "")
+	if ownerFiltered.Code != http.StatusOK || !strings.Contains(ownerFiltered.Body.String(), privateThread.ID) {
+		t.Fatalf("owner content filter status=%d body=%s", ownerFiltered.Code, ownerFiltered.Body.String())
+	}
+	ownerSearch := request(http.MethodGet, "/api/owner/content/search?query="+url.QueryEscape("searchable message"), ownerCookie, "", "")
+	if ownerSearch.Code != http.StatusOK || !strings.Contains(ownerSearch.Body.String(), privateThread.ID) || !strings.Contains(ownerSearch.Body.String(), "searchable message") {
+		t.Fatalf("owner content search status=%d body=%s", ownerSearch.Code, ownerSearch.Body.String())
+	}
+	ownerDetail := request(http.MethodGet, "/api/owner/content/threads/"+privateThread.ID, ownerCookie, "", "")
+	if ownerDetail.Code != http.StatusOK || !strings.Contains(ownerDetail.Body.String(), message.ID) || !strings.Contains(ownerDetail.Body.String(), `"owner":{"id":"`+member.ID+`"`) || !strings.Contains(ownerDetail.Body.String(), "download_url") || strings.Contains(ownerDetail.Body.String(), "storage_key") {
+		t.Fatalf("owner content detail status=%d body=%s", ownerDetail.Code, ownerDetail.Body.String())
+	}
+	ownerAsset := request(http.MethodGet, "/api/owner/content/assets/"+message.Assets[0].ID+"/download", ownerCookie, "", "")
+	if ownerAsset.Code != http.StatusOK || !strings.Contains(ownerAsset.Body.String(), "download_url") {
+		t.Fatalf("owner content asset status=%d body=%s", ownerAsset.Code, ownerAsset.Body.String())
+	}
+	readOnly := request(http.MethodPost, "/api/owner/content/threads", ownerCookie, "", "")
+	if readOnly.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("owner content mutation method status=%d body=%s", readOnly.Code, readOnly.Body.String())
+	}
+	memberOwnerContent := request(http.MethodGet, "/api/owner/content/threads", memberCookie, "", "")
+	if memberOwnerContent.Code != http.StatusForbidden || !strings.Contains(memberOwnerContent.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("member owner content status=%d body=%s", memberOwnerContent.Code, memberOwnerContent.Body.String())
+	}
+	ownerKeyContent := request(http.MethodGet, "/api/owner/content/threads", nil, ownerKeySecret, "")
+	if ownerKeyContent.Code != http.StatusForbidden || !strings.Contains(ownerKeyContent.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner key content status=%d body=%s", ownerKeyContent.Code, ownerKeyContent.Body.String())
+	}
+	adminContent := request(http.MethodGet, "/api/owner/content/threads", nil, "", "deployment-secret")
+	if adminContent.Code != http.StatusUnauthorized {
+		t.Fatalf("deployment admin content status=%d body=%s", adminContent.Code, adminContent.Body.String())
 	}
 }
 
@@ -1957,7 +2066,7 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	}
 
 	viewerThreadOnly := httptest.NewRecorder()
-	server.ServeHTTP(viewerThreadOnly, httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID+"?key="+url.QueryEscape(threadReadKey.Key), nil))
+	server.ServeHTTP(viewerThreadOnly, httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.ID+"/view?key="+url.QueryEscape(threadReadKey.Key), nil))
 	if viewerThreadOnly.Code != http.StatusForbidden {
 		t.Fatalf("thread-read-only viewer status=%d body=%s", viewerThreadOnly.Code, viewerThreadOnly.Body.String())
 	}
@@ -1978,7 +2087,7 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 		t.Fatalf("scoped download-url status=%d body=%s", downloadURL.Code, downloadURL.Body.String())
 	}
 	viewerScoped := httptest.NewRecorder()
-	server.ServeHTTP(viewerScoped, httptest.NewRequest(http.MethodGet, "/api/viewer/threads/"+thread.ID+"?key="+url.QueryEscape(scopedKey.Key), nil))
+	server.ServeHTTP(viewerScoped, httptest.NewRequest(http.MethodGet, "/api/threads/"+thread.ID+"/view?key="+url.QueryEscape(scopedKey.Key), nil))
 	if viewerScoped.Code != http.StatusOK {
 		t.Fatalf("scoped viewer status=%d body=%s", viewerScoped.Code, viewerScoped.Body.String())
 	}

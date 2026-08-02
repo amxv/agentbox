@@ -9,6 +9,7 @@ export type AuthContext = {
   session_id?: string;
   scopes?: string[];
   role?: string;
+  is_owner?: boolean;
 };
 
 export type SessionPayload = {

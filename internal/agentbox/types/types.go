@@ -340,6 +340,34 @@ type ThreadWithMessages struct {
 	Visibility ThreadVisibility `json:"visibility"`
 }
 
+type OwnerContentThreadSummary struct {
+	Thread
+	Owner              User     `json:"owner"`
+	MessageCount       int      `json:"message_count"`
+	LastMessagePreview string   `json:"last_message_preview"`
+	MatchedSnippets    []string `json:"matched_snippets"`
+}
+
+type OwnerContentThreadDetail struct {
+	Thread
+	Owner      User             `json:"owner"`
+	Messages   []Message        `json:"messages"`
+	Visibility ThreadVisibility `json:"visibility"`
+}
+
+type OwnerContentListParams struct {
+	Limit   int
+	UserID  string
+	TeamRef string
+}
+
+type OwnerContentSearchParams struct {
+	Query   string
+	Limit   int
+	UserID  string
+	TeamRef string
+}
+
 type ChatGPTFileReference struct {
 	DownloadURL string  `json:"download_url"`
 	FileID      string  `json:"file_id"`

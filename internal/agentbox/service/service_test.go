@@ -806,6 +806,100 @@ func TestOwnerAttachmentPurgeIsUploaderScopedResumableAndTombstoned(t *testing.T
 	}
 }
 
+func TestOwnerContentContextIsBrowserOnlyAndDoesNotBypassNormalAccess(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := New(repo, store)
+	owner := types.User{ID: "usr_owner_content_owner", TenantID: types.DefaultTenantID, Email: "owner-content@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
+	member := types.User{ID: "usr_owner_content_member", TenantID: types.DefaultTenantID, Email: "member-content@example.com", DisplayName: "Member", Role: "member"}
+	other := types.User{ID: "usr_owner_content_other", TenantID: types.DefaultTenantID, Email: "other-content@example.com", DisplayName: "Other", Role: "member"}
+	repo.Users = append(repo.Users, owner, member, other)
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_owner_content", ActorName: "Web dashboard", IsOwner: true}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_member_content", ActorName: "Web dashboard"}
+	team, err := repo.CreateTeam(context.Background(), "owner-content-team", "Owner Content Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{member.ID, other.ID} {
+		if _, err := repo.AddTeamMember(context.Background(), team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ownerThread, err := svc.CreateThread(context.Background(), ownerAuth, "Owner private thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberPrivate, err := svc.CreateThread(context.Background(), memberAuth, "Member private audit marker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberShared, err := svc.CreateThread(context.Background(), memberAuth, "Member shared thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(context.Background(), member.ID, memberShared.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	message, err := repo.PostMessage(context.Background(), member.ID, memberPrivate.ID, memberAuth, "private searchable evidence", nil, []types.NewAsset{{StorageKey: "agentbox/owner-content/private.txt", FileName: "private.txt", SizeBytes: 17}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetThread(context.Background(), ownerAuth, memberPrivate.ID); !errors.Is(err, ErrThreadNotFound) {
+		t.Fatalf("normal owner access bypassed private thread: %v", err)
+	}
+	ownerKeyAuth := ownerAuth
+	ownerKeyAuth.SubjectType = types.AuthSubjectAPIKey
+	ownerKeyAuth.SessionID = ""
+	ownerKeyAuth.KeyID = "key_owner_content"
+	if _, err := svc.ResolveOwnerWebContext(ownerKeyAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner API key resolved owner content context: %v", err)
+	}
+	if _, err := svc.ResolveOwnerWebContext(memberAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("ordinary browser resolved owner content context: %v", err)
+	}
+	ownerContext, err := svc.ResolveOwnerWebContext(ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListOwnerContentThreads(context.Background(), OwnerWebContext{}, types.OwnerContentListParams{}); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("zero owner content context succeeded: %v", err)
+	}
+	all, err := svc.ListOwnerContentThreads(context.Background(), ownerContext, types.OwnerContentListParams{Limit: 50})
+	if err != nil || len(all) != 3 {
+		t.Fatalf("owner content list=%#v err=%v", all, err)
+	}
+	memberOnly, err := svc.ListOwnerContentThreads(context.Background(), ownerContext, types.OwnerContentListParams{Limit: 50, UserID: member.ID})
+	if err != nil || len(memberOnly) != 2 {
+		t.Fatalf("owner user filter=%#v err=%v", memberOnly, err)
+	}
+	teamOnly, err := svc.ListOwnerContentThreads(context.Background(), ownerContext, types.OwnerContentListParams{Limit: 50, TeamRef: team.Slug})
+	if err != nil || len(teamOnly) != 1 || teamOnly[0].ID != memberShared.ID {
+		t.Fatalf("owner team filter=%#v err=%v", teamOnly, err)
+	}
+	search, err := svc.SearchOwnerContentThreads(context.Background(), ownerContext, types.OwnerContentSearchParams{Query: "searchable evidence", Limit: 50})
+	if err != nil || len(search) != 1 || search[0].ID != memberPrivate.ID || len(search[0].MatchedSnippets) == 0 {
+		t.Fatalf("owner content search=%#v err=%v", search, err)
+	}
+	detail, err := svc.GetOwnerContentThread(context.Background(), ownerContext, memberPrivate.ID)
+	if err != nil || detail == nil || detail.Owner.ID != member.ID || len(detail.Messages) != 1 || detail.Messages[0].ID != message.ID || !detail.VisibilitySummary.Private {
+		t.Fatalf("owner content detail=%#v err=%v", detail, err)
+	}
+	downloadURL, err := svc.SignedOwnerContentAssetDownloadURL(context.Background(), ownerContext, message.Assets[0].ID, 300)
+	if err != nil || downloadURL == "" {
+		t.Fatalf("owner content download=%q err=%v", downloadURL, err)
+	}
+	assetID := message.Assets[0].ID
+	if _, err := repo.MarkAssetPurged(context.Background(), assetID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SignedOwnerContentAssetDownloadURL(context.Background(), ownerContext, assetID, 300); !hasCodedError(err, "ATTACHMENT_PURGED") {
+		t.Fatalf("owner content signed purged asset: %v", err)
+	}
+	if ownerThread.ID == "" {
+		t.Fatal("owner fixture thread missing")
+	}
+}
+
 func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})

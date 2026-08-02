@@ -332,7 +332,7 @@ export function OwnerUsersView() {
     <div className={styles.page}>
       <header className={styles.header}>
         <Link className={styles.brand} href="/threads"><AgentboxMark className={styles.mark}/><span>Agentbox</span><small>Owner</small></Link>
-        <nav className={styles.nav}><Link href="/threads">Inbox</Link><Link href="/keys">Credentials</Link><ThemeSwitcher/></nav>
+        <nav className={styles.nav}><Link href="/owner/content">Content</Link><Link href="/threads">Inbox</Link><Link href="/keys">Credentials</Link><ThemeSwitcher/></nav>
       </header>
       <main className={styles.main}>
         <section className={styles.hero}>

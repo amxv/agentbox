@@ -561,6 +561,147 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 	return results, nil
 }
 
+func (m *MemoryRepository) ListOwnerContentThreads(_ context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
+	return m.ownerContentThreads(ownerUserID, "", params.UserID, params.TeamRef, params.Limit), nil
+}
+
+func (m *MemoryRepository) SearchOwnerContentThreads(_ context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
+	return m.ownerContentThreads(ownerUserID, params.Query, params.UserID, params.TeamRef, params.Limit), nil
+}
+
+func (m *MemoryRepository) ownerContentThreads(ownerUserID string, query string, userID string, teamRef string, limit int) []types.OwnerContentThreadSummary {
+	if limit <= 0 {
+		limit = 50
+	}
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	threads := append([]types.Thread(nil), m.Threads...)
+	sort.SliceStable(threads, func(i, j int) bool {
+		if threads[i].UpdatedAt != threads[j].UpdatedAt {
+			return threads[i].UpdatedAt > threads[j].UpdatedAt
+		}
+		return threads[i].ID < threads[j].ID
+	})
+	results := []types.OwnerContentThreadSummary{}
+	for _, thread := range threads {
+		if strings.TrimSpace(userID) != "" && thread.OwnerUserID != strings.TrimSpace(userID) {
+			continue
+		}
+		visibility := m.threadVisibilitySummary(thread, ownerUserID)
+		visibility.Private = len(visibility.SharedTeams) == 0 && !visibility.Public
+		if strings.TrimSpace(teamRef) != "" {
+			matchedTeam := false
+			for _, team := range visibility.SharedTeams {
+				if team.ID == strings.TrimSpace(teamRef) || strings.EqualFold(team.Slug, strings.TrimSpace(teamRef)) {
+					matchedTeam = true
+					break
+				}
+			}
+			if !matchedTeam {
+				continue
+			}
+		}
+		messageCount := 0
+		lastBody := ""
+		lastAt := ""
+		matchedBody := ""
+		titleMatches := queryLower == "" || strings.Contains(strings.ToLower(thread.Title), queryLower)
+		for _, message := range m.Messages {
+			if message.ThreadID != thread.ID {
+				continue
+			}
+			messageCount++
+			if message.CreatedAt >= lastAt {
+				lastBody = message.Body
+				lastAt = message.CreatedAt
+			}
+			if queryLower != "" && matchedBody == "" && strings.Contains(strings.ToLower(message.Body), queryLower) {
+				matchedBody = message.Body
+			}
+		}
+		if !titleMatches && matchedBody == "" {
+			continue
+		}
+		owner := types.User{}
+		for _, candidate := range m.Users {
+			if candidate.ID == thread.OwnerUserID {
+				owner = candidate
+				break
+			}
+		}
+		thread.VisibilitySummary = visibility
+		results = append(results, types.OwnerContentThreadSummary{
+			Thread:             thread,
+			Owner:              owner,
+			MessageCount:       messageCount,
+			LastMessagePreview: previewText(lastBody, 280),
+			MatchedSnippets:    matchedSnippets(query, thread.Title, matchedBody),
+		})
+		if len(results) >= limit {
+			break
+		}
+	}
+	return results
+}
+
+func (m *MemoryRepository) GetOwnerContentThread(_ context.Context, ownerUserID string, threadID string) (*types.OwnerContentThreadDetail, error) {
+	for _, thread := range m.Threads {
+		if thread.ID != strings.TrimSpace(threadID) {
+			continue
+		}
+		owner := types.User{}
+		for _, candidate := range m.Users {
+			if candidate.ID == thread.OwnerUserID {
+				owner = candidate
+				break
+			}
+		}
+		messages := []types.Message{}
+		for _, message := range m.Messages {
+			if message.ThreadID != thread.ID {
+				continue
+			}
+			assets := []types.Asset{}
+			for _, asset := range m.Assets {
+				if asset.MessageID == message.ID {
+					copyAsset := asset
+					copyAsset.PublicURL = nil
+					copyAsset.DownloadURL = nil
+					assets = append(assets, copyAsset)
+				}
+			}
+			message.Assets = assets
+			messages = append(messages, message)
+		}
+		sort.SliceStable(messages, func(i, j int) bool {
+			if messages[i].CreatedAt != messages[j].CreatedAt {
+				return messages[i].CreatedAt < messages[j].CreatedAt
+			}
+			return messages[i].ID < messages[j].ID
+		})
+		thread.VisibilitySummary = m.threadVisibilitySummary(thread, ownerUserID)
+		thread.VisibilitySummary.Private = len(thread.VisibilitySummary.SharedTeams) == 0 && !thread.VisibilitySummary.Public
+		return &types.OwnerContentThreadDetail{
+			Thread:     thread,
+			Owner:      owner,
+			Messages:   messages,
+			Visibility: m.threadVisibility(thread),
+		}, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) GetOwnerContentAsset(_ context.Context, assetID string) (*types.Asset, error) {
+	for _, asset := range m.Assets {
+		if asset.ID == strings.TrimSpace(assetID) {
+			copyAsset := asset
+			copyAsset.PublicURL = nil
+			copyAsset.DownloadURL = nil
+			return &copyAsset, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *MemoryRepository) CreateThread(_ context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error) {
 	now := isoMillis(time.Now())
 	thread := types.Thread{

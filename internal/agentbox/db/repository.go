@@ -958,6 +958,231 @@ limit $7
 	return results, rows.Err()
 }
 
+func (r *Repository) ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
+	return r.queryOwnerContentThreads(ctx, ownerUserID, "", params.UserID, params.TeamRef, params.Limit)
+}
+
+func (r *Repository) SearchOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
+	return r.queryOwnerContentThreads(ctx, ownerUserID, params.Query, params.UserID, params.TeamRef, params.Limit)
+}
+
+func (r *Repository) queryOwnerContentThreads(ctx context.Context, ownerUserID string, query string, userID string, teamRef string, limit int) ([]types.OwnerContentThreadSummary, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	pattern := ""
+	if strings.TrimSpace(query) != "" {
+		pattern = "%" + strings.TrimSpace(query) + "%"
+	}
+	rows, err := r.pool.Query(ctx, `
+select
+  t.id,
+  t.tenant_id,
+  t.owner_user_id,
+  t.title,
+  t.created_at,
+  t.updated_at,
+  t.created_by,
+  t.created_by_user_id,
+  t.created_by_key_id,
+  t.created_by_user_display_name,
+  t.created_by_actor_name,
+`+threadVisibilitySummarySelect+`,
+  owner.id,
+  owner.tenant_id,
+  owner.email,
+  owner.display_name,
+  owner.password_hash,
+  owner.role,
+  owner.is_owner,
+  owner.created_at,
+  owner.updated_at,
+  owner.disabled_at,
+  (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
+  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc, lm.id desc limit 1), '') as last_message_body,
+  coalesce((select mm.body from messages mm where $2 <> '' and mm.thread_id = t.id and mm.body ilike $2 order by mm.created_at desc, mm.id desc limit 1), '') as matched_message_body
+from threads t
+join users owner on owner.id = t.owner_user_id
+where ($2 = '' or t.title ilike $2 or exists (
+  select 1 from messages search_message
+  where search_message.thread_id = t.id and search_message.body ilike $2
+))
+  and ($3 = '' or t.owner_user_id = $3)
+  and ($4 = '' or exists (
+    select 1
+    from thread_team_shares owner_filter_share
+    join teams owner_filter_team on owner_filter_team.id = owner_filter_share.team_id
+    where owner_filter_share.thread_id = t.id
+      and (owner_filter_team.id = $4 or owner_filter_team.slug = lower($4))
+  ))
+order by t.updated_at desc, t.id
+limit $5
+`, strings.TrimSpace(ownerUserID), pattern, strings.TrimSpace(userID), strings.TrimSpace(teamRef), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := []types.OwnerContentThreadSummary{}
+	for rows.Next() {
+		result, err := scanOwnerContentThreadSummary(rows, query)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, rows.Err()
+}
+
+func (r *Repository) GetOwnerContentThread(ctx context.Context, ownerUserID string, threadID string) (*types.OwnerContentThreadDetail, error) {
+	summary, err := scanOwnerContentThreadSummary(r.pool.QueryRow(ctx, `
+select
+  t.id,
+  t.tenant_id,
+  t.owner_user_id,
+  t.title,
+  t.created_at,
+  t.updated_at,
+  t.created_by,
+  t.created_by_user_id,
+  t.created_by_key_id,
+  t.created_by_user_display_name,
+  t.created_by_actor_name,
+`+threadVisibilitySummarySelect+`,
+  owner.id,
+  owner.tenant_id,
+  owner.email,
+  owner.display_name,
+  owner.password_hash,
+  owner.role,
+  owner.is_owner,
+  owner.created_at,
+  owner.updated_at,
+  owner.disabled_at,
+  (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
+  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc, lm.id desc limit 1), '') as last_message_body,
+  ''::text as matched_message_body
+from threads t
+join users owner on owner.id = t.owner_user_id
+where t.id = $2
+`, strings.TrimSpace(ownerUserID), strings.TrimSpace(threadID)), "")
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	messages, err := r.loadThreadMessages(ctx, summary.ID)
+	if err != nil {
+		return nil, err
+	}
+	teams, err := r.listThreadTeams(ctx, summary.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &types.OwnerContentThreadDetail{
+		Thread:     summary.Thread,
+		Owner:      summary.Owner,
+		Messages:   messages,
+		Visibility: types.ThreadVisibility{ThreadID: summary.ID, OwnerUserID: summary.OwnerUserID, SharedTeams: teams},
+	}, nil
+}
+
+func (r *Repository) GetOwnerContentAsset(ctx context.Context, assetID string) (*types.Asset, error) {
+	asset, err := scanAsset(r.pool.QueryRow(ctx, `
+select
+  a.id,
+  a.tenant_id,
+  a.message_id,
+  a.storage_key,
+  a.file_name,
+  a.mime_type,
+  a.size_bytes,
+  null::text as public_url,
+  a.created_at,
+  a.created_by,
+  a.created_by_user_id,
+  a.created_by_key_id,
+  a.created_by_user_display_name,
+  a.created_by_actor_name,
+  a.purged_at,
+  a.purged_by_user_id,
+  a.purge_last_attempt_at,
+  a.purge_error
+from assets a
+where a.id = $1
+`, strings.TrimSpace(assetID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &asset, nil
+}
+
+func scanOwnerContentThreadSummary(row threadScanner, query string) (types.OwnerContentThreadSummary, error) {
+	var threadCreatedAt time.Time
+	var threadUpdatedAt time.Time
+	var ownedByMe bool
+	var sharedTeamsJSON []byte
+	var matchedTeamsJSON []byte
+	var isPublic bool
+	var ownerCreatedAt time.Time
+	var ownerUpdatedAt time.Time
+	var ownerDisabledAt *time.Time
+	var lastBody string
+	var matchedBody string
+	result := types.OwnerContentThreadSummary{}
+	err := row.Scan(
+		&result.ID,
+		&result.TenantID,
+		&result.OwnerUserID,
+		&result.Title,
+		&threadCreatedAt,
+		&threadUpdatedAt,
+		&result.CreatedBy,
+		&result.CreatedByUserID,
+		&result.CreatedByKeyID,
+		&result.CreatedByUserDisplayName,
+		&result.CreatedByActorName,
+		&ownedByMe,
+		&sharedTeamsJSON,
+		&matchedTeamsJSON,
+		&isPublic,
+		&result.Owner.ID,
+		&result.Owner.TenantID,
+		&result.Owner.Email,
+		&result.Owner.DisplayName,
+		&result.Owner.PasswordHash,
+		&result.Owner.Role,
+		&result.Owner.IsOwner,
+		&ownerCreatedAt,
+		&ownerUpdatedAt,
+		&ownerDisabledAt,
+		&result.MessageCount,
+		&lastBody,
+		&matchedBody,
+	)
+	if err != nil {
+		return types.OwnerContentThreadSummary{}, err
+	}
+	result.CreatedAt = isoMillis(threadCreatedAt)
+	result.UpdatedAt = isoMillis(threadUpdatedAt)
+	result.Owner.CreatedAt = isoMillis(ownerCreatedAt)
+	result.Owner.UpdatedAt = isoMillis(ownerUpdatedAt)
+	result.Owner.DisabledAt = optionalISOTime(ownerDisabledAt)
+	result.VisibilitySummary, err = decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
+	if err != nil {
+		return types.OwnerContentThreadSummary{}, err
+	}
+	// Owner-content summaries describe the thread's global visibility rather
+	// than whether the permanent owner is the thread owner.
+	result.VisibilitySummary.Private = len(result.VisibilitySummary.SharedTeams) == 0 && !result.VisibilitySummary.Public
+	result.LastMessagePreview = previewText(lastBody, 280)
+	result.MatchedSnippets = matchedSnippets(query, result.Title, matchedBody)
+	return result, nil
+}
+
 func (r *Repository) CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error) {
 	id := "thr_" + uuid.NewString()
 	thread, err := scanThread(r.pool.QueryRow(ctx, `

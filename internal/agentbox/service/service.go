@@ -40,6 +40,10 @@ type Repository interface {
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
+	ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error)
+	SearchOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error)
+	GetOwnerContentThread(ctx context.Context, ownerUserID string, threadID string) (*types.OwnerContentThreadDetail, error)
+	GetOwnerContentAsset(ctx context.Context, assetID string) (*types.Asset, error)
 	GetAsset(ctx context.Context, userID string, assetID string) (*types.Asset, error)
 	ListAssetPurgeCandidates(ctx context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error)
 	MarkAssetPurged(ctx context.Context, assetID string, ownerUserID string) (bool, error)
@@ -96,8 +100,30 @@ type Service struct {
 	assets assets.AssetStore
 }
 
+// OwnerWebContext is intentionally opaque outside this package. It can be
+// created only from a permanent-owner browser session and is required by every
+// deployment-wide content method.
+type OwnerWebContext struct {
+	userID    string
+	sessionID string
+}
+
 func New(repo Repository, assetStore assets.AssetStore) *Service {
 	return &Service{repo: repo, assets: assetStore}
+}
+
+func (s *Service) ResolveOwnerWebContext(authContext types.AuthContext) (OwnerWebContext, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return OwnerWebContext{}, err
+	}
+	return OwnerWebContext{userID: authContext.UserID, sessionID: authContext.SessionID}, nil
+}
+
+func requireOwnerWebContext(ownerContext OwnerWebContext) error {
+	if strings.TrimSpace(ownerContext.userID) == "" || strings.TrimSpace(ownerContext.sessionID) == "" {
+		return CodedError{Code: "OWNER_BROWSER_REQUIRED", Message: "This operation requires the permanent owner's browser session."}
+	}
+	return nil
 }
 
 func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit int) ([]types.Thread, error) {
@@ -1023,6 +1049,84 @@ func (s *Service) ListUsers(ctx context.Context, authContext types.AuthContext) 
 		return nil, err
 	}
 	return s.repo.ListUsers(ctx)
+}
+
+func (s *Service) ListOwnerContentThreads(ctx context.Context, ownerContext OwnerWebContext, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
+	if err := requireOwnerWebContext(ownerContext); err != nil {
+		return nil, err
+	}
+	params.UserID = strings.TrimSpace(params.UserID)
+	params.TeamRef = strings.TrimSpace(params.TeamRef)
+	if params.Limit == 0 {
+		params.Limit = 50
+	}
+	if params.Limit < 1 || params.Limit > 200 {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "limit must be between 1 and 200."}
+	}
+	return s.repo.ListOwnerContentThreads(ctx, ownerContext.userID, params)
+}
+
+func (s *Service) SearchOwnerContentThreads(ctx context.Context, ownerContext OwnerWebContext, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
+	if err := requireOwnerWebContext(ownerContext); err != nil {
+		return nil, err
+	}
+	params.Query = strings.TrimSpace(params.Query)
+	params.UserID = strings.TrimSpace(params.UserID)
+	params.TeamRef = strings.TrimSpace(params.TeamRef)
+	if params.Query == "" {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "query is required."}
+	}
+	if params.Limit == 0 {
+		params.Limit = 50
+	}
+	if params.Limit < 1 || params.Limit > 200 {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "limit must be between 1 and 200."}
+	}
+	return s.repo.SearchOwnerContentThreads(ctx, ownerContext.userID, params)
+}
+
+func (s *Service) GetOwnerContentThread(ctx context.Context, ownerContext OwnerWebContext, threadID string) (*types.OwnerContentThreadDetail, error) {
+	if err := requireOwnerWebContext(ownerContext); err != nil {
+		return nil, err
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
+	}
+	thread, err := s.repo.GetOwnerContentThread(ctx, ownerContext.userID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if thread == nil {
+		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	return thread, nil
+}
+
+func (s *Service) SignedOwnerContentAssetDownloadURL(ctx context.Context, ownerContext OwnerWebContext, assetID string, expiresSeconds int) (string, error) {
+	if err := requireOwnerWebContext(ownerContext); err != nil {
+		return "", err
+	}
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "asset_id is required."}
+	}
+	asset, err := s.repo.GetOwnerContentAsset(ctx, assetID)
+	if err != nil {
+		return "", err
+	}
+	if asset == nil {
+		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset not found."}
+	}
+	if asset.PurgedAt != nil {
+		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
+	}
+	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
+		StorageKey:       asset.StorageKey,
+		FileName:         asset.FileName,
+		MimeType:         asset.MimeType,
+		ExpiresInSeconds: validate.ClampSignedURLExpiry(expiresSeconds),
+	})
 }
 
 func (s *Service) ListOwnerAPIKeys(ctx context.Context, authContext types.AuthContext) ([]types.APIKey, error) {

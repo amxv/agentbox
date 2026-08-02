@@ -101,7 +101,7 @@ Set these on the Next.js dashboard service:
 AGENTBOX_BACKEND_URL=https://agentbox-go-preview-or-prod.example.com
 ```
 
-The dashboard uses `/login`, an HTTP-only session cookie, and tenant-scoped `/api/threads`, `/api/viewer/*`, and `/api/keys` proxy routes. It should not store or ask for `AGENTBOX_ADMIN_KEY`.
+The dashboard uses `/login`, an HTTP-only session cookie, normal user-scoped `/api/threads/*` and `/api/keys` proxy routes, plus separate `/api/owner/content/*` routes for the permanent owner's read-only browser viewer. It should not store or ask for `AGENTBOX_ADMIN_KEY`.
 
 ## Migrations
 

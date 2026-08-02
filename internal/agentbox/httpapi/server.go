@@ -61,6 +61,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/owner/users/", s.ownerUserAction)
 	s.mux.HandleFunc("/api/owner/credentials", s.ownerCredentials)
 	s.mux.HandleFunc("/api/owner/credentials/", s.ownerCredential)
+	s.mux.HandleFunc("/api/owner/content/threads", s.ownerContentThreads)
+	s.mux.HandleFunc("/api/owner/content/search", s.ownerContentSearch)
+	s.mux.HandleFunc("/api/owner/content/threads/", s.ownerContentThread)
+	s.mux.HandleFunc("/api/owner/content/assets/", s.ownerContentAsset)
 	s.mux.HandleFunc("/api/owner/teams", s.ownerTeams)
 	s.mux.HandleFunc("/api/owner/teams/", s.ownerTeam)
 	s.mux.HandleFunc("/api/keys", s.keys)
@@ -72,8 +76,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
 	s.mux.HandleFunc("/api/public/threads/", s.publicThreadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
-	s.mux.HandleFunc("/api/viewer/threads", s.viewerThreads)
-	s.mux.HandleFunc("/api/viewer/threads/", s.viewerThread)
 	s.mux.Handle("/api/mcp", s.mcpHandler())
 }
 
@@ -194,6 +196,100 @@ func (s *Server) ownerCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": credentialID})
+}
+
+func (s *Server) ownerContentThreads(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	threads, err := s.service.ListOwnerContentThreads(r.Context(), ownerContext, types.OwnerContentListParams{
+		Limit:   numberQuery(r, "limit", 100),
+		UserID:  strings.TrimSpace(r.URL.Query().Get("user_id")),
+		TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+}
+
+func (s *Server) ownerContentSearch(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	threads, err := s.service.SearchOwnerContentThreads(r.Context(), ownerContext, types.OwnerContentSearchParams{
+		Query:   strings.TrimSpace(r.URL.Query().Get("query")),
+		Limit:   numberQuery(r, "limit", 100),
+		UserID:  strings.TrimSpace(r.URL.Query().Get("user_id")),
+		TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+}
+
+func (s *Server) ownerContentThread(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	threadID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/content/threads/"), "/")
+	if threadID == "" || strings.Contains(threadID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	thread, err := s.service.GetOwnerContentThread(r.Context(), ownerContext, threadID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	viewer, err := withOwnerContentAssetURLs(r, s.service, ownerContext, thread)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"thread": viewer})
+}
+
+func (s *Server) ownerContentAsset(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/owner/content/assets/")
+	assetID, tail, pathOK := splitFirst(rest)
+	if !pathOK || tail != "download" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	safeExpires := validate.ClampSignedURLExpiry(numberQuery(r, "expires_in", 300))
+	downloadURL, err := s.service.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, assetID, safeExpires)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"asset_id":     assetID,
+		"expires_in":   safeExpires,
+		"download_url": downloadURL,
+	})
 }
 
 func (s *Server) ownerTeams(w http.ResponseWriter, r *http.Request) {
@@ -854,6 +950,10 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.getThread(w, r, threadID)
 		return
 	}
+	if tail == "view" {
+		s.threadView(w, r, threadID)
+		return
+	}
 	if tail == "messages" {
 		s.postMessage(w, r, threadID)
 		return
@@ -1194,40 +1294,12 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
+func (s *Server) threadView(w http.ResponseWriter, r *http.Request, threadID string) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
 	authContext, ok := s.requireAuth(w, r)
 	if !ok {
-		return
-	}
-	limit := numberQuery(r, "limit", 100)
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 200 {
-		limit = 200
-	}
-	threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
-}
-
-func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
-	if !method(w, r, http.MethodGet) {
-		return
-	}
-	authContext, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	threadID := strings.TrimPrefix(r.URL.Path, "/api/viewer/threads/")
-	if threadID == "" || strings.Contains(threadID, "/") {
-		http.NotFound(w, r)
 		return
 	}
 	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
@@ -1299,6 +1371,19 @@ func (s *Server) requireOwnerBrowser(w http.ResponseWriter, r *http.Request) *ty
 		return nil
 	}
 	return authContext
+}
+
+func (s *Server) requireOwnerContentContext(w http.ResponseWriter, r *http.Request) (service.OwnerWebContext, bool) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return service.OwnerWebContext{}, false
+	}
+	ownerContext, err := s.service.ResolveOwnerWebContext(*authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return service.OwnerWebContext{}, false
+	}
+	return ownerContext, true
 }
 
 func (s *Server) sessionCookieName() string {
@@ -1540,6 +1625,13 @@ type viewerThread struct {
 	Messages []viewerMessage `json:"messages"`
 }
 
+type ownerViewerThread struct {
+	types.Thread
+	Owner      types.User             `json:"owner"`
+	Messages   []viewerMessage        `json:"messages"`
+	Visibility types.ThreadVisibility `json:"visibility"`
+}
+
 type viewerMessage struct {
 	types.Message
 	Assets []viewerAsset `json:"assets"`
@@ -1568,6 +1660,44 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset.ID, expires)
 			if err != nil {
 				return viewerThread{}, err
+			}
+			var previewURL *string
+			if isImage {
+				previewURL = &downloadURL
+			}
+			vm.Assets = append(vm.Assets, viewerAsset{
+				Asset:       asset,
+				DownloadURL: &downloadURL,
+				PreviewURL:  previewURL,
+			})
+		}
+		result.Messages = append(result.Messages, vm)
+	}
+	return result, nil
+}
+
+func withOwnerContentAssetURLs(r *http.Request, svc *service.Service, ownerContext service.OwnerWebContext, thread *types.OwnerContentThreadDetail) (ownerViewerThread, error) {
+	result := ownerViewerThread{
+		Thread:     thread.Thread,
+		Owner:      thread.Owner,
+		Messages:   []viewerMessage{},
+		Visibility: thread.Visibility,
+	}
+	for _, message := range thread.Messages {
+		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
+		for _, asset := range message.Assets {
+			if asset.PurgedAt != nil {
+				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+				continue
+			}
+			expires := 300
+			isImage := asset.MimeType != nil && strings.HasPrefix(*asset.MimeType, "image/")
+			if isImage {
+				expires = 900
+			}
+			downloadURL, err := svc.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, asset.ID, expires)
+			if err != nil {
+				return ownerViewerThread{}, err
 			}
 			var previewURL *string
 			if isImage {

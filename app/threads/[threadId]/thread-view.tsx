@@ -90,7 +90,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
         return;
       }
       setAuth(session);
-      const response = await fetch(`/api/viewer/threads/${encodeURIComponent(threadId)}`, { cache: "no-store" });
+      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/view`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setThread(data.thread);

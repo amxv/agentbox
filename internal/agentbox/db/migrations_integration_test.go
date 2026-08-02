@@ -1261,6 +1261,117 @@ limit $2
 	}
 }
 
+func TestOwnerContentRepositoryBypassesOnlyTheExplicitOwnerPath(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "content-owner@example.com", "Content Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "content-member@example.com", "Content Member", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teammate, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "content-teammate@example.com", "Content Teammate", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := repository.CreateTeam(ctx, "content-audit", "Content Audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{member.ID, teammate.ID} {
+		if _, err := repository.AddTeamMember(ctx, team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memberAuth := types.AuthContext{
+		UserID:          member.ID,
+		UserDisplayName: member.DisplayName,
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorName:       "Web dashboard",
+	}
+	privateThread, err := repository.CreateThread(ctx, member.ID, "Private owner audit marker", memberAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedThread, err := repository.CreateThread(ctx, member.ID, "Shared owner audit marker", memberAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SetThreadVisibility(ctx, member.ID, sharedThread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	privateMessage, err := repository.PostMessage(ctx, member.ID, privateThread.ID, memberAuth, "private searchable owner evidence", nil, []types.NewAsset{{
+		StorageKey: "agentbox/owner-content/private-evidence.txt",
+		FileName:   "private-evidence.txt",
+		SizeBytes:  23,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.PostMessage(ctx, member.ID, sharedThread.ID, memberAuth, "shared content", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	normalOwnerThread, err := repository.GetThread(ctx, owner.ID, privateThread.ID)
+	if err != nil || normalOwnerThread != nil {
+		t.Fatalf("normal owner access bypassed private thread: thread=%#v err=%v", normalOwnerThread, err)
+	}
+	normalOwnerAsset, err := repository.GetAsset(ctx, owner.ID, privateMessage.Assets[0].ID)
+	if err != nil || normalOwnerAsset != nil {
+		t.Fatalf("normal owner access bypassed private asset: asset=%#v err=%v", normalOwnerAsset, err)
+	}
+	teammateShared, err := repository.GetThread(ctx, teammate.ID, sharedThread.ID)
+	if err != nil || teammateShared == nil {
+		t.Fatalf("normal qualified member lost shared access: thread=%#v err=%v", teammateShared, err)
+	}
+	teammatePrivate, err := repository.GetThread(ctx, teammate.ID, privateThread.ID)
+	if err != nil || teammatePrivate != nil {
+		t.Fatalf("normal qualified member saw private content: thread=%#v err=%v", teammatePrivate, err)
+	}
+
+	all, err := repository.ListOwnerContentThreads(ctx, owner.ID, types.OwnerContentListParams{Limit: 50})
+	if err != nil || len(all) != 2 {
+		t.Fatalf("owner content list=%#v err=%v", all, err)
+	}
+	byID := map[string]types.OwnerContentThreadSummary{}
+	for _, thread := range all {
+		byID[thread.ID] = thread
+	}
+	if summary, ok := byID[privateThread.ID]; !ok || summary.Owner.ID != member.ID || !summary.VisibilitySummary.Private || summary.VisibilitySummary.Public || len(summary.VisibilitySummary.SharedTeams) != 0 || summary.MessageCount != 1 {
+		t.Fatalf("private owner summary=%#v", summary)
+	}
+	if summary, ok := byID[sharedThread.ID]; !ok || summary.Owner.ID != member.ID || summary.VisibilitySummary.Private || len(summary.VisibilitySummary.SharedTeams) != 1 || summary.VisibilitySummary.SharedTeams[0].ID != team.ID || summary.MessageCount != 1 {
+		t.Fatalf("shared owner summary=%#v", summary)
+	}
+	byUser, err := repository.ListOwnerContentThreads(ctx, owner.ID, types.OwnerContentListParams{Limit: 50, UserID: member.ID})
+	if err != nil || len(byUser) != 2 {
+		t.Fatalf("owner user filter=%#v err=%v", byUser, err)
+	}
+	byTeam, err := repository.ListOwnerContentThreads(ctx, owner.ID, types.OwnerContentListParams{Limit: 50, TeamRef: team.Slug})
+	if err != nil || len(byTeam) != 1 || byTeam[0].ID != sharedThread.ID {
+		t.Fatalf("owner team filter=%#v err=%v", byTeam, err)
+	}
+	searched, err := repository.SearchOwnerContentThreads(ctx, owner.ID, types.OwnerContentSearchParams{
+		Query: "searchable owner evidence",
+		Limit: 50,
+	})
+	if err != nil || len(searched) != 1 || searched[0].ID != privateThread.ID || len(searched[0].MatchedSnippets) == 0 {
+		t.Fatalf("owner content search=%#v err=%v", searched, err)
+	}
+	detail, err := repository.GetOwnerContentThread(ctx, owner.ID, privateThread.ID)
+	if err != nil || detail == nil || detail.Owner.ID != member.ID || detail.ID != privateThread.ID || !detail.VisibilitySummary.Private || len(detail.Messages) != 1 || detail.Messages[0].ID != privateMessage.ID || len(detail.Messages[0].Assets) != 1 {
+		t.Fatalf("owner content detail=%#v err=%v", detail, err)
+	}
+	asset, err := repository.GetOwnerContentAsset(ctx, privateMessage.Assets[0].ID)
+	if err != nil || asset == nil || asset.ID != privateMessage.Assets[0].ID || asset.StorageKey != "agentbox/owner-content/private-evidence.txt" || asset.CreatedByUserID == nil || *asset.CreatedByUserID != member.ID {
+		t.Fatalf("owner content asset=%#v err=%v", asset, err)
+	}
+}
+
 func TestCredentialMigrationRemovesTenantAndPlaintextSecretColumns(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

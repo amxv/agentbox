@@ -168,6 +168,8 @@ agentbox owner setup-token \
 
 After a non-owner user is disabled, the owner browser can separately purge that user's uploaded attachment objects from `/owner/users`. Purge runs in bounded, resumable batches using each asset's exact stored R2 key. Thread/message rows, filenames, and attribution remain as tombstones; authenticated and public readers display `Attachment deleted by deployment owner` and receive no download or preview URL. Attachments uploaded by other users are never selected merely because they appear in the disabled user's threads.
 
+The permanent-owner browser also has a separate read-only deployment content viewer at `/owner/content`. It can list, search, and inspect every thread, including another user's private threads, with optional user and team filters and non-purged attachment downloads. This bypass is intentionally isolated from the normal inbox and API authorization path: ordinary users, MCP/CLI/API credentials, owner API keys, and the deployment admin secret cannot use it, and the owner viewer exposes no posting, upload, or visibility controls.
+
 Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. Tenant provisioning and tenant metadata in CLI profiles are retired.
 
 ## Docs
