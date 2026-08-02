@@ -46,7 +46,7 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 		t.Fatalf("tenant selector changed account choice: %#v", sessionAuth)
 	}
 
-	credential, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), sessionAuth, "chatgpt", "chatgpt", []string{"threads:read", "threads:write"})
+	credential, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), sessionAuth, "ChatGPT", "chatgpt", []string{"threads:read", "threads:write"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 	if credentialAuth == nil || credentialAuth.UserID != sessionAuth.UserID || credentialAuth.UserDisplayName != sessionAuth.UserDisplayName {
 		t.Fatalf("credential did not resolve the browser user: session=%#v key=%#v", sessionAuth, credentialAuth)
 	}
-	if credentialAuth.ActorID != credential.ID || credentialAuth.KeyID != credential.ID || credentialAuth.ActorName != "chatgpt" || credentialAuth.IsOwner {
+	if credentialAuth.ActorID != credential.ID || credentialAuth.KeyID != credential.ID || credentialAuth.ActorName != "ChatGPT" || credentialAuth.IsOwner {
 		t.Fatalf("credential actor or owner authority is wrong: %#v", credentialAuth)
 	}
 	if credentialAuth.ActorID == sessionAuth.ActorID {
@@ -78,12 +78,39 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.CreatedByUserID == nil || *message.CreatedByUserID != sessionAuth.UserID || message.CreatedByKeyID == nil || *message.CreatedByKeyID != credential.ID || message.CreatedByUserDisplayName == nil || *message.CreatedByUserDisplayName != "Owner Person" || message.CreatedByActorName == nil || *message.CreatedByActorName != "chatgpt" {
+	if message.CreatedByUserID == nil || *message.CreatedByUserID != sessionAuth.UserID || message.CreatedByKeyID == nil || *message.CreatedByKeyID != credential.ID || message.CreatedByUserDisplayName == nil || *message.CreatedByUserDisplayName != "Owner Person" || message.CreatedByActorName == nil || *message.CreatedByActorName != "ChatGPT" {
 		t.Fatalf("unexpected connector attribution: %#v", message)
 	}
+	if _, err := svc.PostMessage(context.Background(), sessionAuth, PostMessageParams{ThreadID: thread.ID, Body: "from browser"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, actorName := range []string{"Claude", "Local CLI"} {
+		actorCredential, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), sessionAuth, actorName, strings.ToLower(strings.ReplaceAll(actorName, " ", "-")), []string{"threads:read", "threads:write"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actorAuth, err := svc.AuthenticateAPIKey(context.Background(), actorCredential.Key)
+		if err != nil || actorAuth == nil {
+			t.Fatalf("authenticate %s: auth=%#v err=%v", actorName, actorAuth, err)
+		}
+		if _, err := svc.PostMessage(context.Background(), *actorAuth, PostMessageParams{ThreadID: thread.ID, Body: "from " + actorName}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	shared, err := svc.GetThread(context.Background(), sessionAuth, thread.ID)
-	if err != nil || len(shared.Messages) != 1 || shared.Messages[0].ID != message.ID {
+	if err != nil || len(shared.Messages) != 4 || shared.Messages[0].ID != message.ID {
 		t.Fatalf("same user actors did not share thread access: thread=%#v err=%v", shared, err)
+	}
+	actorSnapshots := make([]string, 0, len(shared.Messages))
+	for _, sharedMessage := range shared.Messages {
+		if sharedMessage.CreatedByUserDisplayName == nil || *sharedMessage.CreatedByUserDisplayName != "Owner Person" || sharedMessage.CreatedByActorName == nil {
+			t.Fatalf("missing attribution snapshot: %#v", sharedMessage)
+		}
+		actorSnapshots = append(actorSnapshots, *sharedMessage.CreatedByActorName)
+	}
+	sort.Strings(actorSnapshots)
+	if !reflect.DeepEqual(actorSnapshots, []string{"ChatGPT", "Claude", "Local CLI", "Web dashboard"}) {
+		t.Fatalf("actor snapshots=%v", actorSnapshots)
 	}
 
 	disabledAt := "2026-08-01T00:00:00.000Z"

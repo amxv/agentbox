@@ -2,6 +2,7 @@
 
 export type AuthContext = {
   user_id?: string;
+  user_display_name?: string;
   subject_type: "user_session" | "api_key" | "admin";
   actor_name: string;
   key_id?: string;

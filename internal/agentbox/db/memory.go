@@ -472,6 +472,9 @@ func (m *MemoryRepository) ListThreads(_ context.Context, userID string, limit i
 }
 
 func (m *MemoryRepository) ListThreadsFiltered(_ context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error) {
+	if params.Limit <= 0 {
+		params.Limit = 50
+	}
 	threads := []types.Thread{}
 	for _, thread := range m.Threads {
 		if m.normalThreadAccess(thread, userID) == nil {
@@ -492,6 +495,9 @@ func (m *MemoryRepository) ListThreadsFiltered(_ context.Context, userID string,
 }
 
 func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	if params.Limit <= 0 {
+		params.Limit = 20
+	}
 	query := strings.ToLower(strings.TrimSpace(params.Query))
 	results := []types.SearchThreadResult{}
 	threads := append([]types.Thread(nil), m.Threads...)
@@ -534,17 +540,19 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 			continue
 		}
 		results = append(results, types.SearchThreadResult{
-			ID:                 thread.ID,
-			TenantID:           firstNonEmptyString(thread.TenantID, types.DefaultTenantID),
-			OwnerUserID:        thread.OwnerUserID,
-			Title:              thread.Title,
-			CreatedAt:          thread.CreatedAt,
-			UpdatedAt:          thread.UpdatedAt,
-			CreatedBy:          thread.CreatedBy,
-			MessageCount:       messageCount,
-			LastMessagePreview: previewText(lastBody, 180),
-			MatchedSnippets:    matchedSnippets(params.Query, thread.Title, matchedBody),
-			VisibilitySummary:  visibilitySummary,
+			ID:                       thread.ID,
+			TenantID:                 firstNonEmptyString(thread.TenantID, types.DefaultTenantID),
+			OwnerUserID:              thread.OwnerUserID,
+			Title:                    thread.Title,
+			CreatedAt:                thread.CreatedAt,
+			UpdatedAt:                thread.UpdatedAt,
+			CreatedBy:                thread.CreatedBy,
+			CreatedByUserDisplayName: thread.CreatedByUserDisplayName,
+			CreatedByActorName:       thread.CreatedByActorName,
+			MessageCount:             messageCount,
+			LastMessagePreview:       previewText(lastBody, 180),
+			MatchedSnippets:          matchedSnippets(params.Query, thread.Title, matchedBody),
+			VisibilitySummary:        visibilitySummary,
 		})
 		if len(results) >= params.Limit {
 			break

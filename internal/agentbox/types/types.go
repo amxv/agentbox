@@ -371,17 +371,19 @@ type UploadedAssetReference struct {
 }
 
 type SearchThreadResult struct {
-	ID                 string                  `json:"id"`
-	TenantID           string                  `json:"-"`
-	OwnerUserID        string                  `json:"owner_user_id"`
-	Title              string                  `json:"title"`
-	CreatedAt          string                  `json:"created_at"`
-	UpdatedAt          string                  `json:"updated_at"`
-	CreatedBy          string                  `json:"created_by"`
-	MessageCount       int                     `json:"message_count"`
-	LastMessagePreview string                  `json:"last_message_preview"`
-	MatchedSnippets    []string                `json:"matched_snippets"`
-	VisibilitySummary  ThreadVisibilitySummary `json:"visibility_summary"`
+	ID                       string                  `json:"id"`
+	TenantID                 string                  `json:"-"`
+	OwnerUserID              string                  `json:"owner_user_id"`
+	Title                    string                  `json:"title"`
+	CreatedAt                string                  `json:"created_at"`
+	UpdatedAt                string                  `json:"updated_at"`
+	CreatedBy                string                  `json:"created_by"`
+	CreatedByUserDisplayName *string                 `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string                 `json:"created_by_actor_name,omitempty"`
+	MessageCount             int                     `json:"message_count"`
+	LastMessagePreview       string                  `json:"last_message_preview"`
+	MatchedSnippets          []string                `json:"matched_snippets"`
+	VisibilitySummary        ThreadVisibilitySummary `json:"visibility_summary"`
 }
 
 type SearchThreadParams struct {

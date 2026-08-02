@@ -51,33 +51,41 @@ type asset struct {
 }
 
 type message struct {
-	ID              string  `json:"id"`
-	ThreadID        string  `json:"thread_id"`
-	Author          string  `json:"author"`
-	Body            string  `json:"body"`
-	BodyContentType *string `json:"body_content_type"`
-	CreatedAt       string  `json:"created_at"`
-	Assets          []asset `json:"assets"`
+	ID                       string  `json:"id"`
+	ThreadID                 string  `json:"thread_id"`
+	Author                   string  `json:"author"`
+	Body                     string  `json:"body"`
+	BodyContentType          *string `json:"body_content_type"`
+	CreatedAt                string  `json:"created_at"`
+	Assets                   []asset `json:"assets"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name"`
+	CreatedByActorName       *string `json:"created_by_actor_name"`
 }
 
 type thread struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt string    `json:"created_at"`
-	UpdatedAt string    `json:"updated_at"`
-	CreatedBy string    `json:"created_by"`
-	Messages  []message `json:"messages,omitempty"`
+	ID                       string                        `json:"id"`
+	Title                    string                        `json:"title"`
+	CreatedAt                string                        `json:"created_at"`
+	UpdatedAt                string                        `json:"updated_at"`
+	CreatedBy                string                        `json:"created_by"`
+	CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+	CreatedByActorName       *string                       `json:"created_by_actor_name"`
+	VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
+	Messages                 []message                     `json:"messages,omitempty"`
 }
 
 type searchThreadResult struct {
-	ID                 string   `json:"id"`
-	Title              string   `json:"title"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
-	CreatedBy          string   `json:"created_by"`
-	MessageCount       int      `json:"message_count"`
-	LastMessagePreview string   `json:"last_message_preview"`
-	MatchedSnippets    []string `json:"matched_snippets"`
+	ID                       string                        `json:"id"`
+	Title                    string                        `json:"title"`
+	CreatedAt                string                        `json:"created_at"`
+	UpdatedAt                string                        `json:"updated_at"`
+	CreatedBy                string                        `json:"created_by"`
+	CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+	CreatedByActorName       *string                       `json:"created_by_actor_name"`
+	MessageCount             int                           `json:"message_count"`
+	LastMessagePreview       string                        `json:"last_message_preview"`
+	MatchedSnippets          []string                      `json:"matched_snippets"`
+	VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
 }
 
 type doctorCheck struct {
@@ -599,6 +607,7 @@ func (r *Runner) runList(args []string, profileName string) error {
 	}
 	for _, thread := range data.Threads {
 		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\n", thread.ID, thread.UpdatedAt, thread.Title)
+		fmt.Fprintf(r.Stdout, "  %s · Created by %s\n", visibilitySummaryLabel(thread.VisibilitySummary), attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
 	}
 	return nil
 }
@@ -636,6 +645,7 @@ func (r *Runner) runSearch(args []string, profileName string) error {
 	}
 	for _, thread := range data.Threads {
 		fmt.Fprintf(r.Stdout, "%s\t%s\t%d\t%s\n", thread.ID, thread.UpdatedAt, thread.MessageCount, thread.Title)
+		fmt.Fprintf(r.Stdout, "  %s · Created by %s\n", visibilitySummaryLabel(thread.VisibilitySummary), attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
 		if thread.LastMessagePreview != "" {
 			fmt.Fprintf(r.Stdout, "  %s\n", thread.LastMessagePreview)
 		}
@@ -1045,9 +1055,11 @@ func multipartBody(body string, bodyContentType string, assetPath string) (*byte
 func printThread(w io.Writer, thread thread) {
 	fmt.Fprintf(w, "# %s\n", thread.Title)
 	fmt.Fprintf(w, "id: %s\n", thread.ID)
-	fmt.Fprintf(w, "updated: %s\n\n", thread.UpdatedAt)
+	fmt.Fprintf(w, "updated: %s\n", thread.UpdatedAt)
+	fmt.Fprintf(w, "created by: %s\n", attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
+	fmt.Fprintf(w, "visibility: %s\n\n", visibilitySummaryLabel(thread.VisibilitySummary))
 	for _, message := range thread.Messages {
-		fmt.Fprintf(w, "--- %s · %s · %s\n", message.Author, message.CreatedAt, message.ID)
+		fmt.Fprintf(w, "--- %s · %s · %s\n", attributionLabel(message.CreatedByUserDisplayName, message.CreatedByActorName, message.Author), message.CreatedAt, message.ID)
 		fmt.Fprintln(w, message.Body)
 		if len(message.Assets) > 0 {
 			fmt.Fprintln(w)
@@ -1062,6 +1074,54 @@ func printThread(w io.Writer, thread thread) {
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+func attributionLabel(userDisplayName *string, actorName *string, fallback string) string {
+	user := strings.TrimSpace(defaultStringValue(userDisplayName))
+	actor := strings.TrimSpace(defaultStringValue(actorName))
+	if user != "" && actor != "" && !strings.EqualFold(user, actor) {
+		return user + " · " + actor
+	}
+	if user != "" {
+		return user
+	}
+	if actor != "" {
+		return actor
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "Agentbox user"
+}
+
+func visibilitySummaryLabel(summary types.ThreadVisibilitySummary) string {
+	labels := []string{}
+	if summary.Private {
+		labels = append(labels, "Private")
+	}
+	for _, team := range summary.SharedTeams {
+		labels = append(labels, team.Name)
+	}
+	if summary.Public {
+		labels = append(labels, "Public")
+	}
+	if len(labels) == 0 {
+		if summary.OwnedByMe {
+			return "Owned"
+		}
+		if summary.SharedWithMe {
+			return "Shared"
+		}
+		return "Accessible"
+	}
+	return strings.Join(labels, ", ")
+}
+
+func defaultStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func printJSON(w io.Writer, value any) error {

@@ -10,6 +10,7 @@ import { postDashboardMessage } from "../../components/agentbox-write";
 import { AuthContext, fetchSession, signOutSession } from "../../components/session";
 import { ThemeSwitcher } from "../../components/theme-switcher";
 import { ThreadVisibilityControl } from "./thread-visibility-control";
+import { attributionLabel } from "../../components/attribution";
 
 type Asset = {
   id: string;
@@ -27,12 +28,17 @@ type Message = {
   body_content_type?: string | null;
   created_at: string;
   assets: Asset[];
+  created_by_user_display_name?: string;
+  created_by_actor_name?: string;
 };
 
 type Thread = {
   id: string;
   title: string;
   updated_at: string;
+  created_by: string;
+  created_by_user_display_name?: string;
+  created_by_actor_name?: string;
   messages: Message[];
 };
 
@@ -142,7 +148,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
             <Link className="site-nav__link" href="/threads">Inbox</Link>
             <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
-            {auth && <span className="session-chip">{auth.actor_name}</span>}
+            {auth && <span className="session-chip">{attributionLabel(auth.user_display_name, auth.actor_name)}</span>}
             {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
             <ThemeSwitcher />
           </nav>
@@ -153,7 +159,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Shared thread</p>
+              <p className="section-label">Accessible thread</p>
               <h1 className="dashboard-title">{thread?.title ?? "Thread"}</h1>
               <div className="thread-id-row">
                 <p className="dashboard-copy mono">
@@ -161,6 +167,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 </p>
                 <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" />
               </div>
+              {thread && <p className="thread-meta">Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</p>}
             </div>
             {thread && (
               <div className="card card--compact">
@@ -239,7 +246,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                     <span className="message-index">#{index + 1}</span>
                     <span className="message-heading">
                       <span className="message-title-row">
-                        <strong className="message-author">{message.author}</strong>
+                        <strong className="message-author">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
                         {message.id && (
                           <span className="message-id-chip" onClick={(event) => event.stopPropagation()}>
                             <span className="message-id-label">Message ID</span>

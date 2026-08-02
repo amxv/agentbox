@@ -7,13 +7,40 @@ import { MessageComposer } from "../components/message-composer";
 import { AuthContext, fetchSession, signOutSession } from "../components/session";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import { createDashboardThread, postDashboardMessage } from "../components/agentbox-write";
+import { attributionLabel } from "../components/attribution";
 
 type Thread = {
   id: string;
   title: string;
   updated_at: string;
   created_by: string;
+  created_by_user_display_name?: string;
+  created_by_actor_name?: string;
+  visibility_summary: {
+    owned_by_me: boolean;
+    private: boolean;
+    shared_with_me: boolean;
+    shared_teams: Team[];
+    matched_teams: Team[];
+    public: boolean;
+  };
 };
+
+type Team = {
+  id: string;
+  slug: string;
+  name: string;
+};
+
+type InboxFilter = "all" | "private" | "shared" | "public" | `team:${string}`;
+
+function visibilityLabels(thread: Thread) {
+  const labels: string[] = [];
+  if (thread.visibility_summary.private) labels.push("Private");
+  for (const team of thread.visibility_summary.shared_teams) labels.push(team.name);
+  if (thread.visibility_summary.public) labels.push("Public");
+  return labels.length > 0 ? labels : [thread.visibility_summary.owned_by_me ? "Owned" : "Shared"];
+}
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString(undefined, {
@@ -26,6 +53,8 @@ export function InboxView() {
   const router = useRouter();
   const [auth, setAuth] = useState<AuthContext | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [activeFilter, setActiveFilter] = useState<InboxFilter>("all");
   const [newThreadTitle, setNewThreadTitle] = useState("");
   const [showCreateComposer, setShowCreateComposer] = useState(false);
   const [creatingEmpty, setCreatingEmpty] = useState(false);
@@ -43,16 +72,29 @@ export function InboxView() {
         return;
       }
       setAuth(session);
-      const response = await fetch("/api/threads", { cache: "no-store" });
-      const data = await response.json();
+      const query = new URLSearchParams();
+      if (activeFilter.startsWith("team:")) {
+        query.set("filter", "team");
+        query.set("team", activeFilter.slice("team:".length));
+      } else if (activeFilter !== "all") {
+        query.set("filter", activeFilter);
+      }
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      const [response, teamsResponse] = await Promise.all([
+        fetch(`/api/threads${suffix}`, { cache: "no-store" }),
+        fetch("/api/me/teams", { cache: "no-store" })
+      ]);
+      const [data, teamsData] = await Promise.all([response.json(), teamsResponse.json()]);
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (!teamsResponse.ok) throw new Error(teamsData.error ?? `HTTP ${teamsResponse.status}`);
       setThreads(data.threads ?? []);
+      setTeams(teamsData.teams ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, [activeFilter, router]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -115,7 +157,7 @@ export function InboxView() {
           <nav className="site-nav" aria-label="Inbox navigation">
             <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
-            {auth && <span className="session-chip">{auth.actor_name}</span>}
+            {auth && <span className="session-chip">{attributionLabel(auth.user_display_name, auth.actor_name)}</span>}
             {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
             <ThemeSwitcher />
           </nav>
@@ -126,13 +168,13 @@ export function InboxView() {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Tenant inbox</p>
+              <p className="section-label">Unified inbox</p>
               <h1 className="dashboard-title">Inbox</h1>
-              <p className="dashboard-copy">Inspect task threads, create new threads, and post replies as your signed-in user.</p>
+              <p className="dashboard-copy">Private threads you own and every thread currently shared with one of your teams.</p>
             </div>
             {auth && (
               <div className="card card--compact">
-                <p className="stat-label">Threads</p>
+                <p className="stat-label">Current filter</p>
                 <h2 className="card-title">{threads.length}</h2>
                 <p className="copy">{latestUpdatedAt ? `Last updated ${formatDate(new Date(latestUpdatedAt).toISOString())}` : "No activity yet."}</p>
               </div>
@@ -177,6 +219,48 @@ export function InboxView() {
             </section>
           )}
 
+          <section className="inbox-filter-shell" aria-label="Inbox filters">
+            <div className="inbox-filter-heading">
+              <div>
+                <span className="stat-label">Visibility</span>
+                <strong>Filter accessible threads</strong>
+              </div>
+              <span className="thread-meta">Filtering happens on the server.</span>
+            </div>
+            <div className="inbox-filter-list">
+              {([
+                ["all", "All"],
+                ["private", "Private"],
+                ["shared", "Shared with me"],
+                ["public", "Public"]
+              ] as const).map(([value, label]) => (
+                <button
+                  className={activeFilter === value ? "inbox-filter inbox-filter--active" : "inbox-filter"}
+                  key={value}
+                  type="button"
+                  aria-pressed={activeFilter === value}
+                  onClick={() => setActiveFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+              {teams.map((team) => {
+                const value = `team:${team.id}` as InboxFilter;
+                return (
+                  <button
+                    className={activeFilter === value ? "inbox-filter inbox-filter--active" : "inbox-filter"}
+                    key={team.id}
+                    type="button"
+                    aria-pressed={activeFilter === value}
+                    onClick={() => setActiveFilter(value)}
+                  >
+                    {team.name}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
           <section className="thread-list" aria-label="Agentbox threads">
             {loading && (
               <div className="skeleton-list" aria-label="Loading threads" aria-busy="true">
@@ -198,7 +282,7 @@ export function InboxView() {
                 <span>{error}</span>
               </div>
             )}
-            {!loading && !error && threads.length === 0 && <p className="empty-state">No threads yet.</p>}
+            {!loading && !error && threads.length === 0 && <p className="empty-state">No threads match this filter.</p>}
             {!loading && !error && threads.map((thread) => (
               <Link key={thread.id} href={`/threads/${thread.id}`} className="thread-card">
                 <div className="thread-meta-row">
@@ -206,7 +290,12 @@ export function InboxView() {
                   <span className="thread-meta">Updated {formatDate(thread.updated_at)}</span>
                 </div>
                 <span className="thread-title">{thread.title}</span>
-                <span className="thread-meta">Created by {thread.created_by}</span>
+                <div className="thread-card__footer">
+                  <span className="thread-meta">Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span>
+                  <span className="visibility-badge-list">
+                    {visibilityLabels(thread).map((label, index) => <span className="visibility-badge" key={`${label}-${index}`}>{label}</span>)}
+                  </span>
+                </div>
               </Link>
             ))}
           </section>

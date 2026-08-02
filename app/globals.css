@@ -756,6 +756,69 @@ pre,
   gap: 1rem;
 }
 
+.inbox-filter-shell {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: var(--soft);
+}
+
+.inbox-filter-heading,
+.thread-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.inbox-filter-heading > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.inbox-filter-list,
+.visibility-badge-list {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.inbox-filter {
+  min-height: 2.2rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.inbox-filter:hover,
+.inbox-filter--active {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.inbox-filter--active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.visibility-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.65rem;
+  border: 1px solid var(--line);
+  padding: 0.2rem 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
 .thread-card,
 .message-card {
   display: grid;
@@ -1435,6 +1498,12 @@ pre,
 
   .message-id-chip {
     max-width: 100%;
+  }
+
+  .inbox-filter-heading,
+  .thread-card__footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

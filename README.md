@@ -90,7 +90,7 @@ Agentbox includes a simple browser viewer for inspecting threads and attachments
 https://your-agentbox.vercel.app/threads
 ```
 
-Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no tenant selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
+Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no tenant selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. The unified inbox can filter accessible threads by Private, Shared with me, one of the signed-in user's teams, or active Public state; each card shows its current visibility and stable `User · Actor` attribution. Thread pages use the same attribution snapshots and render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
 
 ## API
 

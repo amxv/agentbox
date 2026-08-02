@@ -106,7 +106,7 @@ func threadFilterPredicate(filterPlaceholder string, teamPlaceholder string) str
         on filter_membership.team_id = team_filter.team_id
       where team_filter.thread_id = t.id
         and filter_membership.user_id = $1
-        and (filter_team.id = ` + teamPlaceholder + ` or lower(filter_team.slug) = lower(` + teamPlaceholder + `))
+        and (filter_team.id = ` + teamPlaceholder + ` or filter_team.slug = lower(` + teamPlaceholder + `))
     )
   )
   or (
@@ -812,6 +812,12 @@ func (r *Repository) ListThreads(ctx context.Context, userID string, limit int) 
 }
 
 func (r *Repository) ListThreadsFiltered(ctx context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error) {
+	if strings.TrimSpace(params.Filter) == "" {
+		params.Filter = types.ThreadFilterAll
+	}
+	if params.Limit <= 0 {
+		params.Limit = 50
+	}
 	rows, err := r.pool.Query(ctx, `
 select
   t.id,
@@ -849,6 +855,12 @@ limit $4
 }
 
 func (r *Repository) SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	if strings.TrimSpace(params.Filter) == "" {
+		params.Filter = types.ThreadFilterAll
+	}
+	if params.Limit <= 0 {
+		params.Limit = 20
+	}
 	var createdBy any
 	if params.CreatedBy != nil && *params.CreatedBy != "" {
 		createdBy = *params.CreatedBy
@@ -871,6 +883,8 @@ select
   t.created_at,
   t.updated_at,
   t.created_by,
+  t.created_by_user_display_name,
+  t.created_by_actor_name,
   (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
   coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc limit 1), '') as last_message_body,
   coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $2 order by mm.created_at desc limit 1), '') as matched_message_body,
@@ -911,6 +925,8 @@ limit $7
 			&createdAt,
 			&updatedAt,
 			&result.CreatedBy,
+			&result.CreatedByUserDisplayName,
+			&result.CreatedByActorName,
 			&result.MessageCount,
 			&lastBody,
 			&matchedBody,

@@ -69,7 +69,7 @@ agentbox post thr_xxx --file result.md --asset screenshot.png
 agentbox download thr_xxx
 ```
 
-`search` finds threads by title and message body. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint. `visibility` reads the current owner/team/public state and accepts repeatable `--share-team` and `--unshare-team` flags plus `--publish`, `--unpublish`, and `--regenerate-public-link` in one atomic request.
+`search` finds threads by title and message body. `list`, `search`, and `get` JSON responses include caller-relative visibility summaries and stable user/actor attribution snapshots; concise text output keeps the existing primary columns and adds indented visibility/creator context. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint. `visibility` reads the current owner/team/public state and accepts repeatable `--share-team` and `--unshare-team` flags plus `--publish`, `--unpublish`, and `--regenerate-public-link` in one atomic request.
 
 ## Config
 

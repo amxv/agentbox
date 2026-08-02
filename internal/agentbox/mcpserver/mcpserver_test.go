@@ -161,22 +161,27 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	}
 	var payload struct {
 		Thread struct {
-			ID        string `json:"id"`
-			CreatedBy string `json:"created_by"`
+			ID                       string                        `json:"id"`
+			CreatedBy                string                        `json:"created_by"`
+			CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+			CreatedByActorName       *string                       `json:"created_by_actor_name"`
+			VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
 		} `json:"thread"`
 		Message struct {
-			ThreadID        string  `json:"thread_id"`
-			Body            string  `json:"body"`
-			BodyContentType *string `json:"body_content_type"`
+			ThreadID                 string  `json:"thread_id"`
+			Body                     string  `json:"body"`
+			BodyContentType          *string `json:"body_content_type"`
+			CreatedByUserDisplayName *string `json:"created_by_user_display_name"`
+			CreatedByActorName       *string `json:"created_by_actor_name"`
 		} `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Thread.ID == "" || payload.Thread.CreatedBy != "tester" {
+	if payload.Thread.ID == "" || payload.Thread.CreatedBy != "tester" || payload.Thread.CreatedByUserDisplayName == nil || *payload.Thread.CreatedByUserDisplayName != "Test User" || payload.Thread.CreatedByActorName == nil || *payload.Thread.CreatedByActorName != "tester" || !payload.Thread.VisibilitySummary.Private {
 		t.Fatalf("payload = %#v", payload)
 	}
-	if payload.Message.ThreadID != payload.Thread.ID || payload.Message.Body != "Please run the narrow checks." || payload.Message.BodyContentType == nil || *payload.Message.BodyContentType != "text/plain" {
+	if payload.Message.ThreadID != payload.Thread.ID || payload.Message.Body != "Please run the narrow checks." || payload.Message.BodyContentType == nil || *payload.Message.BodyContentType != "text/plain" || payload.Message.CreatedByUserDisplayName == nil || *payload.Message.CreatedByUserDisplayName != "Test User" || payload.Message.CreatedByActorName == nil || *payload.Message.CreatedByActorName != "tester" {
 		t.Fatalf("payload message = %#v", payload.Message)
 	}
 
@@ -237,6 +242,31 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	readRaw, _ := json.Marshal(readVisibility.StructuredContent)
 	if !strings.Contains(string(readRaw), managedPayload.Visibility.PublicURL) {
 		t.Fatalf("visibility read did not redisplay public URL: %s", readRaw)
+	}
+
+	listed, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_threads", Arguments: map[string]any{"limit": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedRaw, _ := json.Marshal(listed.StructuredContent)
+	if !strings.Contains(string(listedRaw), `"visibility_summary"`) || !strings.Contains(string(listedRaw), `"public":true`) || !strings.Contains(string(listedRaw), `"created_by_user_display_name":"Test User"`) || !strings.Contains(string(listedRaw), `"created_by_actor_name":"tester"`) {
+		t.Fatalf("MCP list metadata=%s", listedRaw)
+	}
+	gotThread, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "get_thread", Arguments: map[string]any{"thread_id": payload.Thread.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotThreadRaw, _ := json.Marshal(gotThread.StructuredContent)
+	if !strings.Contains(string(gotThreadRaw), `"visibility_summary"`) || !strings.Contains(string(gotThreadRaw), `"created_by_user_display_name":"Test User"`) || !strings.Contains(string(gotThreadRaw), `"created_by_actor_name":"tester"`) {
+		t.Fatalf("MCP get metadata=%s", gotThreadRaw)
+	}
+	searched, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "search_threads", Arguments: map[string]any{"query": "MCP thread", "limit": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchedRaw, _ := json.Marshal(searched.StructuredContent)
+	if !strings.Contains(string(searchedRaw), `"visibility_summary"`) || !strings.Contains(string(searchedRaw), `"public":true`) || !strings.Contains(string(searchedRaw), `"created_by_user_display_name":"Test User"`) || !strings.Contains(string(searchedRaw), `"created_by_actor_name":"tester"`) {
+		t.Fatalf("MCP search metadata=%s", searchedRaw)
 	}
 
 	search, err := session.CallTool(ctx, &mcp.CallToolParams{

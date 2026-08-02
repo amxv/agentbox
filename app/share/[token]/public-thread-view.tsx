@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AgentboxMark } from "../../components/agentbox-mark";
 import { ThemeSwitcher } from "../../components/theme-switcher";
 import { MessageContent } from "../../threads/[threadId]/message-content";
+import { attributionLabel } from "../../components/attribution";
 import styles from "./public-thread.module.css";
 
 type PublicAsset = {
@@ -45,13 +46,6 @@ async function responseJSON(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
   return data;
-}
-
-function attribution(userDisplayName?: string, actorName?: string, fallback?: string) {
-  const user = userDisplayName?.trim();
-  const actor = actorName?.trim();
-  if (user && actor && user.toLowerCase() !== actor.toLowerCase()) return `${user} · ${actor}`;
-  return user || actor || fallback || "Agentbox user";
 }
 
 function formatDate(value: string) {
@@ -134,7 +128,7 @@ export function PublicThreadView({ token }: { token: string }) {
             <section className={styles.hero}>
               <div className={styles.heroTop}><span>Public thread</span><span>{thread.messages.length} {thread.messages.length === 1 ? "message" : "messages"}</span></div>
               <h1>{thread.title || "Untitled thread"}</h1>
-              <div className={styles.threadMeta}><span>Created by {attribution(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span><span>Updated {formatDate(thread.updated_at)}</span></div>
+              <div className={styles.threadMeta}><span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span><span>Updated {formatDate(thread.updated_at)}</span></div>
               <p>This live URL provides read-only access. Posting, uploads, and visibility changes require an authenticated Agentbox user.</p>
             </section>
 
@@ -146,7 +140,7 @@ export function PublicThreadView({ token }: { token: string }) {
                 <article className={styles.message} key={message.id}>
                   <div className={styles.rail}><span>{String(index + 1).padStart(2, "0")}</span><i/></div>
                   <div className={styles.messageContent}>
-                    <header><div><strong>{attribution(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong><span>{message.created_by_actor_name || "Agentbox"}</span></div><time dateTime={message.created_at}>{formatDate(message.created_at)}</time></header>
+                    <header><div><strong>{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong><span>Message {index + 1}</span></div><time dateTime={message.created_at}>{formatDate(message.created_at)}</time></header>
                     {message.body && <MessageContent body={message.body} contentType={message.body_content_type}/>}
                     {message.assets.length > 0 && (
                       <div className={styles.attachments}>

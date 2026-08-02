@@ -254,7 +254,7 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("get failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "# CLI thread") || !strings.Contains(out.String(), "hello from cli") {
+	if !strings.Contains(out.String(), "# CLI thread") || !strings.Contains(out.String(), "hello from cli") || !strings.Contains(out.String(), "Seed · dev") || !strings.Contains(out.String(), "visibility: Private") {
 		t.Fatalf("get output = %s", out.String())
 	}
 
@@ -264,8 +264,18 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), `"threads"`) || !strings.Contains(out.String(), "CLI thread") {
+	if !strings.Contains(out.String(), `"threads"`) || !strings.Contains(out.String(), "CLI thread") || !strings.Contains(out.String(), `"private": true`) || !strings.Contains(out.String(), `"created_by_user_display_name": "Seed"`) || !strings.Contains(out.String(), `"created_by_actor_name": "dev"`) {
 		t.Fatalf("list output = %s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	code = runner.Run([]string{"list"})
+	if code != 0 {
+		t.Fatalf("plain list failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Private · Created by Seed · dev") {
+		t.Fatalf("plain list metadata = %s", out.String())
 	}
 
 	out.Reset()
@@ -276,16 +286,19 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	}
 	var searchPayload struct {
 		Threads []struct {
-			Title              string   `json:"title"`
-			MessageCount       int      `json:"message_count"`
-			LastMessagePreview string   `json:"last_message_preview"`
-			MatchedSnippets    []string `json:"matched_snippets"`
+			Title                    string                        `json:"title"`
+			CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+			CreatedByActorName       *string                       `json:"created_by_actor_name"`
+			MessageCount             int                           `json:"message_count"`
+			LastMessagePreview       string                        `json:"last_message_preview"`
+			MatchedSnippets          []string                      `json:"matched_snippets"`
+			VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
 		} `json:"threads"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &searchPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(searchPayload.Threads) == 0 || searchPayload.Threads[0].Title != "Initial CLI thread" || searchPayload.Threads[0].MessageCount != 1 || searchPayload.Threads[0].LastMessagePreview == "" {
+	if len(searchPayload.Threads) == 0 || searchPayload.Threads[0].Title != "Initial CLI thread" || searchPayload.Threads[0].MessageCount != 1 || searchPayload.Threads[0].LastMessagePreview == "" || !searchPayload.Threads[0].VisibilitySummary.Private || searchPayload.Threads[0].CreatedByUserDisplayName == nil || *searchPayload.Threads[0].CreatedByUserDisplayName != "Seed" || searchPayload.Threads[0].CreatedByActorName == nil || *searchPayload.Threads[0].CreatedByActorName != "dev" {
 		t.Fatalf("search payload = %#v", searchPayload)
 	}
 
@@ -295,8 +308,22 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("search text failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "Initial CLI thread") || !strings.Contains(out.String(), "first message from cli") {
+	if !strings.Contains(out.String(), "Initial CLI thread") || !strings.Contains(out.String(), "first message from cli") || !strings.Contains(out.String(), "Private · Created by Seed · dev") {
 		t.Fatalf("search text output = %s", out.String())
+	}
+}
+
+func TestAttributionLabelUsesSnapshotsAndLegacyFallback(t *testing.T) {
+	user := "Ashray"
+	actor := "ChatGPT"
+	if got := attributionLabel(&user, &actor, "legacy"); got != "Ashray · ChatGPT" {
+		t.Fatalf("snapshot attribution = %q", got)
+	}
+	if got := attributionLabel(nil, nil, " Legacy agent "); got != " Legacy agent " {
+		t.Fatalf("legacy attribution = %q", got)
+	}
+	if got := attributionLabel(nil, nil, ""); got != "Agentbox user" {
+		t.Fatalf("empty attribution = %q", got)
 	}
 }
 
