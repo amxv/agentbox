@@ -14,6 +14,10 @@ type ThreadVisibility = {
   thread_id: string;
   owner_user_id: string;
   shared_teams: Team[];
+  available_teams: Team[];
+  public: boolean;
+  public_link?: ThreadPublicLink;
+  public_url?: string;
 };
 
 type ThreadPublicLink = {
@@ -21,12 +25,6 @@ type ThreadPublicLink = {
   token_prefix: string;
   created_at: string;
   updated_at: string;
-};
-
-type PublicLinkResult = {
-  link: ThreadPublicLink;
-  token: string;
-  public_url: string;
 };
 
 async function responseJSON(response: Response) {
@@ -54,29 +52,22 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [visibilityResponse, teamsResponse, publicLinkResponse] = await Promise.all([
-        fetch(`/api/threads/${encodeURIComponent(threadId)}/visibility`, { cache: "no-store" }),
-        fetch("/api/me/teams", { cache: "no-store" }),
-        fetch(`/api/threads/${encodeURIComponent(threadId)}/public-link`, { cache: "no-store" })
-      ]);
-      if ([visibilityResponse, teamsResponse, publicLinkResponse].some((response) => response.status === 401 || response.status === 403)) {
+      const visibilityResponse = await fetch(`/api/threads/${encodeURIComponent(threadId)}/visibility`, { cache: "no-store" });
+      if (visibilityResponse.status === 401 || visibilityResponse.status === 403) {
         router.replace(`/login?next=${encodeURIComponent(`/threads/${threadId}`)}`);
         return;
       }
-      if (visibilityResponse.status === 404 || publicLinkResponse.status === 404) {
+      if (visibilityResponse.status === 404) {
         router.replace("/threads");
         return;
       }
-      const [visibilityData, teamsData, publicLinkData] = await Promise.all([
-        responseJSON(visibilityResponse),
-        responseJSON(teamsResponse),
-        responseJSON(publicLinkResponse)
-      ]);
+      const visibilityData = await responseJSON(visibilityResponse);
       const nextVisibility = visibilityData.visibility as ThreadVisibility;
       setVisibility(nextVisibility);
-      setMyTeams(teamsData.teams ?? []);
+      setMyTeams(nextVisibility.available_teams ?? []);
       setSelectedTeamIDs(nextVisibility.shared_teams.map((team) => team.id));
-      setPublicLink(publicLinkData.link ?? null);
+      setPublicLink(nextVisibility.public_link ?? null);
+      setGeneratedPublicURL(nextVisibility.public_url ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -120,9 +111,12 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
     setError(null);
     try {
       const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/visibility`, {
-        method: "PUT",
+        method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ team_ids: [...new Set(selectedTeamIDs)] })
+        body: JSON.stringify({
+          add_teams: [...new Set(selectedTeamIDs)].filter((id) => !currentTeamIDs.has(id)),
+          remove_teams: [...currentTeamIDs].filter((id) => !selectedTeamIDs.includes(id))
+        })
       });
       if (response.status === 404) {
         router.replace("/threads");
@@ -131,7 +125,10 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
       const data = await responseJSON(response);
       const nextVisibility = data.visibility as ThreadVisibility;
       setVisibility(nextVisibility);
+      setMyTeams(nextVisibility.available_teams ?? []);
       setSelectedTeamIDs(nextVisibility.shared_teams.map((team) => team.id));
+      setPublicLink(nextVisibility.public_link ?? null);
+      setGeneratedPublicURL(nextVisibility.public_url ?? "");
 
       const accessCheck = await fetch(`/api/threads/${encodeURIComponent(threadId)}`, { cache: "no-store" });
       if (accessCheck.status === 404 || accessCheck.status === 403) {
@@ -156,18 +153,22 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
     setError(null);
     setCopied(false);
     try {
-      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/public-link`, {
-        method: "POST",
+      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/visibility`, {
+        method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ rotate })
+        body: JSON.stringify(rotate ? { regenerate_public_link: true } : { public: true })
       });
       if (response.status === 404) {
         router.replace("/threads");
         return;
       }
-      const data = await responseJSON(response) as PublicLinkResult;
-      setPublicLink(data.link);
-      setGeneratedPublicURL(data.public_url);
+      const data = await responseJSON(response);
+      const nextVisibility = data.visibility as ThreadVisibility;
+      setVisibility(nextVisibility);
+      setMyTeams(nextVisibility.available_teams ?? []);
+      setSelectedTeamIDs(nextVisibility.shared_teams.map((team) => team.id));
+      setPublicLink(nextVisibility.public_link ?? null);
+      setGeneratedPublicURL(nextVisibility.public_url ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       await load();
@@ -183,14 +184,22 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
     setPublicBusy("revoke");
     setError(null);
     try {
-      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/public-link`, { method: "DELETE" });
+      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/visibility`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ public: false })
+      });
       if (response.status === 404) {
         router.replace("/threads");
         return;
       }
-      await responseJSON(response);
-      setPublicLink(null);
-      setGeneratedPublicURL("");
+      const data = await responseJSON(response);
+      const nextVisibility = data.visibility as ThreadVisibility;
+      setVisibility(nextVisibility);
+      setMyTeams(nextVisibility.available_teams ?? []);
+      setSelectedTeamIDs(nextVisibility.shared_teams.map((team) => team.id));
+      setPublicLink(nextVisibility.public_link ?? null);
+      setGeneratedPublicURL(nextVisibility.public_url ?? "");
       setCopied(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -271,9 +280,9 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
             )}
             {generatedPublicURL && (
               <div className={styles.generatedURL}>
-                <div><span>Shown once</span><code>{generatedPublicURL}</code></div>
+                <div><span>Live URL</span><code>{generatedPublicURL}</code></div>
                 <div><button type="button" onClick={() => void copyPublicURL()}>{copied ? "Copied" : "Copy URL"}</button><a href={generatedPublicURL} target="_blank" rel="noreferrer">Open</a></div>
-                <p>Save this URL now. Agentbox stores only its hash and cannot display it again after refresh.</p>
+                <p>This URL remains available to authenticated thread participants until it is rotated or revoked.</p>
               </div>
             )}
             {publicLink && (

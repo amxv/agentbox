@@ -55,6 +55,7 @@ search_threads
 get_thread
 create_thread
 post_message
+manage_thread_visibility
 ```
 
 `create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. It also supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass local sandbox paths or plain filenames.
@@ -68,6 +69,9 @@ agentbox search "design"
 agentbox create "Design thread"
 agentbox create "Design thread" --message "Please implement this." --format markdown
 agentbox get thr_xxx
+agentbox visibility thr_xxx
+agentbox visibility thr_xxx --share-team engineering --publish
+agentbox visibility thr_xxx --unshare-team engineering --unpublish
 agentbox post thr_xxx "Message body"
 agentbox post thr_xxx --file message.md
 agentbox post thr_xxx --file raw-output.txt --format plain
@@ -76,7 +80,7 @@ agentbox download thr_xxx
 agentbox download thr_xxx --output ./downloads
 ```
 
-`download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
+`visibility` reads or atomically changes team shares and the revocable public URL. Team flags may be repeated, and `--json` exposes the current shares plus team slugs available to the acting user. `download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
 
 ## Web dashboard
 

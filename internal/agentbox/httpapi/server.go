@@ -817,7 +817,19 @@ func (s *Server) threadVisibility(w http.ResponseWriter, r *http.Request, thread
 	}
 	switch r.Method {
 	case http.MethodGet:
-		visibility, err := s.service.GetThreadVisibility(r.Context(), *authContext, threadID)
+		visibility, err := s.service.ManageThreadVisibility(r.Context(), *authContext, threadID, s.requestBaseURL(r), types.ManageThreadVisibilityInput{})
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
+	case http.MethodPatch:
+		var input types.ManageThreadVisibilityInput
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		visibility, err := s.service.ManageThreadVisibility(r.Context(), *authContext, threadID, s.requestBaseURL(r), input)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -855,7 +867,11 @@ func (s *Server) threadPublicLink(w http.ResponseWriter, r *http.Request, thread
 			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"link": link})
+		publicURL := ""
+		if link != nil && link.Token != "" {
+			publicURL = strings.TrimRight(s.requestBaseURL(r), "/") + "/share/" + url.PathEscape(link.Token)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"link": link, "public_url": publicURL})
 	case http.MethodPost:
 		var input struct {
 			Rotate bool `json:"rotate"`
@@ -1187,7 +1203,7 @@ func (s *Server) mcpHandler() http.Handler {
 			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "mcp:use scope is required.")
 			return
 		}
-		mcpserver.NewHTTPHandler(*authContext, s.service).ServeHTTP(w, r)
+		mcpserver.NewHTTPHandler(*authContext, s.service, s.requestBaseURL(r)).ServeHTTP(w, r)
 	})
 }
 

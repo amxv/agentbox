@@ -499,6 +499,12 @@ func TestTeamSharedThreadAccessIsImmediateCompleteAndIndexed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repository.AddTeamMember(ctx, teamA.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AddTeamMember(ctx, teamB.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
 	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectAPIKey, ActorName: "member-agent", KeyID: "key_member"}
@@ -682,7 +688,7 @@ limit 50
 	}
 }
 
-func TestThreadPublicLinksAreSingleHashedRevocableAndIndexed(t *testing.T) {
+func TestThreadPublicLinksAreSingleRedisplayableRevocableAndIndexed(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatal(err)
@@ -704,6 +710,9 @@ func TestThreadPublicLinksAreSingleHashedRevocableAndIndexed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := repository.AddTeamMember(ctx, team.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AddTeamMember(ctx, team.ID, owner.ID); err != nil {
 		t.Fatal(err)
 	}
 	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
@@ -743,7 +752,7 @@ func TestThreadPublicLinksAreSingleHashedRevocableAndIndexed(t *testing.T) {
 	}
 	firstToken := "agpub_postgres_first"
 	firstHash := hashSecret(firstToken)
-	created, err := repository.CreateThreadPublicLink(ctx, member.ID, thread.ID, firstHash, "agpub_postgr", false)
+	created, err := repository.CreateThreadPublicLink(ctx, member.ID, thread.ID, firstToken, firstHash, "agpub_postgr", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -751,21 +760,22 @@ func TestThreadPublicLinksAreSingleHashedRevocableAndIndexed(t *testing.T) {
 		t.Fatalf("created public link=%#v", created)
 	}
 	var rowCount int
+	var storedToken string
 	var storedHash string
 	if err := repository.pool.QueryRow(ctx, `
-select count(*), max(token_hash)
+select count(*), max(token_value), max(token_hash)
 from thread_public_links
 where thread_id = $1
-`, thread.ID).Scan(&rowCount, &storedHash); err != nil {
+`, thread.ID).Scan(&rowCount, &storedToken, &storedHash); err != nil {
 		t.Fatal(err)
 	}
-	if rowCount != 1 || storedHash != firstHash || storedHash == firstToken {
-		t.Fatalf("stored public-link row count=%d hash=%q", rowCount, storedHash)
+	if rowCount != 1 || storedToken != firstToken || storedHash != firstHash || storedHash == firstToken {
+		t.Fatalf("stored public-link row count=%d token=%q hash=%q", rowCount, storedToken, storedHash)
 	}
-	if _, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, hashSecret("duplicate"), "duplicate", false); !errors.Is(err, types.ErrThreadPublicLinkExists) {
+	if _, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, "duplicate", hashSecret("duplicate"), "duplicate", false); !errors.Is(err, types.ErrThreadPublicLinkExists) {
 		t.Fatalf("duplicate public link error=%v", err)
 	}
-	if _, err := repository.CreateThreadPublicLink(ctx, outsider.ID, thread.ID, hashSecret("outsider"), "outsider", true); !errors.Is(err, types.ErrThreadNotFound) {
+	if _, err := repository.CreateThreadPublicLink(ctx, outsider.ID, thread.ID, "outsider", hashSecret("outsider"), "outsider", true); !errors.Is(err, types.ErrThreadNotFound) {
 		t.Fatalf("outsider public link mutation error=%v", err)
 	}
 
@@ -783,7 +793,7 @@ where thread_id = $1
 
 	secondToken := "agpub_postgres_rotated"
 	secondHash := hashSecret(secondToken)
-	rotated, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, secondHash, "agpub_rotate", true)
+	rotated, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, secondToken, secondHash, "agpub_rotate", true)
 	if err != nil || rotated.ThreadID != thread.ID || rotated.TokenHash != secondHash || rotated.RevokedAt != nil {
 		t.Fatalf("rotated public link=%#v err=%v", rotated, err)
 	}
@@ -815,8 +825,9 @@ where thread_id = $1
 	if link, err := repository.GetThreadPublicLink(ctx, owner.ID, thread.ID); err != nil || link != nil {
 		t.Fatalf("revoked active metadata=%#v err=%v", link, err)
 	}
-	thirdHash := hashSecret("agpub_postgres_recreated")
-	if _, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, thirdHash, "agpub_recre", false); err != nil {
+	thirdToken := "agpub_postgres_recreated"
+	thirdHash := hashSecret(thirdToken)
+	if _, err := repository.CreateThreadPublicLink(ctx, owner.ID, thread.ID, thirdToken, thirdHash, "agpub_recre", false); err != nil {
 		t.Fatalf("recreate after revoke: %v", err)
 	}
 	if err := repository.pool.QueryRow(ctx, `select count(*) from thread_public_links where thread_id = $1`, thread.ID).Scan(&rowCount); err != nil {
@@ -840,7 +851,8 @@ where thread_id = $1
 		index := index
 		go func() {
 			<-start
-			link, err := repository.CreateThreadPublicLink(context.Background(), owner.ID, concurrentThread.ID, hashSecret(fmt.Sprintf("concurrent-public-%d", index)), fmt.Sprintf("agpub_%d", index), false)
+			token := fmt.Sprintf("concurrent-public-%d", index)
+			link, err := repository.CreateThreadPublicLink(context.Background(), owner.ID, concurrentThread.ID, token, hashSecret(token), fmt.Sprintf("agpub_%d", index), false)
 			results <- createResult{link: link, err: err}
 		}()
 	}
@@ -898,6 +910,119 @@ where link.token_hash = $1 and link.revoked_at is null
 	}
 	if !strings.Contains(plan.String(), "thread_public_links_active_token_idx") && !strings.Contains(plan.String(), "thread_public_links_token_hash_unique") {
 		t.Fatalf("public token lookup plan missed indexes:\n%s", plan.String())
+	}
+}
+
+func TestManageThreadVisibilityIsAtomicMembershipBoundAndSelfRevoking(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "visibility-owner@example.com", "Visibility Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "visibility-member@example.com", "Visibility Member", nil, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamA, err := repository.CreateTeam(ctx, "visibility-a", "Visibility A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamB, err := repository.CreateTeam(ctx, "visibility-b", "Visibility B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable, err := repository.CreateTeam(ctx, "visibility-unavailable", "Visibility Unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, teamID := range []string{teamA.ID, teamB.ID} {
+		if _, err := repository.AddTeamMember(ctx, teamID, owner.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repository.AddTeamMember(ctx, teamB.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
+	thread, err := repository.CreateThread(ctx, owner.ID, "Unified visibility marker", ownerAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SetThreadVisibility(ctx, owner.ID, thread.ID, []string{teamA.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	publish := true
+	firstToken := "agpub_unified_first"
+	state, err := repository.ManageThreadVisibility(ctx, owner.ID, thread.ID, types.ManageThreadVisibilityInput{
+		AddTeams:          []string{teamB.Slug, teamB.ID},
+		RemoveTeams:       []string{teamA.ID},
+		Public:            &publish,
+		PublicToken:       firstToken,
+		PublicTokenHash:   hashSecret(firstToken),
+		PublicTokenPrefix: "agpub_unifie",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.SharedTeams) != 1 || state.SharedTeams[0].ID != teamB.ID || !state.Public || state.PublicLink == nil || state.PublicLink.Token != firstToken || len(state.AvailableTeams) != 2 {
+		t.Fatalf("combined visibility state=%#v", state)
+	}
+	var storedToken string
+	var storedHash string
+	if err := repository.pool.QueryRow(ctx, `select token_value, token_hash from thread_public_links where thread_id = $1 and revoked_at is null`, thread.ID).Scan(&storedToken, &storedHash); err != nil {
+		t.Fatal(err)
+	}
+	if storedToken != firstToken || storedHash != hashSecret(firstToken) {
+		t.Fatalf("stored public token=%q hash=%q", storedToken, storedHash)
+	}
+
+	secondToken := "agpub_unified_unused"
+	repeated, err := repository.ManageThreadVisibility(ctx, owner.ID, thread.ID, types.ManageThreadVisibilityInput{
+		AddTeams:          []string{teamB.Slug},
+		RemoveTeams:       []string{teamA.Slug},
+		Public:            &publish,
+		PublicToken:       secondToken,
+		PublicTokenHash:   hashSecret(secondToken),
+		PublicTokenPrefix: "agpub_unifie",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.PublicLink == nil || repeated.PublicLink.Token != firstToken || len(repeated.SharedTeams) != 1 || repeated.SharedTeams[0].ID != teamB.ID {
+		t.Fatalf("idempotent visibility state=%#v", repeated)
+	}
+
+	unpublish := false
+	if _, err := repository.ManageThreadVisibility(ctx, owner.ID, thread.ID, types.ManageThreadVisibilityInput{
+		AddTeams: []string{unavailable.Slug},
+		Public:   &unpublish,
+	}); !errors.Is(err, types.ErrThreadVisibilityTeamUnavailable) {
+		t.Fatalf("unavailable team error=%v", err)
+	}
+	unchanged, err := repository.ManageThreadVisibility(ctx, owner.ID, thread.ID, types.ManageThreadVisibilityInput{})
+	if err != nil || len(unchanged.SharedTeams) != 1 || unchanged.SharedTeams[0].ID != teamB.ID || !unchanged.Public || unchanged.PublicLink == nil || unchanged.PublicLink.Token != firstToken {
+		t.Fatalf("failed mutation was not atomic state=%#v err=%v", unchanged, err)
+	}
+
+	selfRevoked, err := repository.ManageThreadVisibility(ctx, member.ID, thread.ID, types.ManageThreadVisibilityInput{
+		RemoveTeams: []string{teamB.Slug},
+		Public:      &unpublish,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selfRevoked.SharedTeams) != 0 || selfRevoked.Public || selfRevoked.PublicLink != nil {
+		t.Fatalf("self-revocation response=%#v", selfRevoked)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, member.ID, thread.ID); err != nil || access != nil {
+		t.Fatalf("member retained access after self-revocation access=%#v err=%v", access, err)
+	}
+	if publicThread, err := repository.GetThreadByPublicTokenHash(ctx, hashSecret(firstToken)); err != nil || publicThread != nil {
+		t.Fatalf("unpublished token remained active thread=%#v err=%v", publicThread, err)
 	}
 }
 

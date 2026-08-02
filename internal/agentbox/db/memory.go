@@ -99,13 +99,31 @@ func (m *MemoryRepository) SetThreadVisibility(_ context.Context, userID string,
 	})
 
 	existing := map[string]types.ThreadTeamShare{}
+	for _, share := range m.ThreadTeamShares {
+		if share.ThreadID == threadID {
+			existing[share.TeamID] = share
+		}
+	}
+	availableTeams, err := m.ListUserTeams(context.Background(), userID)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	additionRefs := make([]string, 0, len(teamIDs))
+	for _, teamID := range teamIDs {
+		if _, exists := existing[teamID]; !exists {
+			additionRefs = append(additionRefs, teamID)
+		}
+	}
+	if _, err := resolveTeamReferences(additionRefs, availableTeams, true); err != nil {
+		return types.ThreadVisibility{}, err
+	}
+
 	kept := make([]types.ThreadTeamShare, 0, len(m.ThreadTeamShares)+len(teamIDs))
 	for _, share := range m.ThreadTeamShares {
 		if share.ThreadID != threadID {
 			kept = append(kept, share)
 			continue
 		}
-		existing[share.TeamID] = share
 	}
 	now := isoMillis(time.Now().UTC())
 	creator := userID
@@ -125,6 +143,142 @@ func (m *MemoryRepository) SetThreadVisibility(_ context.Context, userID string,
 	return types.ThreadVisibility{ThreadID: threadID, OwnerUserID: thread.OwnerUserID, SharedTeams: desiredTeams}, nil
 }
 
+func (m *MemoryRepository) ManageThreadVisibility(_ context.Context, userID string, threadID string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error) {
+	input.AddTeams = uniqueNonEmptyStrings(input.AddTeams)
+	input.RemoveTeams = uniqueNonEmptyStrings(input.RemoveTeams)
+
+	var thread *types.Thread
+	for index := range m.Threads {
+		if m.Threads[index].ID == threadID && m.normalThreadAccess(m.Threads[index], userID) != nil {
+			thread = &m.Threads[index]
+			break
+		}
+	}
+	if thread == nil {
+		return types.ManagedThreadVisibility{}, types.ErrThreadNotFound
+	}
+
+	availableTeams, err := m.ListUserTeams(context.Background(), userID)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	currentTeams := m.threadVisibility(*thread).SharedTeams
+	addTeamIDs, err := resolveTeamReferences(input.AddTeams, availableTeams, true)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	removeTeamIDs, err := resolveTeamReferences(input.RemoveTeams, currentTeams, false)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	if stringSetsOverlap(addTeamIDs, removeTeamIDs) || (input.Public != nil && !*input.Public && input.RegeneratePublicLink) {
+		return types.ManagedThreadVisibility{}, types.ErrThreadVisibilityConflict
+	}
+
+	activeLinkIndex := -1
+	for index := range m.ThreadPublicLinks {
+		if m.ThreadPublicLinks[index].ThreadID == threadID && m.ThreadPublicLinks[index].RevokedAt == nil {
+			activeLinkIndex = index
+			break
+		}
+	}
+	createOrRotate := false
+	if input.Public == nil || *input.Public {
+		if input.RegeneratePublicLink {
+			if activeLinkIndex < 0 && input.Public == nil {
+				return types.ManagedThreadVisibility{}, types.ErrThreadPublicLinkNotFound
+			}
+			createOrRotate = true
+		} else if input.Public != nil && *input.Public && activeLinkIndex < 0 {
+			createOrRotate = true
+		}
+	}
+	if createOrRotate {
+		if strings.TrimSpace(input.PublicToken) == "" || strings.TrimSpace(input.PublicTokenHash) == "" || strings.TrimSpace(input.PublicTokenPrefix) == "" {
+			return types.ManagedThreadVisibility{}, errors.New("public token material is required")
+		}
+		for index, link := range m.ThreadPublicLinks {
+			if index != activeLinkIndex && link.TokenHash == input.PublicTokenHash {
+				return types.ManagedThreadVisibility{}, errors.New("public token hash already exists")
+			}
+		}
+	}
+
+	removeSet := make(map[string]struct{}, len(removeTeamIDs))
+	for _, teamID := range removeTeamIDs {
+		removeSet[teamID] = struct{}{}
+	}
+	existingSet := map[string]struct{}{}
+	shares := make([]types.ThreadTeamShare, 0, len(m.ThreadTeamShares)+len(addTeamIDs))
+	for _, share := range m.ThreadTeamShares {
+		if share.ThreadID != threadID {
+			shares = append(shares, share)
+			continue
+		}
+		if _, remove := removeSet[share.TeamID]; remove {
+			continue
+		}
+		existingSet[share.TeamID] = struct{}{}
+		shares = append(shares, share)
+	}
+	now := isoMillis(time.Now().UTC())
+	creator := userID
+	for _, teamID := range addTeamIDs {
+		if _, exists := existingSet[teamID]; exists {
+			continue
+		}
+		shares = append(shares, types.ThreadTeamShare{
+			ThreadID:        threadID,
+			TeamID:          teamID,
+			CreatedByUserID: &creator,
+			CreatedAt:       now,
+		})
+	}
+	m.ThreadTeamShares = shares
+
+	if input.Public != nil && !*input.Public {
+		if activeLinkIndex >= 0 {
+			m.ThreadPublicLinks[activeLinkIndex].RevokedAt = &now
+			m.ThreadPublicLinks[activeLinkIndex].UpdatedAt = now
+			activeLinkIndex = -1
+		}
+	} else if createOrRotate {
+		if activeLinkIndex >= 0 {
+			link := &m.ThreadPublicLinks[activeLinkIndex]
+			link.Token = input.PublicToken
+			link.TokenHash = input.PublicTokenHash
+			link.TokenPrefix = input.PublicTokenPrefix
+			link.CreatedByUserID = &creator
+			link.UpdatedAt = now
+			link.RevokedAt = nil
+		} else {
+			m.ThreadPublicLinks = append(m.ThreadPublicLinks, types.ThreadPublicLink{
+				ThreadID:        threadID,
+				Token:           input.PublicToken,
+				TokenHash:       input.PublicTokenHash,
+				TokenPrefix:     input.PublicTokenPrefix,
+				CreatedByUserID: &creator,
+				CreatedAt:       now,
+				UpdatedAt:       now,
+			})
+			activeLinkIndex = len(m.ThreadPublicLinks) - 1
+		}
+	}
+
+	state := types.ManagedThreadVisibility{
+		ThreadID:       threadID,
+		OwnerUserID:    thread.OwnerUserID,
+		SharedTeams:    m.threadVisibility(*thread).SharedTeams,
+		AvailableTeams: availableTeams,
+		Public:         activeLinkIndex >= 0,
+	}
+	if activeLinkIndex >= 0 {
+		link := m.ThreadPublicLinks[activeLinkIndex]
+		state.PublicLink = &link
+	}
+	return state, nil
+}
+
 func (m *MemoryRepository) GetThreadPublicLink(_ context.Context, userID string, threadID string) (*types.ThreadPublicLink, error) {
 	for _, thread := range m.Threads {
 		if thread.ID != threadID || m.normalThreadAccess(thread, userID) == nil {
@@ -141,7 +295,7 @@ func (m *MemoryRepository) GetThreadPublicLink(_ context.Context, userID string,
 	return nil, nil
 }
 
-func (m *MemoryRepository) CreateThreadPublicLink(_ context.Context, userID string, threadID string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
+func (m *MemoryRepository) CreateThreadPublicLink(_ context.Context, userID string, threadID string, token string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
 	var accessible bool
 	for _, thread := range m.Threads {
 		if thread.ID == threadID && m.normalThreadAccess(thread, userID) != nil {
@@ -168,6 +322,7 @@ func (m *MemoryRepository) CreateThreadPublicLink(_ context.Context, userID stri
 			return types.ThreadPublicLink{}, types.ErrThreadPublicLinkExists
 		}
 		link.TokenHash = tokenHash
+		link.Token = token
 		link.TokenPrefix = tokenPrefix
 		link.CreatedByUserID = &creator
 		link.UpdatedAt = now
@@ -176,6 +331,7 @@ func (m *MemoryRepository) CreateThreadPublicLink(_ context.Context, userID stri
 	}
 	link := types.ThreadPublicLink{
 		ThreadID:        threadID,
+		Token:           token,
 		TokenHash:       tokenHash,
 		TokenPrefix:     tokenPrefix,
 		CreatedByUserID: &creator,

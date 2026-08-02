@@ -14,6 +14,9 @@ var ErrTeamSlugConflict = errors.New("team slug is already in use")
 var ErrInvalidOnboardingConnector = errors.New("invalid onboarding connector")
 var ErrOnboardingCredentialExists = errors.New("onboarding credential already exists")
 var ErrThreadPublicLinkExists = errors.New("thread public link already exists")
+var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
+var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
+var ErrThreadVisibilityConflict = errors.New("the same team cannot be added and removed in one visibility change")
 
 const DefaultTenantID = "ten_default"
 
@@ -178,12 +181,33 @@ type ThreadVisibility struct {
 
 type ThreadPublicLink struct {
 	ThreadID        string  `json:"thread_id"`
+	Token           string  `json:"-"`
 	TokenHash       string  `json:"-"`
 	TokenPrefix     string  `json:"token_prefix"`
 	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 	UpdatedAt       string  `json:"updated_at"`
 	RevokedAt       *string `json:"revoked_at,omitempty"`
+}
+
+type ManageThreadVisibilityInput struct {
+	AddTeams             []string `json:"add_teams,omitempty"`
+	RemoveTeams          []string `json:"remove_teams,omitempty"`
+	Public               *bool    `json:"public,omitempty"`
+	RegeneratePublicLink bool     `json:"regenerate_public_link,omitempty"`
+	PublicToken          string   `json:"-"`
+	PublicTokenHash      string   `json:"-"`
+	PublicTokenPrefix    string   `json:"-"`
+}
+
+type ManagedThreadVisibility struct {
+	ThreadID       string            `json:"thread_id"`
+	OwnerUserID    string            `json:"owner_user_id"`
+	SharedTeams    []Team            `json:"shared_teams"`
+	AvailableTeams []Team            `json:"available_teams"`
+	Public         bool              `json:"public"`
+	PublicLink     *ThreadPublicLink `json:"public_link,omitempty"`
+	PublicURL      string            `json:"public_url,omitempty"`
 }
 
 type PublicAsset struct {

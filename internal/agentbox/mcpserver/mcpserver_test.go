@@ -41,7 +41,7 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	for _, tool := range tools.Tools {
 		byName[tool.Name] = tool
 	}
-	for _, name := range []string{"list_threads", "search_threads", "get_thread", "create_thread", "post_message"} {
+	for _, name := range []string{"list_threads", "search_threads", "get_thread", "create_thread", "post_message", "manage_thread_visibility"} {
 		if byName[name] == nil {
 			t.Fatalf("missing tool %s in %#v", name, byName)
 		}
@@ -55,6 +55,10 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	post := byName["post_message"]
 	if post.Annotations.ReadOnlyHint || post.Annotations.OpenWorldHint == nil || !*post.Annotations.OpenWorldHint {
 		t.Fatalf("post_message annotations = %#v", post.Annotations)
+	}
+	visibility := byName["manage_thread_visibility"]
+	if visibility.Annotations.ReadOnlyHint || visibility.Annotations.DestructiveHint == nil || !*visibility.Annotations.DestructiveHint {
+		t.Fatalf("manage_thread_visibility annotations = %#v", visibility.Annotations)
 	}
 	meta := post.Meta.GetMeta()
 	if got := meta["openai/toolInvocation/invoked"]; got != "Posted to Agentbox" {
@@ -71,12 +75,30 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	if !ok || len(fileParams) != 1 || fileParams[0] != "file" {
 		t.Fatalf("file params meta = %#v", meta["openai/fileParams"])
 	}
+	createSchemaJSON, err := json.Marshal(byName["create_thread"].InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"add_teams", "remove_teams", "public", "regenerate_public_link"} {
+		if strings.Contains(string(createSchemaJSON), forbidden) {
+			t.Fatalf("create_thread schema contains visibility field %q: %s", forbidden, createSchemaJSON)
+		}
+	}
+	visibilitySchemaJSON, err := json.Marshal(visibility.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"thread_id", "add_teams", "remove_teams", "public", "regenerate_public_link"} {
+		if !strings.Contains(string(visibilitySchemaJSON), required) {
+			t.Fatalf("manage_thread_visibility schema missing %q: %s", required, visibilitySchemaJSON)
+		}
+	}
 }
 
 func TestStreamableHTTPAllowsForwardedProductionHost(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	handler := NewHTTPHandler(testAuth(), svc)
+	handler := NewHTTPHandler(testAuth(), svc, "https://agentbox.example")
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0.0.0"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(body))
@@ -99,7 +121,9 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	ctx := context.Background()
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	handler := NewHTTPHandler(testAuth(), svc)
+	auth := testAuth()
+	repo.Users = append(repo.Users, types.User{ID: auth.UserID, TenantID: types.DefaultTenantID, Email: "mcp@example.com", DisplayName: auth.UserDisplayName, Role: "member"})
+	handler := NewHTTPHandler(auth, svc, "https://agentbox.example")
 	httpServer := httptest.NewServer(handler)
 	defer httpServer.Close()
 
@@ -154,6 +178,65 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	}
 	if payload.Message.ThreadID != payload.Thread.ID || payload.Message.Body != "Please run the narrow checks." || payload.Message.BodyContentType == nil || *payload.Message.BodyContentType != "text/plain" {
 		t.Fatalf("payload message = %#v", payload.Message)
+	}
+
+	oldTeam, err := repo.CreateTeam(ctx, "mcp-old", "MCP Old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTeam, err := repo.CreateTeam(ctx, "mcp-new", "MCP New")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, teamID := range []string{oldTeam.ID, newTeam.ID} {
+		if _, err := repo.AddTeamMember(ctx, teamID, auth.UserID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.SetThreadVisibility(ctx, auth.UserID, payload.Thread.ID, []string{oldTeam.ID}); err != nil {
+		t.Fatal(err)
+	}
+	managed, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "manage_thread_visibility",
+		Arguments: map[string]any{
+			"thread_id":    payload.Thread.ID,
+			"add_teams":    []string{"mcp-new", "mcp-new"},
+			"remove_teams": []string{oldTeam.ID},
+			"public":       true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed.IsError {
+		t.Fatalf("manage_thread_visibility failed: %#v", managed)
+	}
+	managedRaw, err := json.Marshal(managed.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var managedPayload struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := json.Unmarshal(managedRaw, &managedPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(managedPayload.Visibility.SharedTeams) != 1 || managedPayload.Visibility.SharedTeams[0].ID != newTeam.ID || !managedPayload.Visibility.Public || !strings.HasPrefix(managedPayload.Visibility.PublicURL, "https://agentbox.example/share/agpub_") {
+		t.Fatalf("managed visibility = %#v", managedPayload.Visibility)
+	}
+	if len(managedPayload.Visibility.AvailableTeams) != 2 {
+		t.Fatalf("available teams = %#v", managedPayload.Visibility.AvailableTeams)
+	}
+	readVisibility, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "manage_thread_visibility",
+		Arguments: map[string]any{"thread_id": payload.Thread.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readRaw, _ := json.Marshal(readVisibility.StructuredContent)
+	if !strings.Contains(string(readRaw), managedPayload.Visibility.PublicURL) {
+		t.Fatalf("visibility read did not redisplay public URL: %s", readRaw)
 	}
 
 	search, err := session.CallTool(ctx, &mcp.CallToolParams{
@@ -252,6 +335,16 @@ func TestMCPToolsUseUserAuthContext(t *testing.T) {
 	}
 	if !crossUser.IsError {
 		t.Fatalf("expected cross-user get_thread to fail, got %#v", crossUser)
+	}
+	crossVisibility, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "manage_thread_visibility",
+		Arguments: map[string]any{"thread_id": threadB.ID, "public": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !crossVisibility.IsError {
+		t.Fatalf("expected cross-user visibility mutation to fail, got %#v", crossVisibility)
 	}
 }
 

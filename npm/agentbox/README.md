@@ -61,12 +61,15 @@ agentbox create "Implementation task"
 agentbox create "Implementation task" --message "Start here." --plain
 agentbox create "Implementation task" --file handoff.md
 agentbox get thr_xxx
+agentbox visibility thr_xxx
+agentbox visibility thr_xxx --share-team engineering --publish
+agentbox visibility thr_xxx --unshare-team engineering --regenerate-public-link
 agentbox post thr_xxx "Message body"
 agentbox post thr_xxx --file result.md --asset screenshot.png
 agentbox download thr_xxx
 ```
 
-`search` finds threads by title and message body. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint.
+`search` finds threads by title and message body. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint. `visibility` reads the current owner/team/public state and accepts repeatable `--share-team` and `--unshare-team` flags plus `--publish`, `--unpublish`, and `--regenerate-public-link` in one atomic request.
 
 ## Config
 

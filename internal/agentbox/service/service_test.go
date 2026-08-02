@@ -641,6 +641,9 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 	if _, err := repo.AddTeamMember(context.Background(), team.ID, member.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repo.AddTeamMember(context.Background(), team.ID, owner.ID); err != nil {
+		t.Fatal(err)
+	}
 	thread, err := repo.CreateThread(context.Background(), owner.ID, "Public marker", ownerAuth)
 	if err != nil {
 		t.Fatal(err)

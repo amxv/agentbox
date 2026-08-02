@@ -139,6 +139,23 @@ for update of t
 	if err != nil {
 		return types.ThreadVisibility{}, err
 	}
+	currentTeams, err := listThreadTeamsTx(ctx, tx, threadID)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	currentTeamIDs := make(map[string]struct{}, len(currentTeams))
+	for _, team := range currentTeams {
+		currentTeamIDs[team.ID] = struct{}{}
+	}
+	additionIDs := make([]string, 0, len(teamIDs))
+	for _, teamID := range teamIDs {
+		if _, exists := currentTeamIDs[teamID]; !exists {
+			additionIDs = append(additionIDs, teamID)
+		}
+	}
+	if err := requireUserTeamMembershipsTx(ctx, tx, userID, additionIDs); err != nil {
+		return types.ThreadVisibility{}, err
+	}
 	if _, err := tx.Exec(ctx, `
 delete from thread_team_shares
 where thread_id = $1
@@ -177,10 +194,281 @@ order by lower(t.name), lower(t.slug), t.id
 	return scanTeams(rows)
 }
 
+func listThreadTeamsTx(ctx context.Context, tx pgx.Tx, threadID string) ([]types.Team, error) {
+	rows, err := tx.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join thread_team_shares share on share.team_id = t.id
+where share.thread_id = $1
+order by lower(t.name), lower(t.slug), t.id
+`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTeams(rows)
+}
+
+func listUserTeamsTx(ctx context.Context, tx pgx.Tx, userID string) ([]types.Team, error) {
+	rows, err := tx.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join team_memberships membership on membership.team_id = t.id
+where membership.user_id = $1
+order by lower(t.name), lower(t.slug), t.id
+`, strings.TrimSpace(userID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTeams(rows)
+}
+
+func requireUserTeamMembershipsTx(ctx context.Context, tx pgx.Tx, userID string, teamIDs []string) error {
+	teamIDs = uniqueNonEmptyStrings(teamIDs)
+	if len(teamIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+select membership.team_id
+from team_memberships membership
+join teams team on team.id = membership.team_id
+where membership.user_id = $1
+  and membership.team_id = any($2::text[])
+for key share of membership, team
+`, strings.TrimSpace(userID), teamIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count != len(teamIDs) {
+		return types.ErrThreadVisibilityTeamUnavailable
+	}
+	return nil
+}
+
+func (r *Repository) ManageThreadVisibility(ctx context.Context, userID string, threadID string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error) {
+	input.AddTeams = uniqueNonEmptyStrings(input.AddTeams)
+	input.RemoveTeams = uniqueNonEmptyStrings(input.RemoveTeams)
+	mutation := len(input.AddTeams) > 0 || len(input.RemoveTeams) > 0 || input.Public != nil || input.RegeneratePublicLink
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	state := types.ManagedThreadVisibility{ThreadID: threadID}
+	threadQuery := `
+select t.owner_user_id
+from threads t
+where ` + normalThreadAccessPredicate + ` and t.id = $2`
+	if mutation {
+		threadQuery += ` for update of t`
+	}
+	if err := tx.QueryRow(ctx, threadQuery, userID, threadID).Scan(&state.OwnerUserID); errors.Is(err, pgx.ErrNoRows) {
+		return types.ManagedThreadVisibility{}, types.ErrThreadNotFound
+	} else if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+
+	availableTeams, err := listUserTeamsTx(ctx, tx, userID)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	currentTeams, err := listThreadTeamsTx(ctx, tx, threadID)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	addTeamIDs, err := resolveTeamReferences(input.AddTeams, availableTeams, true)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	removeTeamIDs, err := resolveTeamReferences(input.RemoveTeams, currentTeams, false)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	if stringSetsOverlap(addTeamIDs, removeTeamIDs) {
+		return types.ManagedThreadVisibility{}, types.ErrThreadVisibilityConflict
+	}
+	if err := requireUserTeamMembershipsTx(ctx, tx, userID, addTeamIDs); err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+
+	if len(removeTeamIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+delete from thread_team_shares
+where thread_id = $1 and team_id = any($2::text[])
+`, threadID, removeTeamIDs); err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
+	}
+	for _, teamID := range addTeamIDs {
+		if _, err := tx.Exec(ctx, `
+insert into thread_team_shares (thread_id, team_id, created_by_user_id)
+values ($1, $2, $3)
+on conflict (thread_id, team_id) do nothing
+`, threadID, teamID, userID); err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
+	}
+
+	activeLink, err := getActiveThreadPublicLinkTx(ctx, tx, threadID)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	if input.Public != nil && !*input.Public {
+		if input.RegeneratePublicLink {
+			return types.ManagedThreadVisibility{}, types.ErrThreadVisibilityConflict
+		}
+		if activeLink != nil {
+			if _, err := tx.Exec(ctx, `
+update thread_public_links
+set revoked_at = now(), updated_at = now()
+where thread_id = $1 and revoked_at is null
+`, threadID); err != nil {
+				return types.ManagedThreadVisibility{}, err
+			}
+			activeLink = nil
+		}
+	} else {
+		createOrRotate := false
+		if input.RegeneratePublicLink {
+			if activeLink == nil && input.Public == nil {
+				return types.ManagedThreadVisibility{}, types.ErrThreadPublicLinkNotFound
+			}
+			createOrRotate = true
+		} else if input.Public != nil && *input.Public && activeLink == nil {
+			createOrRotate = true
+		}
+		if createOrRotate {
+			if strings.TrimSpace(input.PublicToken) == "" || strings.TrimSpace(input.PublicTokenHash) == "" || strings.TrimSpace(input.PublicTokenPrefix) == "" {
+				return types.ManagedThreadVisibility{}, errors.New("public token material is required")
+			}
+			link, err := upsertThreadPublicLinkTx(ctx, tx, threadID, userID, input.PublicToken, input.PublicTokenHash, input.PublicTokenPrefix)
+			if err != nil {
+				return types.ManagedThreadVisibility{}, err
+			}
+			activeLink = &link
+		}
+	}
+
+	state.SharedTeams, err = listThreadTeamsTx(ctx, tx, threadID)
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	state.AvailableTeams = availableTeams
+	state.PublicLink = activeLink
+	state.Public = activeLink != nil
+	if err := tx.Commit(ctx); err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	return state, nil
+}
+
+func getActiveThreadPublicLinkTx(ctx context.Context, tx pgx.Tx, threadID string) (*types.ThreadPublicLink, error) {
+	link, err := scanThreadPublicLink(tx.QueryRow(ctx, `
+select
+  link.thread_id,
+  coalesce(link.token_value, ''),
+  link.token_hash,
+  link.token_prefix,
+  link.created_by_user_id,
+  link.created_at,
+  link.updated_at,
+  link.revoked_at
+from thread_public_links link
+where link.thread_id = $1 and link.revoked_at is null
+`, threadID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &link, nil
+}
+
+func upsertThreadPublicLinkTx(ctx context.Context, tx pgx.Tx, threadID string, userID string, token string, tokenHash string, tokenPrefix string) (types.ThreadPublicLink, error) {
+	return scanThreadPublicLink(tx.QueryRow(ctx, `
+insert into thread_public_links (
+  thread_id, token_value, token_hash, token_prefix, created_by_user_id
+)
+values ($1, $2, $3, $4, $5)
+on conflict (thread_id) do update
+set token_value = excluded.token_value,
+    token_hash = excluded.token_hash,
+    token_prefix = excluded.token_prefix,
+    created_by_user_id = excluded.created_by_user_id,
+    updated_at = now(),
+    revoked_at = null
+returning
+  thread_id,
+  coalesce(token_value, ''),
+  token_hash,
+  token_prefix,
+  created_by_user_id,
+  created_at,
+  updated_at,
+  revoked_at
+`, threadID, token, tokenHash, tokenPrefix, userID))
+}
+
+func resolveTeamReferences(refs []string, teams []types.Team, requireAll bool) ([]string, error) {
+	byID := make(map[string]string, len(teams))
+	bySlug := make(map[string]string, len(teams))
+	for _, team := range teams {
+		byID[team.ID] = team.ID
+		bySlug[strings.ToLower(team.Slug)] = team.ID
+	}
+	resolved := make([]string, 0, len(refs))
+	seen := map[string]struct{}{}
+	for _, raw := range refs {
+		ref := strings.TrimSpace(raw)
+		teamID := byID[ref]
+		if teamID == "" {
+			teamID = bySlug[strings.ToLower(ref)]
+		}
+		if teamID == "" {
+			if requireAll {
+				return nil, types.ErrThreadVisibilityTeamUnavailable
+			}
+			continue
+		}
+		if _, exists := seen[teamID]; exists {
+			continue
+		}
+		seen[teamID] = struct{}{}
+		resolved = append(resolved, teamID)
+	}
+	return resolved, nil
+}
+
+func stringSetsOverlap(left []string, right []string) bool {
+	values := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		values[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, exists := values[value]; exists {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Repository) GetThreadPublicLink(ctx context.Context, userID string, threadID string) (*types.ThreadPublicLink, error) {
 	link, err := scanThreadPublicLink(r.pool.QueryRow(ctx, `
 select
   link.thread_id,
+  coalesce(link.token_value, ''),
   link.token_hash,
   link.token_prefix,
   link.created_by_user_id,
@@ -202,7 +490,7 @@ where `+normalThreadAccessPredicate+`
 	return &link, nil
 }
 
-func (r *Repository) CreateThreadPublicLink(ctx context.Context, userID string, threadID string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
+func (r *Repository) CreateThreadPublicLink(ctx context.Context, userID string, threadID string, token string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return types.ThreadPublicLink{}, err
@@ -237,24 +525,26 @@ select exists (
 
 	link, err := scanThreadPublicLink(tx.QueryRow(ctx, `
 insert into thread_public_links (
-  thread_id, token_hash, token_prefix, created_by_user_id
+  thread_id, token_value, token_hash, token_prefix, created_by_user_id
 )
-values ($1, $2, $3, $4)
+values ($1, $2, $3, $4, $5)
 on conflict (thread_id) do update
-set token_hash = excluded.token_hash,
+set token_value = excluded.token_value,
+    token_hash = excluded.token_hash,
     token_prefix = excluded.token_prefix,
     created_by_user_id = excluded.created_by_user_id,
     updated_at = now(),
     revoked_at = null
 returning
   thread_id,
+  token_value,
   token_hash,
   token_prefix,
   created_by_user_id,
   created_at,
   updated_at,
   revoked_at
-`, threadID, tokenHash, tokenPrefix, userID))
+`, threadID, token, tokenHash, tokenPrefix, userID))
 	if err != nil {
 		return types.ThreadPublicLink{}, err
 	}
@@ -2290,6 +2580,7 @@ func scanThreadPublicLink(row threadScanner) (types.ThreadPublicLink, error) {
 	link := types.ThreadPublicLink{}
 	err := row.Scan(
 		&link.ThreadID,
+		&link.Token,
 		&link.TokenHash,
 		&link.TokenPrefix,
 		&link.CreatedByUserID,

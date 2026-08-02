@@ -65,6 +65,7 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "signed-in profile's user"}},
 		{[]string{"search", "--help"}, []string{"Usage: agentbox search <query>", "message counts"}},
 		{[]string{"create", "--help"}, []string{"--message <body>", "first message"}},
+		{[]string{"visibility", "--help"}, []string{"Usage: agentbox visibility <thread-id>", "atomically change", "--share-team"}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
@@ -296,6 +297,148 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Initial CLI thread") || !strings.Contains(out.String(), "first message from cli") {
 		t.Fatalf("search text output = %s", out.String())
+	}
+}
+
+func TestCLIVisibilityReadsAndMutatesAtomically(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	repo := &db.MemoryRepository{}
+	authContext := types.AuthContext{
+		TenantID:        types.DefaultTenantID,
+		UserID:          "usr_visibility_cli",
+		UserDisplayName: "Visibility CLI",
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorName:       "Web dashboard",
+		Role:            "member",
+	}
+	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, TenantID: types.DefaultTenantID, Email: "visibility-cli@example.com", DisplayName: authContext.UserDisplayName, Role: "member"})
+	svc := service.New(repo, &assets.FakeStore{})
+	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use"}); err != nil {
+		t.Fatal(err)
+	}
+	repo.APIKeys[0].Key = "visibility-dev-key"
+	repo.APIKeys[0].TokenHash = dbHashForTest("visibility-dev-key")
+	svc = service.New(repo, &assets.FakeStore{})
+
+	oldTeam, err := repo.CreateTeam(t.Context(), "cli-old", "CLI Old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTeam, err := repo.CreateTeam(t.Context(), "cli-new", "CLI New")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailableTeam, err := repo.CreateTeam(t.Context(), "cli-unavailable", "CLI Unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, teamID := range []string{oldTeam.ID, newTeam.ID} {
+		if _, err := repo.AddTeamMember(t.Context(), teamID, authContext.UserID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread, err := svc.CreateThread(t.Context(), authContext, "CLI visibility thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(t.Context(), authContext.UserID, thread.ID, []string{oldTeam.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(httpapi.NewServer(config.Config{AppPublicURL: "https://agentbox.example"}, svc))
+	defer server.Close()
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "visibility", "--base-url", server.URL, "--api-key", "visibility-dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: code=%d stderr=%s", code, stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID}); code != 0 {
+		t.Fatalf("visibility read failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "CLI Old (cli-old)") || !strings.Contains(out.String(), "CLI New (cli-new)") || !strings.Contains(out.String(), "Public: Off") {
+		t.Fatalf("visibility text output=%s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{
+		"visibility", thread.ID,
+		"--share-team", "cli-new",
+		"--share-team", newTeam.ID,
+		"--unshare-team", oldTeam.ID,
+		"--publish",
+		"--json",
+	}); code != 0 {
+		t.Fatalf("visibility mutation failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var mutated struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &mutated); err != nil {
+		t.Fatal(err)
+	}
+	if len(mutated.Visibility.SharedTeams) != 1 || mutated.Visibility.SharedTeams[0].ID != newTeam.ID || !mutated.Visibility.Public || !strings.HasPrefix(mutated.Visibility.PublicURL, "https://agentbox.example/share/agpub_") {
+		t.Fatalf("visibility mutation=%#v", mutated.Visibility)
+	}
+	firstPublicURL := mutated.Visibility.PublicURL
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--json"}); code != 0 {
+		t.Fatalf("visibility redisplay failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), firstPublicURL) || !strings.Contains(out.String(), `"slug": "cli-new"`) {
+		t.Fatalf("visibility redisplay output=%s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--regenerate-public-link", "--json"}); code != 0 {
+		t.Fatalf("visibility regenerate failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var regenerated struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &regenerated); err != nil {
+		t.Fatal(err)
+	}
+	if regenerated.Visibility.PublicURL == "" || regenerated.Visibility.PublicURL == firstPublicURL {
+		t.Fatalf("regenerated visibility=%#v", regenerated.Visibility)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--publish", "--unpublish"}); code == 0 {
+		t.Fatal("conflicting public flags unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr.String(), "Use only one of --publish or --unpublish") {
+		t.Fatalf("conflicting public flags stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--share-team", unavailableTeam.Slug}); code == 0 {
+		t.Fatal("unavailable team share unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr.String(), "TEAM_NOT_AVAILABLE") {
+		t.Fatalf("unavailable team stderr=%s", stderr.String())
+	}
+	state, err := repo.ManageThreadVisibility(t.Context(), authContext.UserID, thread.ID, types.ManageThreadVisibilityInput{})
+	if err != nil || len(state.SharedTeams) != 1 || state.SharedTeams[0].ID != newTeam.ID || !state.Public {
+		t.Fatalf("failed mutation changed state=%#v err=%v", state, err)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--unpublish", "--json"}); code != 0 {
+		t.Fatalf("visibility unpublish failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(out.String(), `"public": true`) || !strings.Contains(out.String(), `"public": false`) {
+		t.Fatalf("unpublish output=%s", out.String())
 	}
 }
 

@@ -1366,6 +1366,9 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 	if _, err := repo.AddTeamMember(t.Context(), team.ID, authB.UserID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repo.AddTeamMember(t.Context(), team.ID, authA.UserID); err != nil {
+		t.Fatal(err)
+	}
 	keyA, err := svc.CreateAPIKey(t.Context(), authA, "agent-a")
 	if err != nil {
 		t.Fatal(err)
@@ -1528,6 +1531,9 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	if _, err := repo.AddTeamMember(t.Context(), team.ID, memberAuth.UserID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repo.AddTeamMember(t.Context(), team.ID, ownerAuth.UserID); err != nil {
+		t.Fatal(err)
+	}
 	ownerKey, err := svc.CreateAPIKey(t.Context(), ownerAuth, "public-owner")
 	if err != nil {
 		t.Fatal(err)
@@ -1613,7 +1619,7 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 		t.Fatalf("duplicate public-link status=%d body=%s", duplicate.Code, duplicate.Body.String())
 	}
 	metadata := request(http.MethodGet, "/api/threads/"+thread.ID+"/public-link", ownerKey.Key, "")
-	if metadata.Code != http.StatusOK || strings.Contains(metadata.Body.String(), created.Token) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
+	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"public_url":"`+created.PublicURL+`"`) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
 		t.Fatalf("public-link metadata status=%d body=%s", metadata.Code, metadata.Body.String())
 	}
 

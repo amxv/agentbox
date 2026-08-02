@@ -29,8 +29,9 @@ type Repository interface {
 	ResolveThreadAccess(ctx context.Context, userID string, threadID string) (*types.ThreadAccess, error)
 	GetThreadVisibility(ctx context.Context, userID string, threadID string) (*types.ThreadVisibility, error)
 	SetThreadVisibility(ctx context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error)
+	ManageThreadVisibility(ctx context.Context, userID string, threadID string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
 	GetThreadPublicLink(ctx context.Context, userID string, threadID string) (*types.ThreadPublicLink, error)
-	CreateThreadPublicLink(ctx context.Context, userID string, threadID string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error)
+	CreateThreadPublicLink(ctx context.Context, userID string, threadID string, token string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error)
 	RevokeThreadPublicLink(ctx context.Context, userID string, threadID string) (bool, error)
 	GetThreadByPublicTokenHash(ctx context.Context, tokenHash string) (*types.ThreadWithMessages, error)
 	GetAssetByPublicTokenHash(ctx context.Context, tokenHash string, assetID string) (*types.Asset, error)
@@ -206,10 +207,65 @@ func (s *Service) SetThreadVisibility(ctx context.Context, auth types.AuthContex
 	if errors.Is(err, types.ErrTeamNotFound) {
 		return types.ThreadVisibility{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "One or more selected teams no longer exist.", Err: err}
 	}
+	if errors.Is(err, types.ErrThreadVisibilityTeamUnavailable) {
+		return types.ThreadVisibility{}, CodedError{Code: "TEAM_NOT_AVAILABLE", Message: "A thread can be shared only with teams the acting user currently belongs to.", Err: err}
+	}
 	if err != nil {
 		return types.ThreadVisibility{}, err
 	}
 	return visibility, nil
+}
+
+func (s *Service) ManageThreadVisibility(ctx context.Context, auth types.AuthContext, threadID string, baseURL string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error) {
+	mutation := len(input.AddTeams) > 0 || len(input.RemoveTeams) > 0 || input.Public != nil || input.RegeneratePublicLink
+	if mutation {
+		if err := requireScope(auth, "threads:write"); err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
+	} else if err := requireScope(auth, "threads:read"); err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+
+	threadID = strings.TrimSpace(threadID)
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if threadID == "" {
+		return types.ManagedThreadVisibility{}, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
+	}
+	input.AddTeams = uniqueTrimmedStrings(input.AddTeams)
+	input.RemoveTeams = uniqueTrimmedStrings(input.RemoveTeams)
+	if input.Public != nil && !*input.Public && input.RegeneratePublicLink {
+		return types.ManagedThreadVisibility{}, CodedError{Code: "INVALID_ARGUMENT", Message: "regenerate_public_link cannot be combined with public=false."}
+	}
+	if (input.Public != nil && *input.Public) || input.RegeneratePublicLink {
+		token, err := generatePublicToken()
+		if err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
+		input.PublicToken = token
+		input.PublicTokenHash = hashSecret(token)
+		input.PublicTokenPrefix = tokenPrefix(token)
+	}
+
+	state, err := s.repo.ManageThreadVisibility(ctx, auth.UserID, threadID, input)
+	if errors.Is(err, types.ErrThreadNotFound) {
+		return types.ManagedThreadVisibility{}, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	if errors.Is(err, types.ErrThreadVisibilityTeamUnavailable) {
+		return types.ManagedThreadVisibility{}, CodedError{Code: "TEAM_NOT_AVAILABLE", Message: "A thread can be shared only with teams the acting user currently belongs to.", Err: err}
+	}
+	if errors.Is(err, types.ErrThreadVisibilityConflict) {
+		return types.ManagedThreadVisibility{}, CodedError{Code: "INVALID_ARGUMENT", Message: "A team cannot be both added and removed, and a public link cannot be regenerated while unpublishing.", Err: err}
+	}
+	if errors.Is(err, types.ErrThreadPublicLinkNotFound) {
+		return types.ManagedThreadVisibility{}, CodedError{Code: "PUBLIC_LINK_NOT_FOUND", Message: "No active public link exists to regenerate.", Err: err}
+	}
+	if err != nil {
+		return types.ManagedThreadVisibility{}, err
+	}
+	if state.PublicLink != nil && strings.TrimSpace(state.PublicLink.Token) != "" && baseURL != "" {
+		state.PublicURL = publicThreadURL(baseURL, state.PublicLink.Token)
+	}
+	return state, nil
 }
 
 type ThreadPublicLinkResult struct {
@@ -249,7 +305,7 @@ func (s *Service) CreateThreadPublicLink(ctx context.Context, auth types.AuthCon
 	if err != nil {
 		return ThreadPublicLinkResult{}, err
 	}
-	link, err := s.repo.CreateThreadPublicLink(ctx, auth.UserID, threadID, hashSecret(token), tokenPrefix(token), rotate)
+	link, err := s.repo.CreateThreadPublicLink(ctx, auth.UserID, threadID, token, hashSecret(token), tokenPrefix(token), rotate)
 	if errors.Is(err, types.ErrThreadNotFound) {
 		return ThreadPublicLinkResult{}, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
 	}
@@ -262,8 +318,16 @@ func (s *Service) CreateThreadPublicLink(ctx context.Context, auth types.AuthCon
 	return ThreadPublicLinkResult{
 		Link:      link,
 		Token:     token,
-		PublicURL: baseURL + "/share/" + url.PathEscape(token),
+		PublicURL: publicThreadURL(baseURL, token),
 	}, nil
+}
+
+func publicThreadURL(baseURL string, token string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" || strings.TrimSpace(token) == "" {
+		return ""
+	}
+	return baseURL + "/share/" + url.PathEscape(token)
 }
 
 func (s *Service) RevokeThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string) error {

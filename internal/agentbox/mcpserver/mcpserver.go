@@ -17,19 +17,24 @@ import (
 )
 
 type Server struct {
-	auth types.AuthContext
-	svc  *service.Service
+	auth    types.AuthContext
+	svc     *service.Service
+	baseURL string
 }
 
-func New(auth types.AuthContext, svc *service.Service) *mcp.Server {
-	builder := &Server{auth: auth, svc: svc}
+func New(auth types.AuthContext, svc *service.Service, baseURLs ...string) *mcp.Server {
+	baseURL := ""
+	if len(baseURLs) > 0 {
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURLs[0]), "/")
+	}
+	builder := &Server{auth: auth, svc: svc, baseURL: baseURL}
 	return builder.build()
 }
 
-func NewHTTPHandler(auth types.AuthContext, svc *service.Service) http.Handler {
+func NewHTTPHandler(auth types.AuthContext, svc *service.Service, baseURLs ...string) http.Handler {
 	return mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
-			return New(auth, svc)
+			return New(auth, svc, baseURLs...)
 		},
 		&mcp.StreamableHTTPOptions{
 			Stateless:                  true,
@@ -130,6 +135,28 @@ func (s *Server) build() *mcp.Server {
 		}, []string{"message"}),
 		Annotations: annotations(false, false, true),
 	}, s.postMessage)
+	server.AddTool(&mcp.Tool{
+		Name:        "manage_thread_visibility",
+		Title:       "Manage thread visibility",
+		Description: "Read or atomically change a thread's team shares and public read-only link. With only thread_id, returns the current visibility and teams available to the acting user.",
+		InputSchema: objectSchema(map[string]any{
+			"thread_id": map[string]any{"type": "string", "minLength": 1},
+			"add_teams": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string", "minLength": 1},
+			},
+			"remove_teams": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string", "minLength": 1},
+			},
+			"public":                 map[string]any{"type": "boolean"},
+			"regenerate_public_link": map[string]any{"type": "boolean"},
+		}, []string{"thread_id"}),
+		OutputSchema: objectSchema(map[string]any{
+			"visibility": map[string]any{},
+		}, []string{"visibility"}),
+		Annotations: annotations(false, true, false),
+	}, s.manageThreadVisibility)
 	return server
 }
 
@@ -248,6 +275,36 @@ func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mc
 		return errorResult(err), nil
 	}
 	return result("Posted message to Agentbox.", map[string]any{"message": message}), nil
+}
+
+func (s *Server) manageThreadVisibility(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		ThreadID             string   `json:"thread_id"`
+		AddTeams             []string `json:"add_teams"`
+		RemoveTeams          []string `json:"remove_teams"`
+		Public               *bool    `json:"public"`
+		RegeneratePublicLink bool     `json:"regenerate_public_link"`
+	}
+	if err := decodeArgs(req, &input); err != nil {
+		return errorResult(err), nil
+	}
+	if err := validate.ThreadID(input.ThreadID); err != nil {
+		return errorResult(err), nil
+	}
+	visibility, err := s.svc.ManageThreadVisibility(ctx, s.auth, input.ThreadID, s.baseURL, types.ManageThreadVisibilityInput{
+		AddTeams:             input.AddTeams,
+		RemoveTeams:          input.RemoveTeams,
+		Public:               input.Public,
+		RegeneratePublicLink: input.RegeneratePublicLink,
+	})
+	if err != nil {
+		return errorResult(err), nil
+	}
+	status := "Read Agentbox thread visibility."
+	if len(input.AddTeams) > 0 || len(input.RemoveTeams) > 0 || input.Public != nil || input.RegeneratePublicLink {
+		status = "Updated Agentbox thread visibility."
+	}
+	return result(status, map[string]any{"visibility": visibility}), nil
 }
 
 func parseFileInput(raw json.RawMessage) (*assets.ChatGPTFileInput, error) {

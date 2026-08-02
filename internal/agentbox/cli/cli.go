@@ -86,6 +86,21 @@ type doctorCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type repeatedStringFlag []string
+
+func (values *repeatedStringFlag) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *repeatedStringFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("team identifier must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
+
 func Main(args []string) int {
 	return NewRunner().Run(args)
 }
@@ -188,6 +203,8 @@ func (r *Runner) run(args []string) error {
 		return r.runCreate(cmdArgs, *profileName)
 	case "get":
 		return r.runGet(cmdArgs, *profileName)
+	case "visibility":
+		return r.runVisibility(cmdArgs, *profileName)
 	case "download":
 		return r.runDownload(cmdArgs, *profileName)
 	case "post":
@@ -222,6 +239,7 @@ Commands:
   search <query>          search threads by title and message body
   create <title>          create a thread
   get <thread-id>         read a thread
+  visibility <thread-id>  inspect or change thread visibility
   download <thread-id>    download all attachments from a thread
   post <thread-id>        post a message to a thread
 
@@ -287,6 +305,9 @@ Create a new Agentbox thread. Use --message or --file to create the first messag
 		"get": `Usage: agentbox get <thread-id> [--json]
 
 Read an Agentbox thread and its messages.`,
+		"visibility": `Usage: agentbox visibility <thread-id> [--share-team <slug-or-id>] [--unshare-team <slug-or-id>] [--publish | --unpublish] [--regenerate-public-link] [--json]
+
+Read or atomically change a thread's team shares and public read-only link. Team flags may be repeated. Without mutation flags, prints the current visibility and teams available to the acting user.`,
 		"download": `Usage: agentbox download <thread-id> [-o <dir>] [--json]
 
 Download all attachments from a thread to a local directory.`,
@@ -705,6 +726,96 @@ func (r *Runner) runGet(args []string, profileName string) error {
 	}
 	printThread(r.Stdout, data.Thread)
 	return nil
+}
+
+func (r *Runner) runVisibility(args []string, profileName string) error {
+	fs := newFlagSet("visibility")
+	var shareTeams repeatedStringFlag
+	var unshareTeams repeatedStringFlag
+	fs.Var(&shareTeams, "share-team", "share with a team slug or ID; may be repeated")
+	fs.Var(&unshareTeams, "unshare-team", "remove a team share by slug or ID; may be repeated")
+	publish := fs.Bool("publish", false, "enable the public read-only link")
+	unpublish := fs.Bool("unpublish", false, "disable the public read-only link")
+	regenerate := fs.Bool("regenerate-public-link", false, "replace the active public link")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox visibility <thread-id> [--share-team <slug-or-id>] [--unshare-team <slug-or-id>] [--publish | --unpublish] [--regenerate-public-link] [--json]")
+	}
+	if *publish && *unpublish {
+		return errors.New("Use only one of --publish or --unpublish.")
+	}
+	if *unpublish && *regenerate {
+		return errors.New("--regenerate-public-link cannot be combined with --unpublish.")
+	}
+
+	threadID := strings.TrimSpace(fs.Arg(0))
+	path := "/api/threads/" + url.PathEscape(threadID) + "/visibility"
+	mutation := len(shareTeams) > 0 || len(unshareTeams) > 0 || *publish || *unpublish || *regenerate
+	method := http.MethodGet
+	var body io.Reader
+	headers := map[string]string(nil)
+	if mutation {
+		method = http.MethodPatch
+		payload := types.ManageThreadVisibilityInput{
+			AddTeams:             append([]string(nil), shareTeams...),
+			RemoveTeams:          append([]string(nil), unshareTeams...),
+			RegeneratePublicLink: *regenerate,
+		}
+		if *publish || *unpublish {
+			public := *publish
+			payload.Public = &public
+		}
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(payloadBytes)
+		headers = map[string]string{"content-type": "application/json"}
+	}
+	var data struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := r.request(path, method, body, headers, profileName, &data); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(r.Stdout, data)
+	}
+	printVisibility(r.Stdout, data.Visibility)
+	return nil
+}
+
+func printVisibility(w io.Writer, visibility types.ManagedThreadVisibility) {
+	fmt.Fprintf(w, "Thread: %s\n", visibility.ThreadID)
+	fmt.Fprintf(w, "Owner: %s\n", visibility.OwnerUserID)
+	if len(visibility.SharedTeams) == 0 {
+		fmt.Fprintln(w, "Team access: Private")
+	} else {
+		fmt.Fprintln(w, "Team access:")
+		for _, team := range visibility.SharedTeams {
+			fmt.Fprintf(w, "- %s (%s)\n", team.Name, team.Slug)
+		}
+	}
+	if visibility.Public {
+		if visibility.PublicURL != "" {
+			fmt.Fprintf(w, "Public: %s\n", visibility.PublicURL)
+		} else {
+			fmt.Fprintln(w, "Public: On")
+		}
+	} else {
+		fmt.Fprintln(w, "Public: Off")
+	}
+	if len(visibility.AvailableTeams) == 0 {
+		fmt.Fprintln(w, "Available teams: none")
+		return
+	}
+	fmt.Fprintln(w, "Available teams:")
+	for _, team := range visibility.AvailableTeams {
+		fmt.Fprintf(w, "- %s (%s)\n", team.Name, team.Slug)
+	}
 }
 
 func (r *Runner) runDownload(args []string, profileName string) error {
