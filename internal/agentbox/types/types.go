@@ -1,6 +1,9 @@
 package types
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
 var ErrOwnerSetupTokenInvalid = errors.New("owner setup token is invalid or expired")
@@ -8,6 +11,7 @@ var ErrSignupInvitationInvalid = errors.New("signup invitation is invalid or exp
 var ErrEmailAlreadyRegistered = errors.New("email is already registered")
 var ErrUserNotFound = errors.New("user not found")
 var ErrUserDisabled = errors.New("user is disabled")
+var ErrUserMustBeDisabled = errors.New("user must be disabled")
 var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
 var ErrThreadNotFound = errors.New("Thread not found.")
 var ErrTeamNotFound = errors.New("team not found")
@@ -18,6 +22,7 @@ var ErrThreadPublicLinkExists = errors.New("thread public link already exists")
 var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
 var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
 var ErrThreadVisibilityConflict = errors.New("the same team cannot be added and removed in one visibility change")
+var ErrPendingUploadUnavailable = errors.New("pending upload is unavailable, expired, or already consumed")
 
 type Actor struct {
 	Name    string `json:"name"`
@@ -111,7 +116,9 @@ type TeamMembership struct {
 
 type TeamWithMembers struct {
 	Team
-	Members []User `json:"members"`
+	Members     []User   `json:"members"`
+	MemberCount int      `json:"member_count"`
+	MembersPage PageInfo `json:"members_page"`
 }
 
 type OnboardingStep struct {
@@ -234,7 +241,10 @@ type PublicAsset struct {
 	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
 	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
 	PurgedAt                 *string `json:"purged_at,omitempty"`
+	Unavailable              bool    `json:"unavailable,omitempty"`
+	UnavailableReason        string  `json:"unavailable_reason,omitempty"`
 	DownloadPath             string  `json:"download_path,omitempty"`
+	PreviewPath              string  `json:"preview_path,omitempty"`
 }
 
 type PublicMessage struct {
@@ -275,9 +285,25 @@ type Asset struct {
 	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
 	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
 	PurgedAt                 *string `json:"purged_at,omitempty"`
+	Unavailable              bool    `json:"unavailable,omitempty"`
+	UnavailableReason        string  `json:"unavailable_reason,omitempty"`
 	PurgedByUserID           *string `json:"-"`
 	PurgeLastAttemptAt       *string `json:"-"`
 	PurgeError               *string `json:"-"`
+}
+
+type AssetAuthorizationLease interface {
+	Asset() Asset
+	Close(ctx context.Context) error
+}
+
+type PublicThreadAuthorizationLease interface {
+	Thread() ThreadWithMessages
+	Close(ctx context.Context) error
+}
+
+type AttachmentPurgeLease interface {
+	Close(ctx context.Context) error
 }
 
 type AssetPurgeCandidate struct {
@@ -337,6 +363,7 @@ type OwnerContentThreadDetail struct {
 
 type OwnerContentListParams struct {
 	Limit   int
+	Offset  int
 	UserID  string
 	TeamRef string
 }
@@ -344,6 +371,7 @@ type OwnerContentListParams struct {
 type OwnerContentSearchParams struct {
 	Query   string
 	Limit   int
+	Offset  int
 	UserID  string
 	TeamRef string
 }

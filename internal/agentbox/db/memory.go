@@ -5,13 +5,36 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"agentbox/internal/agentbox/identity"
 	"agentbox/internal/agentbox/types"
 	"github.com/google/uuid"
 )
 
+type memoryAssetLease struct{ asset types.Asset }
+
+func (l memoryAssetLease) Asset() types.Asset          { return l.asset }
+func (l memoryAssetLease) Close(context.Context) error { return nil }
+
+type memoryPublicThreadLease struct{ thread types.ThreadWithMessages }
+
+func (l memoryPublicThreadLease) Thread() types.ThreadWithMessages { return l.thread }
+func (l memoryPublicThreadLease) Close(context.Context) error      { return nil }
+
+type memoryAttachmentPurgeLease struct {
+	mutex *sync.Mutex
+	once  sync.Once
+}
+
+func (l *memoryAttachmentPurgeLease) Close(context.Context) error {
+	l.once.Do(func() { l.mutex.Unlock() })
+	return nil
+}
+
 type MemoryRepository struct {
+	purgeMutex        sync.Mutex
 	Threads           []types.Thread
 	Messages          []types.Message
 	Assets            []types.Asset
@@ -58,88 +81,6 @@ func (m *MemoryRepository) GetThreadVisibility(_ context.Context, userID string,
 		return &visibility, nil
 	}
 	return nil, nil
-}
-
-func (m *MemoryRepository) SetThreadVisibility(_ context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error) {
-	teamIDs = uniqueNonEmptyStrings(teamIDs)
-	var thread *types.Thread
-	for index := range m.Threads {
-		if m.Threads[index].ID == threadID && m.normalThreadAccess(m.Threads[index], userID) != nil {
-			thread = &m.Threads[index]
-			break
-		}
-	}
-	if thread == nil {
-		return types.ThreadVisibility{}, types.ErrThreadNotFound
-	}
-
-	desiredTeams := make([]types.Team, 0, len(teamIDs))
-	for _, teamID := range teamIDs {
-		found := false
-		for _, team := range m.Teams {
-			if team.ID == teamID {
-				desiredTeams = append(desiredTeams, team)
-				found = true
-				break
-			}
-		}
-		if !found {
-			return types.ThreadVisibility{}, types.ErrTeamNotFound
-		}
-	}
-	sort.SliceStable(desiredTeams, func(i, j int) bool {
-		if !strings.EqualFold(desiredTeams[i].Name, desiredTeams[j].Name) {
-			return strings.ToLower(desiredTeams[i].Name) < strings.ToLower(desiredTeams[j].Name)
-		}
-		if !strings.EqualFold(desiredTeams[i].Slug, desiredTeams[j].Slug) {
-			return strings.ToLower(desiredTeams[i].Slug) < strings.ToLower(desiredTeams[j].Slug)
-		}
-		return desiredTeams[i].ID < desiredTeams[j].ID
-	})
-
-	existing := map[string]types.ThreadTeamShare{}
-	for _, share := range m.ThreadTeamShares {
-		if share.ThreadID == threadID {
-			existing[share.TeamID] = share
-		}
-	}
-	availableTeams, err := m.ListUserTeams(context.Background(), userID)
-	if err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	additionRefs := make([]string, 0, len(teamIDs))
-	for _, teamID := range teamIDs {
-		if _, exists := existing[teamID]; !exists {
-			additionRefs = append(additionRefs, teamID)
-		}
-	}
-	if _, err := resolveTeamReferences(additionRefs, availableTeams, true); err != nil {
-		return types.ThreadVisibility{}, err
-	}
-
-	kept := make([]types.ThreadTeamShare, 0, len(m.ThreadTeamShares)+len(teamIDs))
-	for _, share := range m.ThreadTeamShares {
-		if share.ThreadID != threadID {
-			kept = append(kept, share)
-			continue
-		}
-	}
-	now := isoMillis(time.Now().UTC())
-	creator := userID
-	for _, teamID := range teamIDs {
-		if share, ok := existing[teamID]; ok {
-			kept = append(kept, share)
-			continue
-		}
-		kept = append(kept, types.ThreadTeamShare{
-			ThreadID:        threadID,
-			TeamID:          teamID,
-			CreatedByUserID: &creator,
-			CreatedAt:       now,
-		})
-	}
-	m.ThreadTeamShares = kept
-	return types.ThreadVisibility{ThreadID: threadID, OwnerUserID: thread.OwnerUserID, SharedTeams: desiredTeams}, nil
 }
 
 func (m *MemoryRepository) ManageThreadVisibility(_ context.Context, userID string, threadID string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error) {
@@ -278,93 +219,7 @@ func (m *MemoryRepository) ManageThreadVisibility(_ context.Context, userID stri
 	return state, nil
 }
 
-func (m *MemoryRepository) GetThreadPublicLink(_ context.Context, userID string, threadID string) (*types.ThreadPublicLink, error) {
-	for _, thread := range m.Threads {
-		if thread.ID != threadID || m.normalThreadAccess(thread, userID) == nil {
-			continue
-		}
-		for _, link := range m.ThreadPublicLinks {
-			if link.ThreadID == threadID && link.RevokedAt == nil {
-				copyLink := link
-				return &copyLink, nil
-			}
-		}
-		return nil, nil
-	}
-	return nil, nil
-}
-
-func (m *MemoryRepository) CreateThreadPublicLink(_ context.Context, userID string, threadID string, token string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
-	var accessible bool
-	for _, thread := range m.Threads {
-		if thread.ID == threadID && m.normalThreadAccess(thread, userID) != nil {
-			accessible = true
-			break
-		}
-	}
-	if !accessible {
-		return types.ThreadPublicLink{}, types.ErrThreadNotFound
-	}
-	for _, link := range m.ThreadPublicLinks {
-		if link.TokenHash == tokenHash && link.ThreadID != threadID {
-			return types.ThreadPublicLink{}, errors.New("public token hash already exists")
-		}
-	}
-	now := isoMillis(time.Now().UTC())
-	creator := userID
-	for index := range m.ThreadPublicLinks {
-		link := &m.ThreadPublicLinks[index]
-		if link.ThreadID != threadID {
-			continue
-		}
-		if link.RevokedAt == nil && !rotate {
-			return types.ThreadPublicLink{}, types.ErrThreadPublicLinkExists
-		}
-		link.TokenHash = tokenHash
-		link.Token = token
-		link.TokenPrefix = tokenPrefix
-		link.CreatedByUserID = &creator
-		link.UpdatedAt = now
-		link.RevokedAt = nil
-		return *link, nil
-	}
-	link := types.ThreadPublicLink{
-		ThreadID:        threadID,
-		Token:           token,
-		TokenHash:       tokenHash,
-		TokenPrefix:     tokenPrefix,
-		CreatedByUserID: &creator,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-	m.ThreadPublicLinks = append(m.ThreadPublicLinks, link)
-	return link, nil
-}
-
-func (m *MemoryRepository) RevokeThreadPublicLink(_ context.Context, userID string, threadID string) (bool, error) {
-	var accessible bool
-	for _, thread := range m.Threads {
-		if thread.ID == threadID && m.normalThreadAccess(thread, userID) != nil {
-			accessible = true
-			break
-		}
-	}
-	if !accessible {
-		return false, types.ErrThreadNotFound
-	}
-	now := isoMillis(time.Now().UTC())
-	for index := range m.ThreadPublicLinks {
-		link := &m.ThreadPublicLinks[index]
-		if link.ThreadID == threadID && link.RevokedAt == nil {
-			link.RevokedAt = &now
-			link.UpdatedAt = now
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (m *MemoryRepository) GetThreadByPublicTokenHash(_ context.Context, tokenHash string) (*types.ThreadWithMessages, error) {
+func (m *MemoryRepository) AcquirePublicThreadLease(_ context.Context, tokenHash string) (types.PublicThreadAuthorizationLease, error) {
 	threadID := ""
 	for _, link := range m.ThreadPublicLinks {
 		if link.TokenHash == tokenHash && link.RevokedAt == nil {
@@ -388,8 +243,7 @@ func (m *MemoryRepository) GetThreadByPublicTokenHash(_ context.Context, tokenHa
 			copyMessage.Assets = []types.Asset{}
 			for _, asset := range m.Assets {
 				if asset.MessageID == message.ID {
-					copyAsset := asset
-					copyMessage.Assets = append(copyMessage.Assets, copyAsset)
+					copyMessage.Assets = append(copyMessage.Assets, asset)
 				}
 			}
 			messages = append(messages, copyMessage)
@@ -400,16 +254,12 @@ func (m *MemoryRepository) GetThreadByPublicTokenHash(_ context.Context, tokenHa
 			}
 			return messages[i].ID < messages[j].ID
 		})
-		return &types.ThreadWithMessages{
-			Thread:     thread,
-			Messages:   messages,
-			Visibility: types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID},
-		}, nil
+		return memoryPublicThreadLease{thread: types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID}}}, nil
 	}
 	return nil, nil
 }
 
-func (m *MemoryRepository) GetAssetByPublicTokenHash(_ context.Context, tokenHash string, assetID string) (*types.Asset, error) {
+func (m *MemoryRepository) AcquirePublicAssetSigningLease(_ context.Context, tokenHash string, assetID string) (types.AssetAuthorizationLease, error) {
 	threadID := ""
 	for _, link := range m.ThreadPublicLinks {
 		if link.TokenHash == tokenHash && link.RevokedAt == nil {
@@ -420,23 +270,26 @@ func (m *MemoryRepository) GetAssetByPublicTokenHash(_ context.Context, tokenHas
 	if threadID == "" {
 		return nil, nil
 	}
-	messageIDs := map[string]struct{}{}
+	messageIDs := map[string]bool{}
 	for _, message := range m.Messages {
 		if message.ThreadID == threadID {
-			messageIDs[message.ID] = struct{}{}
+			messageIDs[message.ID] = true
 		}
 	}
 	for _, asset := range m.Assets {
-		if asset.ID != assetID {
-			continue
+		if asset.ID == assetID && messageIDs[asset.MessageID] {
+			return memoryAssetLease{asset: asset}, nil
 		}
-		if _, ok := messageIDs[asset.MessageID]; !ok {
-			return nil, nil
-		}
-		copyAsset := asset
-		return &copyAsset, nil
 	}
 	return nil, nil
+}
+
+func (m *MemoryRepository) AcquireAssetSigningLease(ctx context.Context, userID string, assetID string) (types.AssetAuthorizationLease, error) {
+	asset, err := m.GetAsset(ctx, userID, assetID)
+	if err != nil || asset == nil {
+		return nil, err
+	}
+	return memoryAssetLease{asset: *asset}, nil
 }
 
 func (m *MemoryRepository) threadVisibility(thread types.Thread) types.ThreadVisibility {
@@ -557,18 +410,26 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 	return results, nil
 }
 
-func (m *MemoryRepository) ListOwnerContentThreads(_ context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
-	return m.ownerContentThreads(ownerUserID, "", params.UserID, params.TeamRef, params.Limit), nil
+func (m *MemoryRepository) ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
+	page, err := m.ListOwnerContentThreadsPage(ctx, ownerUserID, params)
+	return page.Threads, err
 }
 
-func (m *MemoryRepository) SearchOwnerContentThreads(_ context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
-	return m.ownerContentThreads(ownerUserID, params.Query, params.UserID, params.TeamRef, params.Limit), nil
+func (m *MemoryRepository) SearchOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
+	page, err := m.SearchOwnerContentThreadsPage(ctx, ownerUserID, params)
+	return page.Threads, err
 }
 
-func (m *MemoryRepository) ownerContentThreads(ownerUserID string, query string, userID string, teamRef string, limit int) []types.OwnerContentThreadSummary {
-	if limit <= 0 {
-		limit = 50
-	}
+func (m *MemoryRepository) ListOwnerContentThreadsPage(_ context.Context, ownerUserID string, params types.OwnerContentListParams) (types.OwnerContentThreadPage, error) {
+	return m.ownerContentThreadsPage(ownerUserID, "", params.UserID, params.TeamRef, types.PageRequest{Limit: params.Limit, Offset: params.Offset}), nil
+}
+
+func (m *MemoryRepository) SearchOwnerContentThreadsPage(_ context.Context, ownerUserID string, params types.OwnerContentSearchParams) (types.OwnerContentThreadPage, error) {
+	return m.ownerContentThreadsPage(ownerUserID, params.Query, params.UserID, params.TeamRef, types.PageRequest{Limit: params.Limit, Offset: params.Offset}), nil
+}
+
+func (m *MemoryRepository) ownerContentThreadsPage(ownerUserID string, query string, userID string, teamRef string, pageRequest types.PageRequest) types.OwnerContentThreadPage {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	queryLower := strings.ToLower(strings.TrimSpace(query))
 	threads := append([]types.Thread(nil), m.Threads...)
 	sort.SliceStable(threads, func(i, j int) bool {
@@ -577,7 +438,7 @@ func (m *MemoryRepository) ownerContentThreads(ownerUserID string, query string,
 		}
 		return threads[i].ID < threads[j].ID
 	})
-	results := []types.OwnerContentThreadSummary{}
+	all := []types.OwnerContentThreadSummary{}
 	for _, thread := range threads {
 		if strings.TrimSpace(userID) != "" && thread.OwnerUserID != strings.TrimSpace(userID) {
 			continue
@@ -597,9 +458,7 @@ func (m *MemoryRepository) ownerContentThreads(ownerUserID string, query string,
 			}
 		}
 		messageCount := 0
-		lastBody := ""
-		lastAt := ""
-		matchedBody := ""
+		lastBody, lastAt, matchedBody := "", "", ""
 		titleMatches := queryLower == "" || strings.Contains(strings.ToLower(thread.Title), queryLower)
 		for _, message := range m.Messages {
 			if message.ThreadID != thread.ID {
@@ -607,8 +466,7 @@ func (m *MemoryRepository) ownerContentThreads(ownerUserID string, query string,
 			}
 			messageCount++
 			if message.CreatedAt >= lastAt {
-				lastBody = message.Body
-				lastAt = message.CreatedAt
+				lastBody, lastAt = message.Body, message.CreatedAt
 			}
 			if queryLower != "" && matchedBody == "" && strings.Contains(strings.ToLower(message.Body), queryLower) {
 				matchedBody = message.Body
@@ -625,18 +483,19 @@ func (m *MemoryRepository) ownerContentThreads(ownerUserID string, query string,
 			}
 		}
 		thread.VisibilitySummary = visibility
-		results = append(results, types.OwnerContentThreadSummary{
-			Thread:             thread,
-			Owner:              owner,
-			MessageCount:       messageCount,
-			LastMessagePreview: previewText(lastBody, 280),
-			MatchedSnippets:    matchedSnippets(query, thread.Title, matchedBody),
-		})
-		if len(results) >= limit {
-			break
-		}
+		all = append(all, types.OwnerContentThreadSummary{Thread: thread, Owner: owner, MessageCount: messageCount, LastMessagePreview: previewText(lastBody, 180), MatchedSnippets: matchedSnippets(query, thread.Title, matchedBody)})
 	}
-	return results
+	start := pageRequest.Offset
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(all) {
+		end = len(all)
+	}
+	window := all[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.OwnerContentThreadPage{Threads: window[:visible], Page: pageInfo}
 }
 
 func (m *MemoryRepository) GetOwnerContentThread(_ context.Context, ownerUserID string, threadID string) (*types.OwnerContentThreadDetail, error) {
@@ -854,6 +713,26 @@ func (m *MemoryRepository) GetAsset(_ context.Context, userID string, assetID st
 	return nil, nil
 }
 
+func (m *MemoryRepository) AcquireAttachmentPurgeLease(_ context.Context, userID string) (types.AttachmentPurgeLease, error) {
+	m.purgeMutex.Lock()
+	for _, user := range m.Users {
+		if user.ID != strings.TrimSpace(userID) {
+			continue
+		}
+		if user.IsOwner {
+			m.purgeMutex.Unlock()
+			return nil, types.ErrOwnerCannotBeDisabled
+		}
+		if user.DisabledAt == nil {
+			m.purgeMutex.Unlock()
+			return nil, types.ErrUserMustBeDisabled
+		}
+		return &memoryAttachmentPurgeLease{mutex: &m.purgeMutex}, nil
+	}
+	m.purgeMutex.Unlock()
+	return nil, types.ErrUserNotFound
+}
+
 func (m *MemoryRepository) ListAssetPurgeCandidates(_ context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error) {
 	if limit < 1 {
 		limit = 25
@@ -929,6 +808,40 @@ func (m *MemoryRepository) CreatePendingUpload(_ context.Context, userID string,
 	}
 	m.Pending = append(m.Pending, upload)
 	return upload, nil
+}
+
+func (m *MemoryRepository) CreatePendingUploads(ctx context.Context, userID string, uploads []types.PendingUpload) ([]types.PendingUpload, error) {
+	if len(uploads) == 0 {
+		return []types.PendingUpload{}, nil
+	}
+	access, _ := m.ResolveThreadAccess(ctx, userID, uploads[0].ThreadID)
+	if access == nil {
+		return nil, types.ErrThreadNotFound
+	}
+	seenIDs := map[string]bool{}
+	seenKeys := map[string]bool{}
+	for _, existing := range m.Pending {
+		seenIDs[existing.ID] = true
+		seenKeys[existing.StorageKey] = true
+	}
+	for _, upload := range uploads {
+		if upload.ThreadID != uploads[0].ThreadID || seenIDs[upload.ID] || seenKeys[upload.StorageKey] {
+			return nil, errors.New("pending upload batch conflicts with existing state")
+		}
+		seenIDs[upload.ID] = true
+		seenKeys[upload.StorageKey] = true
+	}
+	created := make([]types.PendingUpload, 0, len(uploads))
+	now := isoMillis(time.Now())
+	for _, upload := range uploads {
+		upload.CreatedAt = now
+		if upload.ExpiresAt == "" {
+			upload.ExpiresAt = isoMillis(time.Now().Add(15 * time.Minute))
+		}
+		m.Pending = append(m.Pending, upload)
+		created = append(created, upload)
+	}
+	return created, nil
 }
 
 func (m *MemoryRepository) GetPendingUploads(_ context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error) {
@@ -1015,6 +928,37 @@ func (m *MemoryRepository) PostMessage(_ context.Context, userID string, threadI
 		}
 		m.Assets = append(m.Assets, createdAsset)
 		message.Assets = append(message.Assets, createdAsset)
+	}
+	return message, nil
+}
+
+func (m *MemoryRepository) PostMessageWithPendingUploads(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset, pendingUploadIDs []string) (types.Message, error) {
+	wanted := make(map[string]bool, len(pendingUploadIDs))
+	for _, id := range pendingUploadIDs {
+		wanted[id] = true
+	}
+	pendingIndexes := make([]int, 0, len(pendingUploadIDs))
+	now := time.Now().UTC()
+	for index, upload := range m.Pending {
+		if !wanted[upload.ID] || upload.ThreadID != threadID || !pendingUploadOwnedBy(upload, auth) || upload.ConsumedAt != nil {
+			continue
+		}
+		if expiresAt, err := time.Parse(time.RFC3339, upload.ExpiresAt); err == nil && !expiresAt.After(now) {
+			continue
+		}
+		pendingIndexes = append(pendingIndexes, index)
+		newAssets = append(newAssets, types.NewAsset{StorageKey: upload.StorageKey, FileName: upload.FileName, MimeType: upload.MimeType, SizeBytes: upload.SizeBytes})
+	}
+	if len(pendingIndexes) != len(pendingUploadIDs) {
+		return types.Message{}, types.ErrPendingUploadUnavailable
+	}
+	message, err := m.PostMessage(ctx, userID, threadID, auth, body, bodyContentType, newAssets)
+	if err != nil {
+		return types.Message{}, err
+	}
+	consumedAt := isoMillis(time.Now())
+	for _, index := range pendingIndexes {
+		m.Pending[index].ConsumedAt = &consumedAt
 	}
 	return message, nil
 }
@@ -1191,21 +1135,31 @@ func (m *MemoryRepository) ListAPIKeys(_ context.Context, userID string) ([]type
 	return keys, nil
 }
 
-func (m *MemoryRepository) ListAllAPIKeys(context.Context) ([]types.APIKey, error) {
+func (m *MemoryRepository) ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error) {
+	page, err := m.ListAllAPIKeysPage(ctx, types.PageRequest{})
+	return page.Credentials, err
+}
+
+func (m *MemoryRepository) ListAllAPIKeysPage(_ context.Context, pageRequest types.PageRequest) (types.APIKeyPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	keys := append([]types.APIKey(nil), m.APIKeys...)
 	sort.SliceStable(keys, func(i, j int) bool {
-		if keys[i].UserID != keys[j].UserID {
-			return keys[i].UserID < keys[j].UserID
-		}
-		if !strings.EqualFold(keys[i].Name, keys[j].Name) {
-			return strings.ToLower(keys[i].Name) < strings.ToLower(keys[j].Name)
-		}
 		if keys[i].CreatedAt != keys[j].CreatedAt {
-			return keys[i].CreatedAt < keys[j].CreatedAt
+			return keys[i].CreatedAt > keys[j].CreatedAt
 		}
-		return keys[i].ID < keys[j].ID
+		return keys[i].ID > keys[j].ID
 	})
-	return keys, nil
+	start := pageRequest.Offset
+	if start > len(keys) {
+		start = len(keys)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(keys) {
+		end = len(keys)
+	}
+	window := keys[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.APIKeyPage{Credentials: window[:visible], Page: pageInfo}, nil
 }
 
 func (m *MemoryRepository) RevokeAPIKey(_ context.Context, userID string, name string) (bool, error) {
@@ -1294,7 +1248,7 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 		}
 	}
 	owner := types.User{
-		ID:           "usr_" + uuid.NewString(),
+		ID:           identity.ProposedOwnerID(email),
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: &passwordHash,
@@ -1452,16 +1406,32 @@ func (m *MemoryRepository) CreateSignupInvitation(_ context.Context, createdByUs
 	return invitation, nil
 }
 
-func (m *MemoryRepository) ListSignupInvitations(context.Context) ([]types.SignupInvitation, error) {
+func (m *MemoryRepository) ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error) {
+	page, err := m.ListSignupInvitationsPage(ctx, types.PageRequest{})
+	return page.Invitations, err
+}
+
+func (m *MemoryRepository) ListSignupInvitationsPage(_ context.Context, pageRequest types.PageRequest) (types.SignupInvitationPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	invitations := make([]types.SignupInvitation, 0, len(m.SignupInvitations))
 	for index := len(m.SignupInvitations) - 1; index >= 0; index-- {
 		invitation, err := m.hydrateSignupInvitation(m.SignupInvitations[index])
 		if err != nil {
-			return nil, err
+			return types.SignupInvitationPage{}, err
 		}
 		invitations = append(invitations, invitation)
 	}
-	return invitations, nil
+	start := pageRequest.Offset
+	if start > len(invitations) {
+		start = len(invitations)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(invitations) {
+		end = len(invitations)
+	}
+	window := invitations[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.SignupInvitationPage{Invitations: window[:visible], Page: pageInfo}, nil
 }
 
 func (m *MemoryRepository) RevokeSignupInvitation(_ context.Context, invitationID string) (bool, error) {
@@ -1599,7 +1569,26 @@ func (m *MemoryRepository) RenameTeam(_ context.Context, teamID string, name str
 	return types.Team{}, types.ErrTeamNotFound
 }
 
-func (m *MemoryRepository) ListTeams(context.Context) ([]types.Team, error) {
+func (m *MemoryRepository) ListTeams(ctx context.Context) ([]types.Team, error) {
+	page, err := m.ListTeamsPage(ctx, types.PageRequest{}, 10)
+	if err != nil {
+		return nil, err
+	}
+	teams := make([]types.Team, 0, len(page.Teams))
+	for _, item := range page.Teams {
+		teams = append(teams, item.Team)
+	}
+	return teams, nil
+}
+
+func (m *MemoryRepository) ListTeamsPage(_ context.Context, pageRequest types.PageRequest, memberLimit int) (types.TeamPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
+	if memberLimit < 1 {
+		memberLimit = 10
+	}
+	if memberLimit > 50 {
+		memberLimit = 50
+	}
 	teams := append([]types.Team(nil), m.Teams...)
 	sort.SliceStable(teams, func(i, j int) bool {
 		if !strings.EqualFold(teams[i].Name, teams[j].Name) {
@@ -1610,19 +1599,62 @@ func (m *MemoryRepository) ListTeams(context.Context) ([]types.Team, error) {
 		}
 		return teams[i].ID < teams[j].ID
 	})
-	return teams, nil
+	start := pageRequest.Offset
+	if start > len(teams) {
+		start = len(teams)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(teams) {
+		end = len(teams)
+	}
+	window := teams[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	result := make([]types.TeamWithMembers, 0, visible)
+	for _, team := range window[:visible] {
+		members := []types.User{}
+		wanted := map[string]bool{}
+		for _, membership := range m.TeamMemberships {
+			if membership.TeamID == team.ID {
+				wanted[membership.UserID] = true
+			}
+		}
+		for _, user := range m.Users {
+			if wanted[user.ID] {
+				members = append(members, user)
+			}
+		}
+		sort.SliceStable(members, func(i, j int) bool {
+			if members[i].IsOwner != members[j].IsOwner {
+				return members[i].IsOwner
+			}
+			if !strings.EqualFold(members[i].DisplayName, members[j].DisplayName) {
+				return strings.ToLower(members[i].DisplayName) < strings.ToLower(members[j].DisplayName)
+			}
+			return members[i].ID < members[j].ID
+		})
+		fetched := len(members)
+		if fetched > memberLimit {
+			fetched = memberLimit + 1
+		}
+		memberVisible, memberPage := types.PageWindow(types.PageRequest{Limit: memberLimit}, fetched)
+		if memberVisible > len(members) {
+			memberVisible = len(members)
+		}
+		result = append(result, types.TeamWithMembers{Team: team, Members: members[:memberVisible], MemberCount: len(members), MembersPage: memberPage})
+	}
+	return types.TeamPage{Teams: result, Page: pageInfo}, nil
 }
 
 func (m *MemoryRepository) ListUserTeams(_ context.Context, userID string) ([]types.Team, error) {
-	wanted := map[string]struct{}{}
+	wanted := map[string]bool{}
 	for _, membership := range m.TeamMemberships {
 		if membership.UserID == strings.TrimSpace(userID) {
-			wanted[membership.TeamID] = struct{}{}
+			wanted[membership.TeamID] = true
 		}
 	}
 	teams := []types.Team{}
 	for _, team := range m.Teams {
-		if _, exists := wanted[team.ID]; exists {
+		if wanted[team.ID] {
 			teams = append(teams, team)
 		}
 	}
@@ -1635,8 +1667,47 @@ func (m *MemoryRepository) ListUserTeams(_ context.Context, userID string) ([]ty
 	return teams, nil
 }
 
-func (m *MemoryRepository) ListTeamMembers(_ context.Context, teamID string) ([]types.User, error) {
+func (m *MemoryRepository) ListUserTeamsPage(_ context.Context, userID string, pageRequest types.PageRequest) (types.UserTeamPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
+	wanted := map[string]bool{}
+	for _, membership := range m.TeamMemberships {
+		if membership.UserID == strings.TrimSpace(userID) {
+			wanted[membership.TeamID] = true
+		}
+	}
+	teams := []types.Team{}
+	for _, team := range m.Teams {
+		if wanted[team.ID] {
+			teams = append(teams, team)
+		}
+	}
+	sort.SliceStable(teams, func(i, j int) bool {
+		if !strings.EqualFold(teams[i].Name, teams[j].Name) {
+			return strings.ToLower(teams[i].Name) < strings.ToLower(teams[j].Name)
+		}
+		return teams[i].ID < teams[j].ID
+	})
+	start := pageRequest.Offset
+	if start > len(teams) {
+		start = len(teams)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(teams) {
+		end = len(teams)
+	}
+	window := teams[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.UserTeamPage{Teams: window[:visible], Page: pageInfo}, nil
+}
+
+func (m *MemoryRepository) ListTeamMembers(ctx context.Context, teamID string) ([]types.User, error) {
+	page, err := m.ListTeamMembersPage(ctx, teamID, types.PageRequest{})
+	return page.Members, err
+}
+
+func (m *MemoryRepository) ListTeamMembersPage(_ context.Context, teamID string, pageRequest types.PageRequest) (types.TeamMemberPage, error) {
 	teamID = strings.TrimSpace(teamID)
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	teamFound := false
 	for _, team := range m.Teams {
 		if team.ID == teamID {
@@ -1645,17 +1716,17 @@ func (m *MemoryRepository) ListTeamMembers(_ context.Context, teamID string) ([]
 		}
 	}
 	if !teamFound {
-		return nil, types.ErrTeamNotFound
+		return types.TeamMemberPage{}, types.ErrTeamNotFound
 	}
-	wanted := map[string]struct{}{}
+	wanted := map[string]bool{}
 	for _, membership := range m.TeamMemberships {
 		if membership.TeamID == teamID {
-			wanted[membership.UserID] = struct{}{}
+			wanted[membership.UserID] = true
 		}
 	}
 	users := []types.User{}
 	for _, user := range m.Users {
-		if _, exists := wanted[user.ID]; exists {
+		if wanted[user.ID] {
 			users = append(users, user)
 		}
 	}
@@ -1668,7 +1739,17 @@ func (m *MemoryRepository) ListTeamMembers(_ context.Context, teamID string) ([]
 		}
 		return users[i].ID < users[j].ID
 	})
-	return users, nil
+	start := pageRequest.Offset
+	if start > len(users) {
+		start = len(users)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(users) {
+		end = len(users)
+	}
+	window := users[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.TeamMemberPage{Members: window[:visible], Page: pageInfo}, nil
 }
 
 func (m *MemoryRepository) AddTeamMember(_ context.Context, teamID string, userID string) (types.TeamMembership, error) {
@@ -1739,7 +1820,13 @@ func (m *MemoryRepository) RemoveTeamMember(_ context.Context, teamID string, us
 	return false, nil
 }
 
-func (m *MemoryRepository) ListUsers(context.Context) ([]types.User, error) {
+func (m *MemoryRepository) ListUsers(ctx context.Context) ([]types.User, error) {
+	page, err := m.ListUsersPage(ctx, types.PageRequest{})
+	return page.Users, err
+}
+
+func (m *MemoryRepository) ListUsersPage(_ context.Context, pageRequest types.PageRequest) (types.UserPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	users := append([]types.User(nil), m.Users...)
 	sort.SliceStable(users, func(i, j int) bool {
 		if users[i].IsOwner != users[j].IsOwner {
@@ -1750,7 +1837,17 @@ func (m *MemoryRepository) ListUsers(context.Context) ([]types.User, error) {
 		}
 		return users[i].ID < users[j].ID
 	})
-	return users, nil
+	start := pageRequest.Offset
+	if start > len(users) {
+		start = len(users)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(users) {
+		end = len(users)
+	}
+	window := users[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.UserPage{Users: window[:visible], Page: pageInfo}, nil
 }
 
 func (m *MemoryRepository) GetUserByID(_ context.Context, userID string) (*types.User, error) {
@@ -1764,6 +1861,8 @@ func (m *MemoryRepository) GetUserByID(_ context.Context, userID string) (*types
 }
 
 func (m *MemoryRepository) SetUserDisabled(_ context.Context, userID string, disabled bool) (types.User, error) {
+	m.purgeMutex.Lock()
+	defer m.purgeMutex.Unlock()
 	now := isoMillis(time.Now().UTC())
 	for index := range m.Users {
 		user := &m.Users[index]

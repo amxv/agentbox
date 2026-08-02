@@ -16,8 +16,8 @@ export type SessionPayload = {
   auth: AuthContext;
 };
 
-export async function fetchSession(): Promise<AuthContext | null> {
-  const response = await fetch("/api/auth/me", { cache: "no-store" });
+export async function fetchSession(signal?: AbortSignal): Promise<AuthContext | null> {
+  const response = await fetch("/api/auth/me", { cache: "no-store", signal });
   if (response.status === 401) return null;
   const data = await response.json() as SessionPayload & { error?: string };
   if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);

@@ -18,7 +18,10 @@ type PublicAsset = {
   created_by_user_display_name?: string;
   created_by_actor_name?: string;
   purged_at?: string;
+  unavailable?: boolean;
+  unavailable_reason?: string;
   download_path?: string;
+  preview_path?: string;
 };
 
 type PublicMessage = {
@@ -147,15 +150,25 @@ export function PublicThreadView({ token }: { token: string }) {
                     {message.assets.length > 0 && (
                       <div className={styles.attachments}>
                         {message.assets.map((asset) => (
-                          asset.purged_at ? <div className={`${styles.attachment} ${styles.attachmentPurged}`} key={asset.id}>
-                            <span className={styles.fileIcon}>×</span>
-                            <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
-                            <em>Attachment deleted by deployment owner</em>
-                          </div> : <button type="button" className={styles.attachment} key={asset.id} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
-                            <span className={styles.fileIcon}>↧</span>
-                            <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
-                            <em>{downloadBusy === asset.id ? "Signing…" : "Download"}</em>
-                          </button>
+                          <div className={styles.attachmentGroup} key={asset.id}>
+                            {!asset.purged_at && !asset.unavailable && asset.preview_path && (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img className={styles.attachmentPreview} src={asset.preview_path} alt={asset.file_name} loading="lazy" />
+                            )}
+                            {asset.purged_at ? <div className={`${styles.attachment} ${styles.attachmentPurged}`}>
+                              <span className={styles.fileIcon}>×</span>
+                              <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                              <em>Attachment deleted by deployment owner</em>
+                            </div> : asset.unavailable ? <div className={`${styles.attachment} ${styles.attachmentPurged}`}>
+                              <span className={styles.fileIcon}>!</span>
+                              <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                              <em>{asset.unavailable_reason || "Attachment unavailable"}</em>
+                            </div> : <button type="button" className={styles.attachment} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
+                              <span className={styles.fileIcon}>↧</span>
+                              <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                              <em>{downloadBusy === asset.id ? "Signing…" : "Download"}</em>
+                            </button>}
+                          </div>
                         ))}
                       </div>
                     )}

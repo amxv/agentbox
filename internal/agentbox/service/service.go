@@ -15,6 +15,7 @@ import (
 
 	"agentbox/internal/agentbox/assets"
 	"agentbox/internal/agentbox/auth"
+	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
@@ -28,37 +29,40 @@ var ErrInvalidLogin = errors.New("Invalid email or password.")
 type Repository interface {
 	ResolveThreadAccess(ctx context.Context, userID string, threadID string) (*types.ThreadAccess, error)
 	GetThreadVisibility(ctx context.Context, userID string, threadID string) (*types.ThreadVisibility, error)
-	SetThreadVisibility(ctx context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error)
 	ManageThreadVisibility(ctx context.Context, userID string, threadID string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
-	GetThreadPublicLink(ctx context.Context, userID string, threadID string) (*types.ThreadPublicLink, error)
-	CreateThreadPublicLink(ctx context.Context, userID string, threadID string, token string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error)
-	RevokeThreadPublicLink(ctx context.Context, userID string, threadID string) (bool, error)
-	GetThreadByPublicTokenHash(ctx context.Context, tokenHash string) (*types.ThreadWithMessages, error)
-	GetAssetByPublicTokenHash(ctx context.Context, tokenHash string, assetID string) (*types.Asset, error)
+	AcquirePublicThreadLease(ctx context.Context, tokenHash string) (types.PublicThreadAuthorizationLease, error)
+	AcquirePublicAssetSigningLease(ctx context.Context, tokenHash string, assetID string) (types.AssetAuthorizationLease, error)
+	AcquireAssetSigningLease(ctx context.Context, userID string, assetID string) (types.AssetAuthorizationLease, error)
 	ListThreadsFiltered(ctx context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error)
 	SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
 	ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error)
+	ListOwnerContentThreadsPage(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) (types.OwnerContentThreadPage, error)
 	SearchOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error)
+	SearchOwnerContentThreadsPage(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) (types.OwnerContentThreadPage, error)
 	GetOwnerContentThread(ctx context.Context, ownerUserID string, threadID string) (*types.OwnerContentThreadDetail, error)
 	GetOwnerContentAsset(ctx context.Context, assetID string) (*types.Asset, error)
 	GetAsset(ctx context.Context, userID string, assetID string) (*types.Asset, error)
+	AcquireAttachmentPurgeLease(ctx context.Context, uploaderUserID string) (types.AttachmentPurgeLease, error)
 	ListAssetPurgeCandidates(ctx context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error)
 	MarkAssetPurged(ctx context.Context, assetID string, ownerUserID string) (bool, error)
 	MarkAssetPurgeFailure(ctx context.Context, assetID string, message string) error
 	CountUnpurgedAssetsByUploader(ctx context.Context, uploaderUserID string) (int, error)
 	CreatePendingUpload(ctx context.Context, userID string, upload types.PendingUpload) (types.PendingUpload, error)
+	CreatePendingUploads(ctx context.Context, userID string, uploads []types.PendingUpload) ([]types.PendingUpload, error)
 	GetPendingUploads(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error)
 	MarkPendingUploadsConsumed(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) error
 	PostMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
+	PostMessageWithPendingUploads(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset, pendingUploadIDs []string) (types.Message, error)
 	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
 	CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error)
 	GetOnboardingState(ctx context.Context, userID string) (types.OnboardingState, error)
 	DismissOnboarding(ctx context.Context, userID string) (types.OnboardingState, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
 	ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error)
+	ListAllAPIKeysPage(ctx context.Context, page types.PageRequest) (types.APIKeyPage, error)
 	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
 	RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
@@ -76,17 +80,22 @@ type Repository interface {
 	UseOwnerSetupToken(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error)
 	CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time, teamIDs []string) (types.SignupInvitation, error)
 	ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error)
+	ListSignupInvitationsPage(ctx context.Context, page types.PageRequest) (types.SignupInvitationPage, error)
 	RevokeSignupInvitation(ctx context.Context, invitationID string) (bool, error)
 	FindSignupInvitation(ctx context.Context, tokenHash string) (*types.SignupInvitation, error)
 	RegisterWithSignupInvitation(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string, sessionSecretHash string, sessionExpiresAt time.Time) (types.User, types.UserSession, types.SignupInvitation, error)
 	ListUsers(ctx context.Context) ([]types.User, error)
+	ListUsersPage(ctx context.Context, page types.PageRequest) (types.UserPage, error)
 	GetUserByID(ctx context.Context, userID string) (*types.User, error)
 	SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error)
 	CreateTeam(ctx context.Context, slug string, name string) (types.Team, error)
 	RenameTeam(ctx context.Context, teamID string, name string) (types.Team, error)
 	ListTeams(ctx context.Context) ([]types.Team, error)
+	ListTeamsPage(ctx context.Context, page types.PageRequest, memberLimit int) (types.TeamPage, error)
 	ListUserTeams(ctx context.Context, userID string) ([]types.Team, error)
+	ListUserTeamsPage(ctx context.Context, userID string, page types.PageRequest) (types.UserTeamPage, error)
 	ListTeamMembers(ctx context.Context, teamID string) ([]types.User, error)
+	ListTeamMembersPage(ctx context.Context, teamID string, page types.PageRequest) (types.TeamMemberPage, error)
 	AddTeamMember(ctx context.Context, teamID string, userID string) (types.TeamMembership, error)
 	RemoveTeamMember(ctx context.Context, teamID string, userID string) (bool, error)
 }
@@ -260,30 +269,6 @@ func (s *Service) GetThreadVisibility(ctx context.Context, auth types.AuthContex
 	return visibility, nil
 }
 
-func (s *Service) SetThreadVisibility(ctx context.Context, auth types.AuthContext, threadID string, teamIDs []string) (types.ThreadVisibility, error) {
-	if err := requireScope(auth, "threads:write"); err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return types.ThreadVisibility{}, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
-	}
-	visibility, err := s.repo.SetThreadVisibility(ctx, auth.UserID, threadID, uniqueTrimmedStrings(teamIDs))
-	if errors.Is(err, types.ErrThreadNotFound) {
-		return types.ThreadVisibility{}, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
-	}
-	if errors.Is(err, types.ErrTeamNotFound) {
-		return types.ThreadVisibility{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "One or more selected teams no longer exist.", Err: err}
-	}
-	if errors.Is(err, types.ErrThreadVisibilityTeamUnavailable) {
-		return types.ThreadVisibility{}, CodedError{Code: "TEAM_NOT_AVAILABLE", Message: "A thread can be shared only with teams the acting user currently belongs to.", Err: err}
-	}
-	if err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	return visibility, nil
-}
-
 func (s *Service) ManageThreadVisibility(ctx context.Context, auth types.AuthContext, threadID string, baseURL string, input types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error) {
 	mutation := len(input.AddTeams) > 0 || len(input.RemoveTeams) > 0 || input.Public != nil || input.RegeneratePublicLink
 	if mutation {
@@ -336,60 +321,6 @@ func (s *Service) ManageThreadVisibility(ctx context.Context, auth types.AuthCon
 	return state, nil
 }
 
-type ThreadPublicLinkResult struct {
-	Link      types.ThreadPublicLink `json:"link"`
-	Token     string                 `json:"token"`
-	PublicURL string                 `json:"public_url"`
-}
-
-func (s *Service) GetThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadPublicLink, error) {
-	if err := requireScope(auth, "threads:read"); err != nil {
-		return nil, err
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
-	}
-	access, err := s.repo.ResolveThreadAccess(ctx, auth.UserID, threadID)
-	if err != nil {
-		return nil, err
-	}
-	if access == nil {
-		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
-	}
-	return s.repo.GetThreadPublicLink(ctx, auth.UserID, threadID)
-}
-
-func (s *Service) CreateThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string, baseURL string, rotate bool) (ThreadPublicLinkResult, error) {
-	if err := requireScope(auth, "threads:write"); err != nil {
-		return ThreadPublicLinkResult{}, err
-	}
-	threadID = strings.TrimSpace(threadID)
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if threadID == "" || baseURL == "" {
-		return ThreadPublicLinkResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id and deployment base URL are required."}
-	}
-	token, err := generatePublicToken()
-	if err != nil {
-		return ThreadPublicLinkResult{}, err
-	}
-	link, err := s.repo.CreateThreadPublicLink(ctx, auth.UserID, threadID, token, hashSecret(token), tokenPrefix(token), rotate)
-	if errors.Is(err, types.ErrThreadNotFound) {
-		return ThreadPublicLinkResult{}, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
-	}
-	if errors.Is(err, types.ErrThreadPublicLinkExists) {
-		return ThreadPublicLinkResult{}, CodedError{Code: "PUBLIC_LINK_EXISTS", Message: "A public link is already active. Rotate it explicitly to replace the URL.", Err: err}
-	}
-	if err != nil {
-		return ThreadPublicLinkResult{}, err
-	}
-	return ThreadPublicLinkResult{
-		Link:      link,
-		Token:     token,
-		PublicURL: publicThreadURL(baseURL, token),
-	}, nil
-}
-
 func publicThreadURL(baseURL string, token string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" || strings.TrimSpace(token) == "" {
@@ -398,59 +329,53 @@ func publicThreadURL(baseURL string, token string) string {
 	return baseURL + "/share/" + url.PathEscape(token)
 }
 
-func (s *Service) RevokeThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string) error {
-	if err := requireScope(auth, "threads:write"); err != nil {
-		return err
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
-	}
-	_, err := s.repo.RevokeThreadPublicLink(ctx, auth.UserID, threadID)
-	if errors.Is(err, types.ErrThreadNotFound) {
-		return CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
-	}
-	return err
-}
-
 func (s *Service) GetPublicThread(ctx context.Context, token string) (*types.PublicThreadView, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, CodedError{Code: "PUBLIC_LINK_NOT_FOUND", Message: "Shared thread not found."}
 	}
-	thread, err := s.repo.GetThreadByPublicTokenHash(ctx, hashSecret(token))
+	lease, err := s.repo.AcquirePublicThreadLease(ctx, hashSecret(token))
 	if err != nil {
 		return nil, err
 	}
-	if thread == nil {
+	if lease == nil {
 		return nil, CodedError{Code: "PUBLIC_LINK_NOT_FOUND", Message: "Shared thread not found."}
 	}
-	view := sanitizePublicThread(token, *thread)
+	defer func() { _ = lease.Close(ctx) }()
+	view := s.sanitizePublicThread(ctx, token, lease.Thread())
 	return &view, nil
 }
 
 func (s *Service) PublicAssetDownloadURL(ctx context.Context, token string, assetID string) (string, error) {
+	return s.publicAssetURL(ctx, token, assetID, false)
+}
+
+func (s *Service) PublicAssetPreviewURL(ctx context.Context, token string, assetID string) (string, error) {
+	return s.publicAssetURL(ctx, token, assetID, true)
+}
+
+func (s *Service) publicAssetURL(ctx context.Context, token string, assetID string, inline bool) (string, error) {
 	token = strings.TrimSpace(token)
 	assetID = strings.TrimSpace(assetID)
 	if token == "" || assetID == "" {
 		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
 	}
-	asset, err := s.repo.GetAssetByPublicTokenHash(ctx, hashSecret(token), assetID)
+	lease, err := s.repo.AcquirePublicAssetSigningLease(ctx, hashSecret(token), assetID)
 	if err != nil {
 		return "", err
 	}
-	if asset == nil {
+	if lease == nil {
 		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
 	}
+	defer func() { _ = lease.Close(ctx) }()
+	asset := lease.Asset()
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
-	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
-		StorageKey:       asset.StorageKey,
-		FileName:         asset.FileName,
-		MimeType:         asset.MimeType,
-		ExpiresInSeconds: 300,
-	})
+	if inline && (asset.MimeType == nil || !strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/")) {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "This attachment type does not support inline preview."}
+	}
+	return s.signAvailableAsset(ctx, asset, 300, inline)
 }
 
 func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID string) (*types.Asset, error) {
@@ -483,6 +408,7 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 	if err != nil {
 		return types.Message{}, err
 	}
+
 	newAssets := []types.NewAsset{}
 	if params.File != nil {
 		asset, err := s.assets.UploadChatGPTFile(ctx, auth.UserID, params.ThreadID, *params.File)
@@ -491,25 +417,29 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 		}
 		newAssets = append(newAssets, asset)
 	}
+	cleanupAndReturn := func(cause error) (types.Message, error) {
+		return types.Message{}, s.compensateUploadedAssets(ctx, newAssets, cause)
+	}
+
+	pendingUploadIDs := []string{}
 	if len(params.UploadedAssets) > 0 {
-		assets, err := s.pendingUploadsToAssets(ctx, auth, params.ThreadID, params.UploadedAssets)
+		_, pendingUploadIDs, err = s.verifyPendingUploads(ctx, auth, params.ThreadID, params.UploadedAssets)
 		if err != nil {
-			return types.Message{}, err
+			return cleanupAndReturn(err)
 		}
-		newAssets = append(newAssets, assets...)
 	}
-	message, err := s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
+
+	var message types.Message
+	if len(pendingUploadIDs) > 0 {
+		message, err = s.repo.PostMessageWithPendingUploads(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets, pendingUploadIDs)
+	} else {
+		message, err = s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
+	}
+	if errors.Is(err, types.ErrPendingUploadUnavailable) {
+		return cleanupAndReturn(CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "One or more uploads were already consumed, expired, or changed before finalization.", Err: err})
+	}
 	if err != nil {
-		return types.Message{}, err
-	}
-	if len(params.UploadedAssets) > 0 {
-		ids := make([]string, 0, len(params.UploadedAssets))
-		for _, uploaded := range params.UploadedAssets {
-			ids = append(ids, strings.TrimSpace(uploaded.UploadID))
-		}
-		if err := s.repo.MarkPendingUploadsConsumed(ctx, auth.UserID, params.ThreadID, ids, auth); err != nil {
-			return types.Message{}, err
-		}
+		return cleanupAndReturn(err)
 	}
 	return message, nil
 }
@@ -551,7 +481,11 @@ func (s *Service) PostMessageWithAsset(ctx context.Context, auth types.AuthConte
 		}
 		newAssets = append(newAssets, asset)
 	}
-	return s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
+	message, err := s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
+	if err != nil {
+		return types.Message{}, s.compensateUploadedAssets(ctx, newAssets, err)
+	}
+	return message, nil
 }
 
 func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthContext, threadID string, files []types.UploadIntentFile) ([]types.PresignedUpload, error) {
@@ -577,8 +511,9 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 	if len(files) > 10 {
 		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "At most 10 files can be uploaded at once."}
 	}
-	uploads := make([]types.PresignedUpload, 0, len(files))
-	for _, file := range files {
+
+	validated := make([]types.UploadIntentFile, len(files))
+	for index, file := range files {
 		file.FileName = strings.TrimSpace(file.FileName)
 		if file.FileName == "" {
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "file_name is required."}
@@ -586,6 +521,12 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 		if file.SizeBytes < 0 {
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "size_bytes must be >= 0."}
 		}
+		validated[index] = file
+	}
+
+	uploads := make([]types.PresignedUpload, 0, len(validated))
+	pending := make([]types.PendingUpload, 0, len(validated))
+	for _, file := range validated {
 		uploadID := "upl_" + uuid.NewString()
 		presigned, err := s.assets.CreatePresignedAssetUploadURL(ctx, assets.PresignedUploadParams{
 			UserID:           auth.UserID,
@@ -599,8 +540,8 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 		if err != nil {
 			return nil, err
 		}
-		expiresAt := time.Now().UTC().Add(time.Duration(presigned.ExpiresIn) * time.Second).Format("2006-01-02T15:04:05.000Z")
-		if _, err := s.repo.CreatePendingUpload(ctx, auth.UserID, types.PendingUpload{
+		expiresAt := time.Now().UTC().Add(time.Duration(presigned.ExpiresIn) * time.Second).Format(time.RFC3339)
+		pending = append(pending, types.PendingUpload{
 			ID:                       presigned.UploadID,
 			ThreadID:                 threadID,
 			StorageKey:               presigned.StorageKey,
@@ -613,24 +554,25 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 			CreatedByKeyID:           optionalString(auth.KeyID),
 			CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
 			CreatedByActorName:       optionalString(auth.ActorName),
-		}); err != nil {
-			if errors.Is(err, types.ErrThreadNotFound) {
-				return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
-			}
-			return nil, err
-		}
+		})
 		uploads = append(uploads, presigned)
+	}
+	if _, err := s.repo.CreatePendingUploads(ctx, auth.UserID, pending); err != nil {
+		if errors.Is(err, types.ErrThreadNotFound) {
+			return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+		}
+		return nil, err
 	}
 	return uploads, nil
 }
 
-func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthContext, threadID string, refs []types.UploadedAssetReference) ([]types.NewAsset, error) {
+func (s *Service) verifyPendingUploads(ctx context.Context, auth types.AuthContext, threadID string, refs []types.UploadedAssetReference) ([]types.NewAsset, []string, error) {
 	ids := make([]string, 0, len(refs))
 	seen := map[string]bool{}
 	for _, ref := range refs {
 		id := strings.TrimSpace(ref.UploadID)
 		if id == "" {
-			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "upload_id is required."}
+			return nil, nil, CodedError{Code: "INVALID_ARGUMENT", Message: "upload_id is required."}
 		}
 		if !seen[id] {
 			seen[id] = true
@@ -638,58 +580,114 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 		}
 	}
 	if len(ids) == 0 {
-		return []types.NewAsset{}, nil
+		return []types.NewAsset{}, []string{}, nil
 	}
 	pending, err := s.repo.GetPendingUploads(ctx, auth.UserID, threadID, ids, auth)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byID := map[string]types.PendingUpload{}
 	for _, upload := range pending {
 		byID[upload.ID] = upload
 	}
 	now := time.Now().UTC()
-	assets := make([]types.NewAsset, 0, len(ids))
+	verified := make([]types.NewAsset, 0, len(ids))
 	for _, id := range ids {
 		upload, ok := byID[id]
-		if !ok {
-			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload was not found or is no longer available."}
+		if !ok || upload.ConsumedAt != nil {
+			return nil, nil, CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "Upload was not found or has already been used."}
 		}
-		if upload.ConsumedAt != nil {
-			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload has already been used."}
+		if parsed, err := time.Parse(time.RFC3339, upload.ExpiresAt); err == nil && !parsed.After(now) {
+			return nil, nil, CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "Upload has expired."}
 		}
-		if parsed, err := time.Parse(time.RFC3339, upload.ExpiresAt); err == nil && now.After(parsed) {
-			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "Upload has expired."}
+		metadata, err := s.assets.HeadAssetObject(ctx, upload.StorageKey)
+		if errors.Is(err, backup.ErrObjectNotFound) {
+			return nil, nil, CodedError{Code: "UPLOAD_NOT_MATERIALIZED", Message: "The uploaded object does not exist yet. Retry the upload before finalizing."}
 		}
-		assets = append(assets, types.NewAsset{
-			StorageKey: upload.StorageKey,
-			FileName:   upload.FileName,
-			MimeType:   upload.MimeType,
-			SizeBytes:  upload.SizeBytes,
-		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("inspect uploaded object %s: %w", id, err)
+		}
+		if metadata.SizeBytes != upload.SizeBytes {
+			return nil, nil, CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: fmt.Sprintf("Uploaded object size %d does not match declared size %d.", metadata.SizeBytes, upload.SizeBytes)}
+		}
+		if upload.MimeType != nil {
+			if metadata.ContentType == nil || normalizeContentType(*metadata.ContentType) != normalizeContentType(*upload.MimeType) {
+				return nil, nil, CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: "Uploaded object content type does not match the declared content type."}
+			}
+		}
+		verified = append(verified, types.NewAsset{StorageKey: upload.StorageKey, FileName: upload.FileName, MimeType: upload.MimeType, SizeBytes: upload.SizeBytes})
 	}
-	return assets, nil
+	return verified, ids, nil
+}
+
+func normalizeContentType(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if index := strings.IndexByte(value, ';'); index >= 0 {
+		value = strings.TrimSpace(value[:index])
+	}
+	return value
+}
+
+func (s *Service) compensateUploadedAssets(ctx context.Context, uploaded []types.NewAsset, cause error) error {
+	if len(uploaded) == 0 {
+		return cause
+	}
+	cleanupErrors := []string{}
+	for _, asset := range uploaded {
+		if err := s.assets.DeleteAssetObject(ctx, asset.StorageKey); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("%s: %v", asset.StorageKey, err))
+		}
+	}
+	if len(cleanupErrors) == 0 {
+		return cause
+	}
+	return fmt.Errorf("%w; uploaded-object cleanup also failed: %s", cause, strings.Join(cleanupErrors, "; "))
 }
 
 func (s *Service) SignedAssetDownloadURL(ctx context.Context, auth types.AuthContext, assetID string, expiresInSeconds int) (string, error) {
+	return s.signedAssetURL(ctx, auth, assetID, expiresInSeconds, false)
+}
+
+func (s *Service) SignedAssetPreviewURL(ctx context.Context, auth types.AuthContext, assetID string, expiresInSeconds int) (string, error) {
+	return s.signedAssetURL(ctx, auth, assetID, expiresInSeconds, true)
+}
+
+func (s *Service) signedAssetURL(ctx context.Context, auth types.AuthContext, assetID string, expiresInSeconds int, inline bool) (string, error) {
 	if err := requireScope(auth, "assets:read"); err != nil {
 		return "", err
 	}
-	asset, err := s.repo.GetAsset(ctx, auth.UserID, assetID)
+	lease, err := s.repo.AcquireAssetSigningLease(ctx, auth.UserID, assetID)
 	if err != nil {
 		return "", err
 	}
-	if asset == nil {
+	if lease == nil {
 		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset not found."}
 	}
+	defer func() { _ = lease.Close(ctx) }()
+	asset := lease.Asset()
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
+	}
+	return s.signAvailableAsset(ctx, asset, validate.ClampSignedURLExpiry(expiresInSeconds), inline)
+}
+
+func (s *Service) signAvailableAsset(ctx context.Context, asset types.Asset, expiresInSeconds int, inline bool) (string, error) {
+	metadata, err := s.assets.HeadAssetObject(ctx, asset.StorageKey)
+	if errors.Is(err, backup.ErrObjectNotFound) {
+		return "", CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object is missing.", Err: err}
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect attachment object: %w", err)
+	}
+	if metadata.SizeBytes != asset.SizeBytes {
+		return "", CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object does not match the recorded metadata."}
 	}
 	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
 		StorageKey:       asset.StorageKey,
 		FileName:         asset.FileName,
 		MimeType:         asset.MimeType,
-		ExpiresInSeconds: validate.ClampSignedURLExpiry(expiresInSeconds),
+		ExpiresInSeconds: expiresInSeconds,
+		Inline:           inline,
 	})
 }
 
@@ -929,10 +927,15 @@ func (s *Service) CreateSignupInvitation(ctx context.Context, authContext types.
 }
 
 func (s *Service) ListSignupInvitations(ctx context.Context, authContext types.AuthContext) ([]types.SignupInvitation, error) {
+	page, err := s.ListSignupInvitationsPage(ctx, authContext, types.PageRequest{})
+	return page.Invitations, err
+}
+
+func (s *Service) ListSignupInvitationsPage(ctx context.Context, authContext types.AuthContext, pageRequest types.PageRequest) (types.SignupInvitationPage, error) {
 	if err := requireOwnerBrowser(authContext); err != nil {
-		return nil, err
+		return types.SignupInvitationPage{}, err
 	}
-	return s.repo.ListSignupInvitations(ctx)
+	return s.repo.ListSignupInvitationsPage(ctx, pageRequest)
 }
 
 func (s *Service) RevokeSignupInvitation(ctx context.Context, authContext types.AuthContext, invitationID string) error {
@@ -1005,44 +1008,51 @@ func (s *Service) RegisterWithSignupInvitation(ctx context.Context, token string
 }
 
 func (s *Service) ListUsers(ctx context.Context, authContext types.AuthContext) ([]types.User, error) {
+	page, err := s.ListUsersPage(ctx, authContext, types.PageRequest{})
+	return page.Users, err
+}
+
+func (s *Service) ListUsersPage(ctx context.Context, authContext types.AuthContext, pageRequest types.PageRequest) (types.UserPage, error) {
 	if err := requireOwnerBrowser(authContext); err != nil {
-		return nil, err
+		return types.UserPage{}, err
 	}
-	return s.repo.ListUsers(ctx)
+	return s.repo.ListUsersPage(ctx, pageRequest)
 }
 
 func (s *Service) ListOwnerContentThreads(ctx context.Context, ownerContext OwnerWebContext, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
+	page, err := s.ListOwnerContentThreadsPage(ctx, ownerContext, params)
+	return page.Threads, err
+}
+
+func (s *Service) ListOwnerContentThreadsPage(ctx context.Context, ownerContext OwnerWebContext, params types.OwnerContentListParams) (types.OwnerContentThreadPage, error) {
 	if err := requireOwnerWebContext(ownerContext); err != nil {
-		return nil, err
+		return types.OwnerContentThreadPage{}, err
 	}
 	params.UserID = strings.TrimSpace(params.UserID)
 	params.TeamRef = strings.TrimSpace(params.TeamRef)
-	if params.Limit == 0 {
-		params.Limit = 50
-	}
-	if params.Limit < 1 || params.Limit > 200 {
-		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "limit must be between 1 and 200."}
-	}
-	return s.repo.ListOwnerContentThreads(ctx, ownerContext.userID, params)
+	request := types.NormalizePageRequest(types.PageRequest{Limit: params.Limit, Offset: params.Offset})
+	params.Limit, params.Offset = request.Limit, request.Offset
+	return s.repo.ListOwnerContentThreadsPage(ctx, ownerContext.userID, params)
 }
 
 func (s *Service) SearchOwnerContentThreads(ctx context.Context, ownerContext OwnerWebContext, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
+	page, err := s.SearchOwnerContentThreadsPage(ctx, ownerContext, params)
+	return page.Threads, err
+}
+
+func (s *Service) SearchOwnerContentThreadsPage(ctx context.Context, ownerContext OwnerWebContext, params types.OwnerContentSearchParams) (types.OwnerContentThreadPage, error) {
 	if err := requireOwnerWebContext(ownerContext); err != nil {
-		return nil, err
+		return types.OwnerContentThreadPage{}, err
 	}
 	params.Query = strings.TrimSpace(params.Query)
+	if params.Query == "" {
+		return types.OwnerContentThreadPage{}, CodedError{Code: "INVALID_ARGUMENT", Message: "q is required."}
+	}
 	params.UserID = strings.TrimSpace(params.UserID)
 	params.TeamRef = strings.TrimSpace(params.TeamRef)
-	if params.Query == "" {
-		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "query is required."}
-	}
-	if params.Limit == 0 {
-		params.Limit = 50
-	}
-	if params.Limit < 1 || params.Limit > 200 {
-		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "limit must be between 1 and 200."}
-	}
-	return s.repo.SearchOwnerContentThreads(ctx, ownerContext.userID, params)
+	request := types.NormalizePageRequest(types.PageRequest{Limit: params.Limit, Offset: params.Offset})
+	params.Limit, params.Offset = request.Limit, request.Offset
+	return s.repo.SearchOwnerContentThreadsPage(ctx, ownerContext.userID, params)
 }
 
 func (s *Service) GetOwnerContentThread(ctx context.Context, ownerContext OwnerWebContext, threadID string) (*types.OwnerContentThreadDetail, error) {
@@ -1081,19 +1091,19 @@ func (s *Service) SignedOwnerContentAssetDownloadURL(ctx context.Context, ownerC
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
-	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
-		StorageKey:       asset.StorageKey,
-		FileName:         asset.FileName,
-		MimeType:         asset.MimeType,
-		ExpiresInSeconds: validate.ClampSignedURLExpiry(expiresSeconds),
-	})
+	return s.signAvailableAsset(ctx, *asset, validate.ClampSignedURLExpiry(expiresSeconds), false)
 }
 
 func (s *Service) ListOwnerAPIKeys(ctx context.Context, authContext types.AuthContext) ([]types.APIKey, error) {
+	page, err := s.ListOwnerAPIKeysPage(ctx, authContext, types.PageRequest{})
+	return page.Credentials, err
+}
+
+func (s *Service) ListOwnerAPIKeysPage(ctx context.Context, authContext types.AuthContext, pageRequest types.PageRequest) (types.APIKeyPage, error) {
 	if err := requireOwnerBrowser(authContext); err != nil {
-		return nil, err
+		return types.APIKeyPage{}, err
 	}
-	return s.repo.ListAllAPIKeys(ctx)
+	return s.repo.ListAllAPIKeysPage(ctx, pageRequest)
 }
 
 func (s *Service) RevokeOwnerAPIKey(ctx context.Context, authContext types.AuthContext, keyID string) error {
@@ -1149,19 +1159,20 @@ func (s *Service) PurgeUserAttachments(ctx context.Context, authContext types.Au
 	if limit < 1 || limit > 100 {
 		return types.AttachmentPurgeResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "limit must be between 1 and 100."}
 	}
-	target, err := s.repo.GetUserByID(ctx, userID)
+	lease, err := s.repo.AcquireAttachmentPurgeLease(ctx, userID)
+	if errors.Is(err, types.ErrUserNotFound) {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: err}
+	}
+	if errors.Is(err, types.ErrOwnerCannotBeDisabled) {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "OWNER_IMMUTABLE", Message: "The permanent deployment owner's attachments cannot be purged.", Err: err}
+	}
+	if errors.Is(err, types.ErrUserMustBeDisabled) {
+		return types.AttachmentPurgeResult{}, CodedError{Code: "USER_ACTIVE", Message: "Attachments can be purged only after the user is disabled.", Err: err}
+	}
 	if err != nil {
 		return types.AttachmentPurgeResult{}, err
 	}
-	if target == nil {
-		return types.AttachmentPurgeResult{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: types.ErrUserNotFound}
-	}
-	if target.IsOwner {
-		return types.AttachmentPurgeResult{}, CodedError{Code: "OWNER_IMMUTABLE", Message: "The permanent deployment owner's attachments cannot be purged."}
-	}
-	if target.DisabledAt == nil {
-		return types.AttachmentPurgeResult{}, CodedError{Code: "USER_ACTIVE", Message: "Attachments can be purged only after the user is disabled."}
-	}
+	defer func() { _ = lease.Close(ctx) }()
 
 	candidates, err := s.repo.ListAssetPurgeCandidates(ctx, userID, limit)
 	if err != nil {
@@ -1251,22 +1262,40 @@ func (s *Service) RenameTeam(ctx context.Context, authContext types.AuthContext,
 }
 
 func (s *Service) ListOwnerTeams(ctx context.Context, authContext types.AuthContext) ([]types.TeamWithMembers, error) {
+	page, err := s.ListOwnerTeamsPage(ctx, authContext, types.PageRequest{})
+	return page.Teams, err
+}
+
+func (s *Service) ListOwnerTeamsPage(ctx context.Context, authContext types.AuthContext, pageRequest types.PageRequest) (types.TeamPage, error) {
 	if err := requireOwnerBrowser(authContext); err != nil {
-		return nil, err
+		return types.TeamPage{}, err
 	}
-	teams, err := s.repo.ListTeams(ctx)
+	return s.repo.ListTeamsPage(ctx, pageRequest, 10)
+}
+
+func (s *Service) ListOwnerTeamMembersPage(ctx context.Context, authContext types.AuthContext, teamID string, pageRequest types.PageRequest) (types.TeamMemberPage, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.TeamMemberPage{}, err
+	}
+	page, err := s.repo.ListTeamMembersPage(ctx, strings.TrimSpace(teamID), pageRequest)
+	if errors.Is(err, types.ErrTeamNotFound) {
+		return types.TeamMemberPage{}, CodedError{Code: "TEAM_NOT_FOUND", Message: "Team not found.", Err: err}
+	}
+	return page, err
+}
+
+func (s *Service) ListOwnerUserTeamsPage(ctx context.Context, authContext types.AuthContext, userID string, pageRequest types.PageRequest) (types.UserTeamPage, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return types.UserTeamPage{}, err
+	}
+	user, err := s.repo.GetUserByID(ctx, strings.TrimSpace(userID))
 	if err != nil {
-		return nil, err
+		return types.UserTeamPage{}, err
 	}
-	result := make([]types.TeamWithMembers, 0, len(teams))
-	for _, team := range teams {
-		members, err := s.repo.ListTeamMembers(ctx, team.ID)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, types.TeamWithMembers{Team: team, Members: members})
+	if user == nil {
+		return types.UserTeamPage{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: types.ErrUserNotFound}
 	}
-	return result, nil
+	return s.repo.ListUserTeamsPage(ctx, user.ID, pageRequest)
 }
 
 func (s *Service) ListMyTeams(ctx context.Context, authContext types.AuthContext) ([]types.Team, error) {
@@ -1503,7 +1532,7 @@ func generatePublicToken() (string, error) {
 	return "agpub_" + hex.EncodeToString(buffer), nil
 }
 
-func sanitizePublicThread(token string, thread types.ThreadWithMessages) types.PublicThreadView {
+func (s *Service) sanitizePublicThread(ctx context.Context, token string, thread types.ThreadWithMessages) types.PublicThreadView {
 	view := types.PublicThreadView{
 		ID:                       thread.ID,
 		Title:                    thread.Title,
@@ -1538,7 +1567,17 @@ func sanitizePublicThread(token string, thread types.ThreadWithMessages) types.P
 				PurgedAt:                 asset.PurgedAt,
 			}
 			if asset.PurgedAt == nil {
-				publicAsset.DownloadPath = "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID) + "/download"
+				metadata, err := s.assets.HeadAssetObject(ctx, asset.StorageKey)
+				if err != nil || metadata.SizeBytes != asset.SizeBytes {
+					publicAsset.Unavailable = true
+					publicAsset.UnavailableReason = "Attachment unavailable"
+				} else {
+					basePath := "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID)
+					publicAsset.DownloadPath = basePath + "/download"
+					if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
+						publicAsset.PreviewPath = basePath + "/preview"
+					}
+				}
 			}
 			publicMessage.Assets = append(publicMessage.Assets, publicAsset)
 		}

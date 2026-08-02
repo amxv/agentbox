@@ -25,8 +25,18 @@ type Team = {
   updated_at: string;
 };
 
+type PageInfo = {
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_cursor?: string;
+  previous_cursor?: string;
+};
+
 type TeamWithMembers = Team & {
   members: User[];
+  member_count: number;
+  members_page: PageInfo;
 };
 
 type Credential = {
@@ -74,12 +84,26 @@ async function responseJSON(response: Response) {
   return data;
 }
 
+const initialPage: PageInfo = { limit: 25, offset: 0, has_more: false };
+
+function mergeByID<T extends { id: string }>(current: T[], incoming: T[]) {
+  const merged = new Map(current.map((item) => [item.id, item]));
+  for (const item of incoming) merged.set(item.id, item);
+  return [...merged.values()];
+}
+
 export function OwnerUsersView() {
   const router = useRouter();
   const [users, setUsers] = useState<User[]>([]);
+  const [usersPage, setUsersPage] = useState<PageInfo>(initialPage);
   const [teams, setTeams] = useState<TeamWithMembers[]>([]);
+  const [teamsPage, setTeamsPage] = useState<PageInfo>(initialPage);
   const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [credentialsPage, setCredentialsPage] = useState<PageInfo>(initialPage);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [invitationsPage, setInvitationsPage] = useState<PageInfo>(initialPage);
+  const [userTeamsByUser, setUserTeamsByUser] = useState<Record<string, Team[]>>({});
+  const [userTeamPages, setUserTeamPages] = useState<Record<string, PageInfo>>({});
   const [created, setCreated] = useState<CreatedInvitation | null>(null);
   const [expiryMinutes, setExpiryMinutes] = useState(7 * 24 * 60);
   const [selectedInvitationTeamIDs, setSelectedInvitationTeamIDs] = useState<string[]>([]);
@@ -98,18 +122,6 @@ export function OwnerUsersView() {
     [invitations]
   );
 
-  const teamsByUser = useMemo(() => {
-    const result = new Map<string, Team[]>();
-    for (const team of teams) {
-      for (const member of team.members) {
-        const memberTeams = result.get(member.id) ?? [];
-        memberTeams.push(team);
-        result.set(member.id, memberTeams);
-      }
-    }
-    return result;
-  }, [teams]);
-
   const credentialsByUser = useMemo(() => {
     const result = new Map<string, Credential[]>();
     for (const credential of credentials) {
@@ -124,10 +136,10 @@ export function OwnerUsersView() {
     setError(null);
     try {
       const [usersResponse, invitationsResponse, teamsResponse, credentialsResponse] = await Promise.all([
-        fetch("/api/owner/users", { cache: "no-store" }),
-        fetch("/api/owner/invitations", { cache: "no-store" }),
-        fetch("/api/owner/teams", { cache: "no-store" }),
-        fetch("/api/owner/credentials", { cache: "no-store" })
+        fetch("/api/owner/users?limit=25", { cache: "no-store" }),
+        fetch("/api/owner/invitations?limit=25", { cache: "no-store" }),
+        fetch("/api/owner/teams?limit=25", { cache: "no-store" }),
+        fetch("/api/owner/credentials?limit=50", { cache: "no-store" })
       ]);
       if ([usersResponse, invitationsResponse, teamsResponse, credentialsResponse].some((response) => response.status === 401 || response.status === 403)) {
         router.replace("/login?next=/owner/users");
@@ -141,9 +153,15 @@ export function OwnerUsersView() {
       ]);
       const nextTeams = (teamsData.teams ?? []) as TeamWithMembers[];
       setUsers(usersData.users ?? []);
+      setUsersPage(usersData.page ?? initialPage);
       setInvitations(invitationsData.invitations ?? []);
+      setInvitationsPage(invitationsData.page ?? initialPage);
       setTeams(nextTeams);
+      setTeamsPage(teamsData.page ?? initialPage);
       setCredentials(credentialsData.credentials ?? []);
+      setCredentialsPage(credentialsData.page ?? initialPage);
+      setUserTeamsByUser({});
+      setUserTeamPages({});
       setTeamNameDrafts(Object.fromEntries(nextTeams.map((team) => [team.id, team.name])));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -151,6 +169,93 @@ export function OwnerUsersView() {
       setLoading(false);
     }
   }, [router]);
+
+  async function loadMoreUsers() {
+    if (!usersPage.next_cursor) return;
+    setBusy("users:more");
+    try {
+      const data = await responseJSON(await fetch(`/api/owner/users?limit=25&cursor=${encodeURIComponent(usersPage.next_cursor)}`, { cache: "no-store" }));
+      setUsers((current) => mergeByID(current, data.users ?? []));
+      setUsersPage(data.page ?? initialPage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadMoreTeams() {
+    if (!teamsPage.next_cursor) return;
+    setBusy("teams:more");
+    try {
+      const data = await responseJSON(await fetch(`/api/owner/teams?limit=25&cursor=${encodeURIComponent(teamsPage.next_cursor)}`, { cache: "no-store" }));
+      const incoming = (data.teams ?? []) as TeamWithMembers[];
+      setTeams((current) => mergeByID(current, incoming));
+      setTeamsPage(data.page ?? initialPage);
+      setTeamNameDrafts((current) => ({ ...current, ...Object.fromEntries(incoming.map((team) => [team.id, team.name])) }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadMoreInvitations() {
+    if (!invitationsPage.next_cursor) return;
+    setBusy("invitations:more");
+    try {
+      const data = await responseJSON(await fetch(`/api/owner/invitations?limit=25&cursor=${encodeURIComponent(invitationsPage.next_cursor)}`, { cache: "no-store" }));
+      setInvitations((current) => mergeByID(current, data.invitations ?? []));
+      setInvitationsPage(data.page ?? initialPage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadMoreCredentials() {
+    if (!credentialsPage.next_cursor) return;
+    setBusy("credentials:more");
+    try {
+      const data = await responseJSON(await fetch(`/api/owner/credentials?limit=50&cursor=${encodeURIComponent(credentialsPage.next_cursor)}`, { cache: "no-store" }));
+      setCredentials((current) => mergeByID(current, data.credentials ?? []));
+      setCredentialsPage(data.page ?? initialPage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadMoreTeamMembers(team: TeamWithMembers) {
+    if (!team.members_page.next_cursor) return;
+    setBusy(`team:members:${team.id}`);
+    try {
+      const data = await responseJSON(await fetch(`/api/owner/teams/${encodeURIComponent(team.id)}/members?limit=10&cursor=${encodeURIComponent(team.members_page.next_cursor)}`, { cache: "no-store" }));
+      setTeams((current) => current.map((candidate) => candidate.id === team.id
+        ? { ...candidate, members: mergeByID(candidate.members, data.members ?? []), members_page: data.page ?? initialPage }
+        : candidate));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadUserTeams(userID: string, cursor = "") {
+    setBusy(`user:teams:${userID}`);
+    try {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const data = await responseJSON(await fetch(`/api/owner/users/${encodeURIComponent(userID)}/teams?limit=10${suffix}`, { cache: "no-store" }));
+      setUserTeamsByUser((current) => ({ ...current, [userID]: mergeByID(cursor ? current[userID] ?? [] : [], data.teams ?? []) }));
+      setUserTeamPages((current) => ({ ...current, [userID]: data.page ?? initialPage }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
@@ -337,7 +442,7 @@ export function OwnerUsersView() {
       <main className={styles.main}>
         <section className={styles.hero}>
           <div><p className={styles.eyebrow}>Deployment administration</p><h1>Users, teams, invitations.</h1><p>Manage deployment-wide identity without collapsing actor attribution. Teams overlap freely, while every thread remains private until it is explicitly shared.</p></div>
-          <div className={styles.metrics}><div><span>Users</span><b>{users.length}</b></div><div><span>Teams</span><b>{teams.length}</b></div><div><span>Active credentials</span><b>{credentials.filter((credential) => !credential.revoked_at).length}</b></div><div><span>Active invitations</span><b>{activeInvitations}</b></div></div>
+          <div className={styles.metrics}><div><span>Loaded users</span><b>{users.length}</b></div><div><span>Loaded teams</span><b>{teams.length}</b></div><div><span>Loaded active credentials</span><b>{credentials.filter((credential) => !credential.revoked_at).length}</b></div><div><span>Loaded active invitations</span><b>{activeInvitations}</b></div></div>
         </section>
 
         {error && <div className={styles.error}><strong>Owner action failed.</strong><span>{error}</span></div>}
@@ -375,11 +480,12 @@ export function OwnerUsersView() {
               const availableUsers = users.filter((user) => !user.disabled_at && !memberIDs.has(user.id));
               const selectedUserID = memberDrafts[team.id] || availableUsers[0]?.id || "";
               return <article className={styles.teamCard} key={team.id}>
-                <div className={styles.teamCardTop}><div><code>{team.slug}</code><span>{team.id}</span></div><strong>{team.members.length} {team.members.length === 1 ? "member" : "members"}</strong></div>
+                <div className={styles.teamCardTop}><div><code>{team.slug}</code><span>{team.id}</span></div><strong>{team.member_count} {team.member_count === 1 ? "member" : "members"}</strong></div>
                 <div className={styles.teamNameEditor}><input aria-label={`Rename ${team.name}`} value={teamNameDrafts[team.id] ?? team.name} onChange={(event)=>setTeamNameDrafts((current)=>({...current,[team.id]:event.target.value}))}/><button type="button" onClick={()=>renameTeam(team)} disabled={busy === `team:rename:${team.id}` || !(teamNameDrafts[team.id] ?? "").trim() || teamNameDrafts[team.id] === team.name}>{busy === `team:rename:${team.id}` ? "Saving…" : "Save name"}</button></div>
                 <div className={styles.memberList}>
                   {team.members.length === 0 && <p>No members.</p>}
                   {team.members.map((member)=><div className={styles.memberChip} key={member.id}><span><strong>{member.display_name}</strong><small>{member.email}</small></span><button type="button" aria-label={`Remove ${member.display_name} from ${team.name}`} disabled={busy === `team:remove:${team.id}:${member.id}`} onClick={()=>removeMember(team.id,member.id)}>×</button></div>)}
+                  {team.members_page.next_cursor && <button type="button" className={styles.inlinePager} disabled={busy === `team:members:${team.id}`} onClick={()=>void loadMoreTeamMembers(team)}>{busy === `team:members:${team.id}` ? "Loading…" : `Load more members (${team.members.length}/${team.member_count})`}</button>}
                 </div>
                 <div className={styles.memberAdder}>
                   <select aria-label={`Add a member to ${team.name}`} value={selectedUserID} onChange={(event)=>setMemberDrafts((current)=>({...current,[team.id]:event.target.value}))} disabled={availableUsers.length === 0}>{availableUsers.length === 0 ? <option value="">Everyone is a member</option> : availableUsers.map((user)=><option key={user.id} value={user.id}>{user.display_name}{user.disabled_at ? " · disabled" : ""}</option>)}</select>
@@ -388,19 +494,21 @@ export function OwnerUsersView() {
               </article>;
             })}
           </div>
+          {teamsPage.next_cursor && <div className={styles.pager}><button type="button" className={styles.ghost} disabled={busy === "teams:more"} onClick={()=>void loadMoreTeams()}>{busy === "teams:more" ? "Loading…" : "Load more teams"}</button></div>}
         </section>
 
         <section className={styles.grid}>
           <div className={styles.panel}>
-            <div className={styles.panelHeading}><div><p className={styles.sectionLabel}>Accounts</p><h2>Deployment users</h2></div><button className={styles.ghost} type="button" onClick={()=>void load()} disabled={loading}>Refresh</button></div>
+            <div className={styles.panelHeading}><div><p className={styles.sectionLabel}>Accounts</p><h2>Deployment users</h2></div><div className={styles.headingActions}><button className={styles.ghost} type="button" onClick={()=>void load()} disabled={loading}>Refresh</button>{credentialsPage.next_cursor && <button className={styles.ghost} type="button" onClick={()=>void loadMoreCredentials()} disabled={busy === "credentials:more"}>{busy === "credentials:more" ? "Loading…" : "Load more credentials"}</button>}</div></div>
             <div className={styles.rows}>
               {loading && <p className={styles.empty}>Loading users…</p>}
               {!loading && users.map((user) => {
-                const userTeams = teamsByUser.get(user.id) ?? [];
+                const userTeams = userTeamsByUser[user.id];
+                const userTeamsPage = userTeamPages[user.id];
                 const userCredentials = credentialsByUser.get(user.id) ?? [];
                 return <article className={styles.userRow} key={user.id}>
                   <div className={styles.avatar}>{user.display_name.slice(0, 1).toUpperCase()}</div>
-                  <div className={styles.identity}><div><strong>{user.display_name}</strong>{user.is_owner && <span className={styles.ownerBadge}>Owner</span>}{user.disabled_at && <span className={styles.disabledBadge}>Disabled</span>}</div><span>{user.email}</span><div className={styles.tags}>{userTeams.length === 0 ? <em className={styles.noTeam}>No teams</em> : userTeams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}</div><code>{user.id}</code></div>
+                  <div className={styles.identity}><div><strong>{user.display_name}</strong>{user.is_owner && <span className={styles.ownerBadge}>Owner</span>}{user.disabled_at && <span className={styles.disabledBadge}>Disabled</span>}</div><span>{user.email}</span><div className={styles.tags}>{userTeams === undefined ? <button type="button" className={styles.inlinePager} disabled={busy === `user:teams:${user.id}`} onClick={()=>void loadUserTeams(user.id)}>{busy === `user:teams:${user.id}` ? "Loading teams…" : "View teams"}</button> : userTeams.length === 0 ? <em className={styles.noTeam}>No teams</em> : <>{userTeams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}{userTeamsPage?.next_cursor && <button type="button" className={styles.inlinePager} disabled={busy === `user:teams:${user.id}`} onClick={()=>void loadUserTeams(user.id,userTeamsPage.next_cursor)}>{busy === `user:teams:${user.id}` ? "Loading…" : "More teams"}</button>}</>}</div><code>{user.id}</code></div>
                   <div className={styles.rowAction}>{user.is_owner ? <span>Protected</span> : <><button type="button" disabled={busy === `user:${user.id}`} onClick={()=>setDisabled(user, !user.disabled_at)}>{busy === `user:${user.id}` ? "Saving…" : user.disabled_at ? "Enable" : "Disable"}</button>{user.disabled_at && <button className={styles.danger} type="button" disabled={busy === `purge:${user.id}`} onClick={()=>purgeAttachments(user)}>{busy === `purge:${user.id}` ? "Purging…" : "Purge attachments"}</button>}</>}</div>
                   <div className={styles.credentialList}>
                     <div className={styles.credentialHeading}><span>Credentials</span><small>{userCredentials.filter((credential) => !credential.revoked_at).length} active</small></div>
@@ -413,6 +521,7 @@ export function OwnerUsersView() {
                 </article>;
               })}
             </div>
+            {usersPage.next_cursor && <div className={styles.pager}><button type="button" className={styles.ghost} disabled={busy === "users:more"} onClick={()=>void loadMoreUsers()}>{busy === "users:more" ? "Loading…" : "Load more users"}</button></div>}
           </div>
 
           <div className={styles.panel}>
@@ -424,6 +533,7 @@ export function OwnerUsersView() {
                 return <article className={styles.invitationRow} key={invitation.id}><div><div className={styles.invitationTop}><strong>{status}</strong><code>{invitation.id}</code></div><span>Expires {new Date(invitation.expires_at).toLocaleString()}</span><div className={styles.tags}>{invitation.teams.length === 0 ? <em className={styles.noTeam}>No initial teams</em> : invitation.teams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}</div></div>{status === "Active" && <button className={styles.ghost} type="button" disabled={busy === `invite:${invitation.id}`} onClick={()=>revokeInvitation(invitation.id)}>{busy === `invite:${invitation.id}` ? "Revoking…" : "Revoke"}</button>}</article>;
               })}
             </div>
+            {invitationsPage.next_cursor && <div className={styles.pager}><button type="button" className={styles.ghost} disabled={busy === "invitations:more"} onClick={()=>void loadMoreInvitations()}>{busy === "invitations:more" ? "Loading…" : "Load more invitations"}</button></div>}
           </div>
         </section>
       </main>

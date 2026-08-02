@@ -870,3 +870,9 @@
     width: 100%;
   }
 }
+
+.headingActions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.pager { display: flex; justify-content: center; padding: 16px 0 2px; }
+.inlinePager { border: 1px solid var(--border); background: transparent; color: var(--muted); border-radius: 999px; padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+.inlinePager:hover:not(:disabled) { color: var(--text); border-color: var(--text); }
+.inlinePager:disabled { cursor: default; opacity: .55; }

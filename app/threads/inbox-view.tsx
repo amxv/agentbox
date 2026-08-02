@@ -62,11 +62,11 @@ export function InboxView() {
   const [error, setError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const loadThreads = useCallback(async function loadThreads() {
+  const loadThreads = useCallback(async function loadThreads(signal: AbortSignal) {
     setLoading(true);
     setError(null);
     try {
-      const session = await fetchSession();
+      const session = await fetchSession(signal);
       if (!session) {
         router.replace("/login?next=/threads");
         return;
@@ -81,8 +81,8 @@ export function InboxView() {
       }
       const suffix = query.size > 0 ? `?${query.toString()}` : "";
       const [response, teamsResponse] = await Promise.all([
-        fetch(`/api/threads${suffix}`, { cache: "no-store" }),
-        fetch("/api/me/teams", { cache: "no-store" })
+        fetch(`/api/threads${suffix}`, { cache: "no-store", signal }),
+        fetch("/api/me/teams", { cache: "no-store", signal })
       ]);
       const [data, teamsData] = await Promise.all([response.json(), teamsResponse.json()]);
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
@@ -90,17 +90,22 @@ export function InboxView() {
       setThreads(data.threads ?? []);
       setTeams(teamsData.teams ?? []);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, [activeFilter, router]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const timeout = window.setTimeout(() => {
-      void loadThreads();
+      void loadThreads(controller.signal);
     }, 0);
-    return () => window.clearTimeout(timeout);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [loadThreads]);
 
   const latestUpdatedAt = useMemo(() => {

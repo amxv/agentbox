@@ -40,6 +40,7 @@ type SignedURLParams struct {
 	FileName         string
 	MimeType         *string
 	ExpiresInSeconds int
+	Inline           bool
 }
 
 type PresignedUploadParams struct {
@@ -57,6 +58,7 @@ type AssetStore interface {
 	UploadAssetBytes(ctx context.Context, params UploadBytesParams) (agenttypes.NewAsset, error)
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
+	HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error)
 	DeleteAssetObject(ctx context.Context, storageKey string) error
 	UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
@@ -80,6 +82,7 @@ func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (ba
 		Key:          key,
 		SizeBytes:    aws.ToInt64(output.ContentLength),
 		ETag:         normalizeETag(aws.ToString(output.ETag)),
+		ContentType:  output.ContentType,
 		LastModified: output.LastModified,
 	}, nil
 }
@@ -274,10 +277,14 @@ func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params Signe
 	if fallback == "" {
 		fallback = "download.bin"
 	}
+	disposition := "attachment"
+	if params.Inline {
+		disposition = "inline"
+	}
 	input := &s3.GetObjectInput{
 		Bucket:                     aws.String(s.cfg.R2Bucket),
 		Key:                        aws.String(params.StorageKey),
-		ResponseContentDisposition: aws.String(fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, fallback, url.PathEscape(params.FileName))),
+		ResponseContentDisposition: aws.String(fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, fallback, url.PathEscape(params.FileName))),
 	}
 	if params.MimeType != nil {
 		input.ResponseContentType = params.MimeType
@@ -293,6 +300,13 @@ func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params Signe
 		return "", err
 	}
 	return out.URL, nil
+}
+
+func (s *R2Store) HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error) {
+	if strings.TrimSpace(s.cfg.R2Bucket) == "" {
+		return backup.ObjectMetadata{}, errors.New("R2_BUCKET is required for asset inspection.")
+	}
+	return s.HeadObject(ctx, s.cfg.R2Bucket, strings.TrimSpace(storageKey))
 }
 
 func (s *R2Store) DeleteAssetObject(ctx context.Context, storageKey string) error {

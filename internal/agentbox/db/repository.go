@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"agentbox/internal/agentbox/config"
+	"agentbox/internal/agentbox/identity"
 	"agentbox/internal/agentbox/types"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,6 +24,91 @@ var ErrOwnerAlreadyExists = types.ErrOwnerAlreadyExists
 var ErrOwnerSetupTokenInvalid = types.ErrOwnerSetupTokenInvalid
 
 const ownerBootstrapAdvisoryLockID int64 = 0x4167656e744f776e
+const attachmentPurgeAdvisoryNamespace int64 = 0x41505055524745
+
+func lockThreadAccessForMutation(ctx context.Context, tx pgx.Tx, userID string, threadID string) error {
+	var ownerUserID string
+	if err := tx.QueryRow(ctx, `
+select owner_user_id
+from threads
+where id = $1
+for update
+`, strings.TrimSpace(threadID)).Scan(&ownerUserID); errors.Is(err, pgx.ErrNoRows) {
+		return types.ErrThreadNotFound
+	} else if err != nil {
+		return err
+	}
+	if ownerUserID == strings.TrimSpace(userID) {
+		return nil
+	}
+
+	rows, err := tx.Query(ctx, `
+select tm.team_id
+from thread_team_shares tts
+join team_memberships tm on tm.team_id = tts.team_id
+where tts.thread_id = $1 and tm.user_id = $2
+for key share of tts, tm
+`, strings.TrimSpace(threadID), strings.TrimSpace(userID))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return types.ErrThreadNotFound
+	}
+	return nil
+}
+
+type transactionAssetLease struct {
+	tx       pgx.Tx
+	asset    types.Asset
+	once     sync.Once
+	closeErr error
+}
+
+func (l *transactionAssetLease) Asset() types.Asset { return l.asset }
+func (l *transactionAssetLease) Close(ctx context.Context) error {
+	l.once.Do(func() { l.closeErr = l.tx.Commit(ctx) })
+	return l.closeErr
+}
+
+type transactionPublicThreadLease struct {
+	tx       pgx.Tx
+	thread   types.ThreadWithMessages
+	once     sync.Once
+	closeErr error
+}
+
+func (l *transactionPublicThreadLease) Thread() types.ThreadWithMessages { return l.thread }
+func (l *transactionPublicThreadLease) Close(ctx context.Context) error {
+	l.once.Do(func() { l.closeErr = l.tx.Commit(ctx) })
+	return l.closeErr
+}
+
+type postgresAttachmentPurgeLease struct {
+	conn     *pgxpool.Conn
+	userID   string
+	once     sync.Once
+	closeErr error
+}
+
+func (l *postgresAttachmentPurgeLease) Close(_ context.Context) error {
+	l.once.Do(func() {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, l.closeErr = l.conn.Exec(cleanupContext, `select pg_advisory_unlock(hashtextextended($1, $2))`, l.userID, attachmentPurgeAdvisoryNamespace)
+		if l.closeErr != nil {
+			connection := l.conn.Hijack()
+			_ = connection.Close(cleanupContext)
+			return
+		}
+		l.conn.Release()
+	})
+	return l.closeErr
+}
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -191,72 +278,6 @@ where `+normalThreadAccessPredicate+` and t.id = $2
 	return &visibility, nil
 }
 
-func (r *Repository) SetThreadVisibility(ctx context.Context, userID string, threadID string, teamIDs []string) (types.ThreadVisibility, error) {
-	teamIDs = uniqueNonEmptyStrings(teamIDs)
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	defer tx.Rollback(ctx)
-
-	visibility := types.ThreadVisibility{ThreadID: threadID}
-	err = tx.QueryRow(ctx, `
-select t.owner_user_id
-from threads t
-where `+normalThreadAccessPredicate+` and t.id = $2
-for update of t
-`, userID, threadID).Scan(&visibility.OwnerUserID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return types.ThreadVisibility{}, types.ErrThreadNotFound
-	}
-	if err != nil {
-		return types.ThreadVisibility{}, err
-	}
-
-	teams, err := listTeamsByIDsTx(ctx, tx, teamIDs)
-	if err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	currentTeams, err := listThreadTeamsTx(ctx, tx, threadID)
-	if err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	currentTeamIDs := make(map[string]struct{}, len(currentTeams))
-	for _, team := range currentTeams {
-		currentTeamIDs[team.ID] = struct{}{}
-	}
-	additionIDs := make([]string, 0, len(teamIDs))
-	for _, teamID := range teamIDs {
-		if _, exists := currentTeamIDs[teamID]; !exists {
-			additionIDs = append(additionIDs, teamID)
-		}
-	}
-	if err := requireUserTeamMembershipsTx(ctx, tx, userID, additionIDs); err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	if _, err := tx.Exec(ctx, `
-delete from thread_team_shares
-where thread_id = $1
-  and not (team_id = any($2::text[]))
-`, threadID, teamIDs); err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	for _, team := range teams {
-		if _, err := tx.Exec(ctx, `
-insert into thread_team_shares (thread_id, team_id, created_by_user_id)
-values ($1, $2, $3)
-on conflict (thread_id, team_id) do nothing
-`, threadID, team.ID, userID); err != nil {
-			return types.ThreadVisibility{}, err
-		}
-	}
-	visibility.SharedTeams = teams
-	if err := tx.Commit(ctx); err != nil {
-		return types.ThreadVisibility{}, err
-	}
-	return visibility, nil
-}
-
 func (r *Repository) listThreadTeams(ctx context.Context, threadID string) ([]types.Team, error) {
 	rows, err := r.pool.Query(ctx, `
 select t.id, t.slug, t.name, t.created_at, t.updated_at
@@ -344,17 +365,23 @@ func (r *Repository) ManageThreadVisibility(ctx context.Context, userID string, 
 	defer tx.Rollback(ctx)
 
 	state := types.ManagedThreadVisibility{ThreadID: threadID}
-	threadQuery := `
+	if mutation {
+		if err := lockThreadAccessForMutation(ctx, tx, userID, threadID); err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
+		if err := tx.QueryRow(ctx, `select owner_user_id from threads where id = $1`, threadID).Scan(&state.OwnerUserID); err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
+	} else {
+		if err := tx.QueryRow(ctx, `
 select t.owner_user_id
 from threads t
-where ` + normalThreadAccessPredicate + ` and t.id = $2`
-	if mutation {
-		threadQuery += ` for update of t`
-	}
-	if err := tx.QueryRow(ctx, threadQuery, userID, threadID).Scan(&state.OwnerUserID); errors.Is(err, pgx.ErrNoRows) {
-		return types.ManagedThreadVisibility{}, types.ErrThreadNotFound
-	} else if err != nil {
-		return types.ManagedThreadVisibility{}, err
+where `+normalThreadAccessPredicate+` and t.id = $2
+`, userID, threadID).Scan(&state.OwnerUserID); errors.Is(err, pgx.ErrNoRows) {
+			return types.ManagedThreadVisibility{}, types.ErrThreadNotFound
+		} else if err != nil {
+			return types.ManagedThreadVisibility{}, err
+		}
 	}
 
 	availableTeams, err := listUserTeamsTx(ctx, tx, userID)
@@ -542,187 +569,132 @@ func stringSetsOverlap(left []string, right []string) bool {
 	return false
 }
 
-func (r *Repository) GetThreadPublicLink(ctx context.Context, userID string, threadID string) (*types.ThreadPublicLink, error) {
-	link, err := scanThreadPublicLink(r.pool.QueryRow(ctx, `
-select
-  link.thread_id,
-  coalesce(link.token_value, ''),
-  link.token_hash,
-  link.token_prefix,
-  link.created_by_user_id,
-  link.created_at,
-  link.updated_at,
-  link.revoked_at
-from threads t
-join thread_public_links link on link.thread_id = t.id
-where `+normalThreadAccessPredicate+`
-  and t.id = $2
-  and link.revoked_at is null
-`, userID, threadID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+func (r *Repository) AcquirePublicThreadLease(ctx context.Context, tokenHash string) (types.PublicThreadAuthorizationLease, error) {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &link, nil
-}
-
-func (r *Repository) CreateThreadPublicLink(ctx context.Context, userID string, threadID string, token string, tokenHash string, tokenPrefix string, rotate bool) (types.ThreadPublicLink, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return types.ThreadPublicLink{}, err
+	fail := func(err error) (types.PublicThreadAuthorizationLease, error) {
+		_ = tx.Rollback(ctx)
+		return nil, err
 	}
-	defer tx.Rollback(ctx)
-
-	var lockedThreadID string
-	if err := tx.QueryRow(ctx, `
-select t.id
-from threads t
-where `+normalThreadAccessPredicate+` and t.id = $2
-for update of t
-`, userID, threadID).Scan(&lockedThreadID); errors.Is(err, pgx.ErrNoRows) {
-		return types.ThreadPublicLink{}, types.ErrThreadNotFound
-	} else if err != nil {
-		return types.ThreadPublicLink{}, err
-	}
-
-	var activeExists bool
-	if err := tx.QueryRow(ctx, `
-select exists (
-  select 1
-  from thread_public_links
-  where thread_id = $1 and revoked_at is null
-)
-`, threadID).Scan(&activeExists); err != nil {
-		return types.ThreadPublicLink{}, err
-	}
-	if activeExists && !rotate {
-		return types.ThreadPublicLink{}, types.ErrThreadPublicLinkExists
-	}
-
-	link, err := scanThreadPublicLink(tx.QueryRow(ctx, `
-insert into thread_public_links (
-  thread_id, token_value, token_hash, token_prefix, created_by_user_id
-)
-values ($1, $2, $3, $4, $5)
-on conflict (thread_id) do update
-set token_value = excluded.token_value,
-    token_hash = excluded.token_hash,
-    token_prefix = excluded.token_prefix,
-    created_by_user_id = excluded.created_by_user_id,
-    updated_at = now(),
-    revoked_at = null
-returning
-  thread_id,
-  token_value,
-  token_hash,
-  token_prefix,
-  created_by_user_id,
-  created_at,
-  updated_at,
-  revoked_at
-`, threadID, token, tokenHash, tokenPrefix, userID))
-	if err != nil {
-		return types.ThreadPublicLink{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return types.ThreadPublicLink{}, err
-	}
-	return link, nil
-}
-
-func (r *Repository) RevokeThreadPublicLink(ctx context.Context, userID string, threadID string) (bool, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback(ctx)
-	var lockedThreadID string
-	if err := tx.QueryRow(ctx, `
-select t.id
-from threads t
-where `+normalThreadAccessPredicate+` and t.id = $2
-for update of t
-`, userID, threadID).Scan(&lockedThreadID); errors.Is(err, pgx.ErrNoRows) {
-		return false, types.ErrThreadNotFound
-	} else if err != nil {
-		return false, err
-	}
-	tag, err := tx.Exec(ctx, `
-update thread_public_links
-set revoked_at = now(), updated_at = now()
-where thread_id = $1 and revoked_at is null
-`, threadID)
-	if err != nil {
-		return false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
-}
-
-func (r *Repository) GetThreadByPublicTokenHash(ctx context.Context, tokenHash string) (*types.ThreadWithMessages, error) {
-	thread, err := scanThread(r.pool.QueryRow(ctx, `
+	thread, err := scanThread(tx.QueryRow(ctx, `
 select
-  t.id,
-  t.owner_user_id,
-  t.title,
-  t.created_at,
-  t.updated_at,
-  t.created_by,
-  t.created_by_user_id,
-  t.created_by_key_id,
-  t.created_by_user_display_name,
-  t.created_by_actor_name
+  t.id, t.owner_user_id, t.title, t.created_at, t.updated_at, t.created_by,
+  t.created_by_user_id, t.created_by_key_id, t.created_by_user_display_name, t.created_by_actor_name
 from thread_public_links link
 join threads t on t.id = link.thread_id
 where link.token_hash = $1 and link.revoked_at is null
+for key share of link, t
 `, tokenHash))
 	if errors.Is(err, pgx.ErrNoRows) {
+		_ = tx.Rollback(ctx)
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
-	messages, err := r.loadThreadMessages(ctx, thread.ID)
+	messages, err := loadThreadMessagesTx(ctx, tx, thread.ID)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
-	return &types.ThreadWithMessages{
+	return &transactionPublicThreadLease{tx: tx, thread: types.ThreadWithMessages{
 		Thread:     thread,
 		Messages:   messages,
 		Visibility: types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID},
-	}, nil
+	}}, nil
 }
 
-func (r *Repository) GetAssetByPublicTokenHash(ctx context.Context, tokenHash string, assetID string) (*types.Asset, error) {
-	asset, err := scanAsset(r.pool.QueryRow(ctx, `
-select
-  a.id,
-  a.message_id,
-  a.storage_key,
-  a.file_name,
-  a.mime_type,
-  a.size_bytes,
-  a.created_at,
-  a.created_by,
-  a.created_by_user_id,
-  a.created_by_key_id,
-  a.created_by_user_display_name,
-  a.created_by_actor_name,
-  a.purged_at,
-  a.purged_by_user_id,
-  a.purge_last_attempt_at,
-  a.purge_error
+func (r *Repository) AcquirePublicAssetSigningLease(ctx context.Context, tokenHash string, assetID string) (types.AssetAuthorizationLease, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	asset, err := scanAsset(tx.QueryRow(ctx, `
+select a.id, a.message_id, a.storage_key, a.file_name, a.mime_type, a.size_bytes,
+       a.created_at, a.created_by, a.created_by_user_id, a.created_by_key_id,
+       a.created_by_user_display_name, a.created_by_actor_name,
+       a.purged_at, a.purged_by_user_id, a.purge_last_attempt_at, a.purge_error
 from thread_public_links link
-join messages m on m.thread_id = link.thread_id
+join threads t on t.id = link.thread_id
+join messages m on m.thread_id = t.id
 join assets a on a.message_id = m.id
-where link.token_hash = $1
-  and link.revoked_at is null
-  and a.id = $2
+where link.token_hash = $1 and link.revoked_at is null and a.id = $2
+for key share of link, t
 `, tokenHash, assetID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = tx.Rollback(ctx)
+		return nil, nil
+	}
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	return &transactionAssetLease{tx: tx, asset: asset}, nil
+}
+
+func (r *Repository) AcquireAssetSigningLease(ctx context.Context, userID string, assetID string) (types.AssetAuthorizationLease, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (types.AssetAuthorizationLease, error) {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	var threadID string
+	var ownerUserID string
+	if err := tx.QueryRow(ctx, `
+select t.id, t.owner_user_id
+from assets a
+join messages m on m.id = a.message_id
+join threads t on t.id = m.thread_id
+where a.id = $1
+for key share of t
+`, assetID).Scan(&threadID, &ownerUserID); errors.Is(err, pgx.ErrNoRows) {
+		_ = tx.Rollback(ctx)
+		return nil, nil
+	} else if err != nil {
+		return fail(err)
+	}
+	if ownerUserID != strings.TrimSpace(userID) {
+		rows, err := tx.Query(ctx, `
+select tm.team_id
+from thread_team_shares tts
+join team_memberships tm on tm.team_id = tts.team_id
+where tts.thread_id = $1 and tm.user_id = $2
+for key share of tts, tm
+`, threadID, strings.TrimSpace(userID))
+		if err != nil {
+			return fail(err)
+		}
+		qualified := rows.Next()
+		rows.Close()
+		if !qualified {
+			_ = tx.Rollback(ctx)
+			return nil, nil
+		}
+	}
+	asset, err := getAssetByIDTx(ctx, tx, assetID)
+	if err != nil {
+		return fail(err)
+	}
+	if asset == nil {
+		_ = tx.Rollback(ctx)
+		return nil, nil
+	}
+	return &transactionAssetLease{tx: tx, asset: *asset}, nil
+}
+
+func getAssetByIDTx(ctx context.Context, tx pgx.Tx, assetID string) (*types.Asset, error) {
+	asset, err := scanAsset(tx.QueryRow(ctx, `
+select a.id, a.message_id, a.storage_key, a.file_name, a.mime_type, a.size_bytes,
+       a.created_at, a.created_by, a.created_by_user_id, a.created_by_key_id,
+       a.created_by_user_display_name, a.created_by_actor_name,
+       a.purged_at, a.purged_by_user_id, a.purge_last_attempt_at, a.purge_error
+from assets a
+where a.id = $1
+`, assetID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -730,6 +702,64 @@ where link.token_hash = $1
 		return nil, err
 	}
 	return &asset, nil
+}
+
+func loadThreadMessagesTx(ctx context.Context, tx pgx.Tx, threadID string) ([]types.Message, error) {
+	rows, err := tx.Query(ctx, `
+select id, thread_id, author, body, body_content_type, created_at,
+       created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
+from messages
+where thread_id = $1
+order by created_at, id
+`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	messages := []types.Message{}
+	messageIndex := map[string]int{}
+	for rows.Next() {
+		message, err := scanMessage(rows, nil)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		messageIndex[message.ID] = len(messages)
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	assetRows, err := tx.Query(ctx, `
+select a.id, a.message_id, a.storage_key, a.file_name, a.mime_type, a.size_bytes,
+       a.created_at, a.created_by, a.created_by_user_id, a.created_by_key_id,
+       a.created_by_user_display_name, a.created_by_actor_name,
+       a.purged_at, a.purged_by_user_id, a.purge_last_attempt_at, a.purge_error
+from assets a
+join messages m on m.id = a.message_id
+where m.thread_id = $1
+order by a.created_at, a.id
+`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	for assetRows.Next() {
+		asset, err := scanAsset(assetRows)
+		if err != nil {
+			assetRows.Close()
+			return nil, err
+		}
+		if index, ok := messageIndex[asset.MessageID]; ok {
+			messages[index].Assets = append(messages[index].Assets, asset)
+		}
+	}
+	if err := assetRows.Err(); err != nil {
+		assetRows.Close()
+		return nil, err
+	}
+	assetRows.Close()
+	return messages, nil
 }
 
 func (r *Repository) loadThreadMessages(ctx context.Context, threadID string) ([]types.Message, error) {
@@ -950,17 +980,25 @@ limit $7
 }
 
 func (r *Repository) ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
-	return r.queryOwnerContentThreads(ctx, ownerUserID, "", params.UserID, params.TeamRef, params.Limit)
+	page, err := r.ListOwnerContentThreadsPage(ctx, ownerUserID, params)
+	return page.Threads, err
 }
 
 func (r *Repository) SearchOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error) {
-	return r.queryOwnerContentThreads(ctx, ownerUserID, params.Query, params.UserID, params.TeamRef, params.Limit)
+	page, err := r.SearchOwnerContentThreadsPage(ctx, ownerUserID, params)
+	return page.Threads, err
 }
 
-func (r *Repository) queryOwnerContentThreads(ctx context.Context, ownerUserID string, query string, userID string, teamRef string, limit int) ([]types.OwnerContentThreadSummary, error) {
-	if limit <= 0 {
-		limit = 50
-	}
+func (r *Repository) ListOwnerContentThreadsPage(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) (types.OwnerContentThreadPage, error) {
+	return r.queryOwnerContentThreadsPage(ctx, ownerUserID, "", params.UserID, params.TeamRef, types.PageRequest{Limit: params.Limit, Offset: params.Offset})
+}
+
+func (r *Repository) SearchOwnerContentThreadsPage(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) (types.OwnerContentThreadPage, error) {
+	return r.queryOwnerContentThreadsPage(ctx, ownerUserID, params.Query, params.UserID, params.TeamRef, types.PageRequest{Limit: params.Limit, Offset: params.Offset})
+}
+
+func (r *Repository) queryOwnerContentThreadsPage(ctx context.Context, ownerUserID string, query string, userID string, teamRef string, pageRequest types.PageRequest) (types.OwnerContentThreadPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	pattern := ""
 	if strings.TrimSpace(query) != "" {
 		pattern = "%" + strings.TrimSpace(query) + "%"
@@ -1004,21 +1042,25 @@ where ($2 = '' or t.title ilike $2 or exists (
       and (owner_filter_team.id = $4 or owner_filter_team.slug = lower($4))
   ))
 order by t.updated_at desc, t.id
-limit $5
-`, strings.TrimSpace(ownerUserID), pattern, strings.TrimSpace(userID), strings.TrimSpace(teamRef), limit)
+limit $5 offset $6
+`, strings.TrimSpace(ownerUserID), pattern, strings.TrimSpace(userID), strings.TrimSpace(teamRef), pageRequest.Limit+1, pageRequest.Offset)
 	if err != nil {
-		return nil, err
+		return types.OwnerContentThreadPage{}, err
 	}
 	defer rows.Close()
 	results := []types.OwnerContentThreadSummary{}
 	for rows.Next() {
 		result, err := scanOwnerContentThreadSummary(rows, query)
 		if err != nil {
-			return nil, err
+			return types.OwnerContentThreadPage{}, err
 		}
 		results = append(results, result)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return types.OwnerContentThreadPage{}, err
+	}
+	visible, pageInfo := types.PageWindow(pageRequest, len(results))
+	return types.OwnerContentThreadPage{Threads: results[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) GetOwnerContentThread(ctx context.Context, ownerUserID string, threadID string) (*types.OwnerContentThreadDetail, error) {
@@ -1339,6 +1381,47 @@ where `+normalThreadAccessPredicate+` and a.id = $2
 	return &asset, nil
 }
 
+func (r *Repository) AcquireAttachmentPurgeLease(ctx context.Context, userID string) (types.AttachmentPurgeLease, error) {
+	userID = strings.TrimSpace(userID)
+	connection, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	release := func() {
+		cleanupContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, unlockErr := connection.Exec(cleanupContext, `select pg_advisory_unlock(hashtextextended($1, $2))`, userID, attachmentPurgeAdvisoryNamespace)
+		if unlockErr != nil {
+			conn := connection.Hijack()
+			_ = conn.Close(cleanupContext)
+			return
+		}
+		connection.Release()
+	}
+	if _, err := connection.Exec(ctx, `select pg_advisory_lock(hashtextextended($1, $2))`, userID, attachmentPurgeAdvisoryNamespace); err != nil {
+		connection.Release()
+		return nil, err
+	}
+	var isOwner bool
+	var disabledAt *time.Time
+	if err := connection.QueryRow(ctx, `select is_owner, disabled_at from users where id = $1`, userID).Scan(&isOwner, &disabledAt); errors.Is(err, pgx.ErrNoRows) {
+		release()
+		return nil, types.ErrUserNotFound
+	} else if err != nil {
+		release()
+		return nil, err
+	}
+	if isOwner {
+		release()
+		return nil, types.ErrOwnerCannotBeDisabled
+	}
+	if disabledAt == nil {
+		release()
+		return nil, types.ErrUserMustBeDisabled
+	}
+	return &postgresAttachmentPurgeLease{conn: connection, userID: userID}, nil
+}
+
 func (r *Repository) ListAssetPurgeCandidates(ctx context.Context, uploaderUserID string, limit int) ([]types.AssetPurgeCandidate, error) {
 	if limit < 1 {
 		limit = 25
@@ -1418,6 +1501,47 @@ returning id, thread_id, storage_key, file_name, mime_type, size_bytes,
 	return created, err
 }
 
+func (r *Repository) CreatePendingUploads(ctx context.Context, userID string, uploads []types.PendingUpload) ([]types.PendingUpload, error) {
+	if len(uploads) == 0 {
+		return []types.PendingUpload{}, nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	threadID := uploads[0].ThreadID
+	if err := lockThreadAccessForMutation(ctx, tx, userID, threadID); err != nil {
+		return nil, err
+	}
+
+	created := make([]types.PendingUpload, 0, len(uploads))
+	for _, upload := range uploads {
+		if upload.ThreadID != threadID {
+			return nil, errors.New("pending upload batch must target one thread")
+		}
+		item, err := scanPendingUpload(tx.QueryRow(ctx, `
+insert into pending_uploads (
+  id, thread_id, storage_key, file_name, mime_type, size_bytes, expires_at,
+  created_by, created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
+)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+returning id, thread_id, storage_key, file_name, mime_type, size_bytes,
+          created_at, expires_at, created_by, created_by_user_id, created_by_key_id,
+          created_by_user_display_name, created_by_actor_name, consumed_at
+`, upload.ID, upload.ThreadID, upload.StorageKey, upload.FileName, upload.MimeType, upload.SizeBytes, upload.ExpiresAt, upload.CreatedBy, upload.CreatedByUserID, upload.CreatedByKeyID, upload.CreatedByUserDisplayName, upload.CreatedByActorName))
+		if err != nil {
+			return nil, err
+		}
+		created = append(created, item)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
 func (r *Repository) GetPendingUploads(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error) {
 	if len(uploadIDs) == 0 {
 		return []types.PendingUpload{}, nil
@@ -1469,22 +1593,67 @@ where p.thread_id = $2
 }
 
 func (r *Repository) PostMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
+	return r.postMessage(ctx, userID, threadID, auth, body, bodyContentType, newAssets, nil)
+}
+
+func (r *Repository) PostMessageWithPendingUploads(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset, pendingUploadIDs []string) (types.Message, error) {
+	return r.postMessage(ctx, userID, threadID, auth, body, bodyContentType, newAssets, pendingUploadIDs)
+}
+
+func (r *Repository) postMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset, pendingUploadIDs []string) (types.Message, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return types.Message{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var lockedThreadID string
-	if err := tx.QueryRow(ctx, `
-select t.id
-from threads t
-where `+normalThreadAccessPredicate+` and t.id = $2
-for update
-`, userID, threadID).Scan(&lockedThreadID); errors.Is(err, pgx.ErrNoRows) {
-		return types.Message{}, types.ErrThreadNotFound
-	} else if err != nil {
+	if err := lockThreadAccessForMutation(ctx, tx, userID, threadID); err != nil {
 		return types.Message{}, err
+	}
+
+	if len(pendingUploadIDs) > 0 {
+		rows, err := tx.Query(ctx, `
+select p.id, p.thread_id, p.storage_key, p.file_name, p.mime_type, p.size_bytes,
+       p.created_at, p.expires_at, p.created_by, p.created_by_user_id, p.created_by_key_id,
+       p.created_by_user_display_name, p.created_by_actor_name, p.consumed_at
+from pending_uploads p
+where p.thread_id = $2
+  and p.id = any($3)
+  and p.created_by_user_id = $1
+  and p.created_by_key_id is not distinct from $4::text
+  and p.consumed_at is null
+  and p.expires_at > now()
+order by p.id
+for update
+`, userID, threadID, pendingUploadIDs, optionalString(auth.KeyID))
+		if err != nil {
+			return types.Message{}, err
+		}
+		pending := make([]types.PendingUpload, 0, len(pendingUploadIDs))
+		for rows.Next() {
+			upload, err := scanPendingUpload(rows)
+			if err != nil {
+				rows.Close()
+				return types.Message{}, err
+			}
+			pending = append(pending, upload)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return types.Message{}, err
+		}
+		rows.Close()
+		if len(pending) != len(pendingUploadIDs) {
+			return types.Message{}, types.ErrPendingUploadUnavailable
+		}
+		for _, upload := range pending {
+			newAssets = append(newAssets, types.NewAsset{
+				StorageKey: upload.StorageKey,
+				FileName:   upload.FileName,
+				MimeType:   upload.MimeType,
+				SizeBytes:  upload.SizeBytes,
+			})
+		}
 	}
 
 	messageID := "msg_" + uuid.NewString()
@@ -1501,7 +1670,7 @@ returning id, thread_id, author, body, body_content_type, created_at,
 		return types.Message{}, err
 	}
 
-	if _, err := tx.Exec(ctx, `update threads t set updated_at = now() where `+normalThreadAccessPredicate+` and t.id = $2`, userID, threadID); err != nil {
+	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where id = $1`, threadID); err != nil {
 		return types.Message{}, err
 	}
 
@@ -1523,6 +1692,24 @@ returning id, message_id, storage_key, file_name, mime_type, size_bytes,
 			return types.Message{}, err
 		}
 		message.Assets = append(message.Assets, created)
+	}
+
+	if len(pendingUploadIDs) > 0 {
+		tag, err := tx.Exec(ctx, `
+update pending_uploads
+set consumed_at = now()
+where thread_id = $1
+  and id = any($2)
+  and created_by_user_id = $3
+  and created_by_key_id is not distinct from $4::text
+  and consumed_at is null
+`, threadID, pendingUploadIDs, userID, optionalString(auth.KeyID))
+		if err != nil {
+			return types.Message{}, err
+		}
+		if tag.RowsAffected() != int64(len(pendingUploadIDs)) {
+			return types.Message{}, types.ErrPendingUploadUnavailable
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1751,24 +1938,35 @@ order by name asc
 }
 
 func (r *Repository) ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error) {
+	page, err := r.ListAllAPIKeysPage(ctx, types.PageRequest{})
+	return page.Credentials, err
+}
+
+func (r *Repository) ListAllAPIKeysPage(ctx context.Context, pageRequest types.PageRequest) (types.APIKeyPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	rows, err := r.pool.Query(ctx, `
 select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 from api_keys
-order by user_id, lower(name), created_at, id
-`)
+order by created_at desc, id desc
+limit $1 offset $2
+`, pageRequest.Limit+1, pageRequest.Offset)
 	if err != nil {
-		return nil, err
+		return types.APIKeyPage{}, err
 	}
 	defer rows.Close()
 	keys := []types.APIKey{}
 	for rows.Next() {
 		key, err := scanAPIKey(rows)
 		if err != nil {
-			return nil, err
+			return types.APIKeyPage{}, err
 		}
 		keys = append(keys, key)
 	}
-	return keys, rows.Err()
+	if err := rows.Err(); err != nil {
+		return types.APIKeyPage{}, err
+	}
+	visible, pageInfo := types.PageWindow(pageRequest, len(keys))
+	return types.APIKeyPage{Credentials: keys[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error) {
@@ -1982,7 +2180,7 @@ returning id, email, display_name, password_hash, is_owner, created_at, updated_
 insert into users (id, email, display_name, password_hash, is_owner)
 values ($1, $2, $3, $4, true)
 returning id, email, display_name, password_hash, is_owner, created_at, updated_at, disabled_at
-`, "usr_"+uuid.NewString(), email, displayName, passwordHash))
+`, identity.ProposedOwnerID(email), email, displayName, passwordHash))
 }
 
 func (r *Repository) CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time, teamIDs []string) (types.SignupInvitation, error) {
@@ -2022,35 +2220,76 @@ values ($1, $2)
 }
 
 func (r *Repository) ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error) {
+	page, err := r.ListSignupInvitationsPage(ctx, types.PageRequest{})
+	return page.Invitations, err
+}
+
+func (r *Repository) ListSignupInvitationsPage(ctx context.Context, pageRequest types.PageRequest) (types.SignupInvitationPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	rows, err := r.pool.Query(ctx, `
 select id, created_by_user_id, created_at, expires_at, consumed_at, consumed_by_user_id, revoked_at
 from signup_invitations
 order by created_at desc, id desc
-`)
+limit $1 offset $2
+`, pageRequest.Limit+1, pageRequest.Offset)
 	if err != nil {
-		return nil, err
+		return types.SignupInvitationPage{}, err
 	}
-	defer rows.Close()
 	invitations := []types.SignupInvitation{}
 	for rows.Next() {
 		invitation, err := scanSignupInvitation(rows)
 		if err != nil {
-			return nil, err
+			rows.Close()
+			return types.SignupInvitationPage{}, err
 		}
 		invitations = append(invitations, invitation)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		rows.Close()
+		return types.SignupInvitationPage{}, err
 	}
 	rows.Close()
-	for index := range invitations {
-		teams, err := r.listInvitationTeams(ctx, invitations[index].ID)
-		if err != nil {
-			return nil, err
+	visible, pageInfo := types.PageWindow(pageRequest, len(invitations))
+	invitations = invitations[:visible]
+	if len(invitations) > 0 {
+		invitationIDs := make([]string, 0, len(invitations))
+		indexByID := make(map[string]int, len(invitations))
+		for index, invitation := range invitations {
+			invitationIDs = append(invitationIDs, invitation.ID)
+			indexByID[invitation.ID] = index
+			invitations[index].Teams = []types.Team{}
 		}
-		invitations[index].Teams = teams
+		teamRows, err := r.pool.Query(ctx, `
+select sit.invitation_id, t.id, t.slug, t.name, t.created_at, t.updated_at
+from signup_invitation_teams sit
+join teams t on t.id = sit.team_id
+where sit.invitation_id = any($1)
+order by sit.invitation_id, lower(t.name), lower(t.slug), t.id
+`, invitationIDs)
+		if err != nil {
+			return types.SignupInvitationPage{}, err
+		}
+		for teamRows.Next() {
+			var invitationID string
+			var createdAt, updatedAt time.Time
+			var team types.Team
+			if err := teamRows.Scan(&invitationID, &team.ID, &team.Slug, &team.Name, &createdAt, &updatedAt); err != nil {
+				teamRows.Close()
+				return types.SignupInvitationPage{}, err
+			}
+			team.CreatedAt = isoMillis(createdAt)
+			team.UpdatedAt = isoMillis(updatedAt)
+			if index, ok := indexByID[invitationID]; ok {
+				invitations[index].Teams = append(invitations[index].Teams, team)
+			}
+		}
+		if err := teamRows.Err(); err != nil {
+			teamRows.Close()
+			return types.SignupInvitationPage{}, err
+		}
+		teamRows.Close()
 	}
-	return invitations, nil
+	return types.SignupInvitationPage{Invitations: invitations, Page: pageInfo}, nil
 }
 
 func (r *Repository) RevokeSignupInvitation(ctx context.Context, invitationID string) (bool, error) {
@@ -2198,24 +2437,115 @@ returning id, slug, name, created_at, updated_at
 }
 
 func (r *Repository) ListTeams(ctx context.Context) ([]types.Team, error) {
+	page, err := r.ListTeamsPage(ctx, types.PageRequest{}, 10)
+	if err != nil {
+		return nil, err
+	}
+	teams := make([]types.Team, 0, len(page.Teams))
+	for _, item := range page.Teams {
+		teams = append(teams, item.Team)
+	}
+	return teams, nil
+}
+
+func (r *Repository) ListTeamsPage(ctx context.Context, pageRequest types.PageRequest, memberLimit int) (types.TeamPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
+	if memberLimit < 1 {
+		memberLimit = 10
+	}
+	if memberLimit > 50 {
+		memberLimit = 50
+	}
 	rows, err := r.pool.Query(ctx, `
 select id, slug, name, created_at, updated_at
 from teams
 order by lower(name), lower(slug), id
-`)
+limit $1 offset $2
+`, pageRequest.Limit+1, pageRequest.Offset)
 	if err != nil {
-		return nil, err
+		return types.TeamPage{}, err
 	}
-	defer rows.Close()
-	teams := []types.Team{}
+	teams := []types.TeamWithMembers{}
 	for rows.Next() {
 		team, err := scanTeam(rows)
 		if err != nil {
-			return nil, err
+			rows.Close()
+			return types.TeamPage{}, err
 		}
-		teams = append(teams, team)
+		teams = append(teams, types.TeamWithMembers{Team: team, Members: []types.User{}})
 	}
-	return teams, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return types.TeamPage{}, err
+	}
+	rows.Close()
+	visible, pageInfo := types.PageWindow(pageRequest, len(teams))
+	teams = teams[:visible]
+	if len(teams) > 0 {
+		teamIDs := make([]string, 0, len(teams))
+		indexByID := make(map[string]int, len(teams))
+		for index, team := range teams {
+			teamIDs = append(teamIDs, team.ID)
+			indexByID[team.ID] = index
+		}
+		memberRows, err := r.pool.Query(ctx, `
+with ranked_members as (
+  select
+    tm.team_id,
+    u.id,
+    u.email,
+    u.display_name,
+    u.password_hash,
+    u.is_owner,
+    u.created_at,
+    u.updated_at,
+    u.disabled_at,
+    row_number() over (partition by tm.team_id order by u.is_owner desc, lower(u.display_name), lower(u.email), u.id) as member_position,
+    count(*) over (partition by tm.team_id)::int as member_count
+  from team_memberships tm
+  join users u on u.id = tm.user_id
+  where tm.team_id = any($1)
+)
+select team_id, id, email, display_name, password_hash, is_owner, created_at, updated_at, disabled_at, member_count
+from ranked_members
+where member_position <= $2
+order by team_id, member_position
+`, teamIDs, memberLimit)
+		if err != nil {
+			return types.TeamPage{}, err
+		}
+		for memberRows.Next() {
+			var teamID string
+			var user types.User
+			var createdAt, updatedAt time.Time
+			var disabledAt *time.Time
+			var memberCount int
+			if err := memberRows.Scan(&teamID, &user.ID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.IsOwner, &createdAt, &updatedAt, &disabledAt, &memberCount); err != nil {
+				memberRows.Close()
+				return types.TeamPage{}, err
+			}
+			user.CreatedAt = isoMillis(createdAt)
+			user.UpdatedAt = isoMillis(updatedAt)
+			user.DisabledAt = optionalISOTime(disabledAt)
+			if index, ok := indexByID[teamID]; ok {
+				teams[index].Members = append(teams[index].Members, user)
+				teams[index].MemberCount = memberCount
+			}
+		}
+		if err := memberRows.Err(); err != nil {
+			memberRows.Close()
+			return types.TeamPage{}, err
+		}
+		memberRows.Close()
+		for index := range teams {
+			fetched := teams[index].MemberCount
+			if fetched > memberLimit {
+				fetched = memberLimit + 1
+			}
+			_, teams[index].MembersPage = types.PageWindow(types.PageRequest{Limit: memberLimit}, fetched)
+		}
+	}
+	return types.TeamPage{Teams: teams, Page: pageInfo}, nil
 }
 
 func (r *Repository) ListUserTeams(ctx context.Context, userID string) ([]types.Team, error) {
@@ -2230,24 +2560,45 @@ order by lower(t.name), lower(t.slug), t.id
 		return nil, err
 	}
 	defer rows.Close()
-	teams := []types.Team{}
-	for rows.Next() {
-		team, err := scanTeam(rows)
-		if err != nil {
-			return nil, err
-		}
-		teams = append(teams, team)
+	return scanTeams(rows)
+}
+
+func (r *Repository) ListUserTeamsPage(ctx context.Context, userID string, pageRequest types.PageRequest) (types.UserTeamPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
+	rows, err := r.pool.Query(ctx, `
+select t.id, t.slug, t.name, t.created_at, t.updated_at
+from teams t
+join team_memberships tm on tm.team_id = t.id
+where tm.user_id = $1
+order by lower(t.name), lower(t.slug), t.id
+limit $2 offset $3
+`, strings.TrimSpace(userID), pageRequest.Limit+1, pageRequest.Offset)
+	if err != nil {
+		return types.UserTeamPage{}, err
 	}
-	return teams, rows.Err()
+	defer rows.Close()
+	teams, err := scanTeams(rows)
+	if err != nil {
+		return types.UserTeamPage{}, err
+	}
+	visible, pageInfo := types.PageWindow(pageRequest, len(teams))
+	return types.UserTeamPage{Teams: teams[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) ListTeamMembers(ctx context.Context, teamID string) ([]types.User, error) {
+	page, err := r.ListTeamMembersPage(ctx, teamID, types.PageRequest{})
+	return page.Members, err
+}
+
+func (r *Repository) ListTeamMembersPage(ctx context.Context, teamID string, pageRequest types.PageRequest) (types.TeamMemberPage, error) {
+	teamID = strings.TrimSpace(teamID)
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	var exists bool
-	if err := r.pool.QueryRow(ctx, `select exists (select 1 from teams where id = $1)`, strings.TrimSpace(teamID)).Scan(&exists); err != nil {
-		return nil, err
+	if err := r.pool.QueryRow(ctx, `select exists (select 1 from teams where id = $1)`, teamID).Scan(&exists); err != nil {
+		return types.TeamMemberPage{}, err
 	}
 	if !exists {
-		return nil, types.ErrTeamNotFound
+		return types.TeamMemberPage{}, types.ErrTeamNotFound
 	}
 	rows, err := r.pool.Query(ctx, `
 select u.id, u.email, u.display_name, u.password_hash, u.is_owner,
@@ -2256,20 +2607,25 @@ from users u
 join team_memberships tm on tm.user_id = u.id
 where tm.team_id = $1
 order by u.is_owner desc, lower(u.display_name), lower(u.email), u.id
-`, strings.TrimSpace(teamID))
+limit $2 offset $3
+`, teamID, pageRequest.Limit+1, pageRequest.Offset)
 	if err != nil {
-		return nil, err
+		return types.TeamMemberPage{}, err
 	}
 	defer rows.Close()
 	users := []types.User{}
 	for rows.Next() {
 		user, err := scanUser(rows)
 		if err != nil {
-			return nil, err
+			return types.TeamMemberPage{}, err
 		}
 		users = append(users, user)
 	}
-	return users, rows.Err()
+	if err := rows.Err(); err != nil {
+		return types.TeamMemberPage{}, err
+	}
+	visible, pageInfo := types.PageWindow(pageRequest, len(users))
+	return types.TeamMemberPage{Members: users[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) AddTeamMember(ctx context.Context, teamID string, userID string) (types.TeamMembership, error) {
@@ -2399,27 +2755,35 @@ func requireTeamAndUserTx(ctx context.Context, tx pgx.Tx, teamID string, userID 
 }
 
 func (r *Repository) ListUsers(ctx context.Context) ([]types.User, error) {
+	page, err := r.ListUsersPage(ctx, types.PageRequest{})
+	return page.Users, err
+}
+
+func (r *Repository) ListUsersPage(ctx context.Context, pageRequest types.PageRequest) (types.UserPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
 	rows, err := r.pool.Query(ctx, `
 select id, email, display_name, password_hash, is_owner, created_at, updated_at, disabled_at
 from users
 order by is_owner desc, created_at asc, id asc
-`)
+limit $1 offset $2
+`, pageRequest.Limit+1, pageRequest.Offset)
 	if err != nil {
-		return nil, err
+		return types.UserPage{}, err
 	}
 	defer rows.Close()
 	users := []types.User{}
 	for rows.Next() {
 		user, err := scanUser(rows)
 		if err != nil {
-			return nil, err
+			return types.UserPage{}, err
 		}
 		users = append(users, user)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return types.UserPage{}, err
 	}
-	return users, nil
+	visible, pageInfo := types.PageWindow(pageRequest, len(users))
+	return types.UserPage{Users: users[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) GetUserByID(ctx context.Context, userID string) (*types.User, error) {
@@ -2443,6 +2807,9 @@ func (r *Repository) SetUserDisabled(ctx context.Context, userID string, disable
 		return types.User{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1, $2))`, strings.TrimSpace(userID), attachmentPurgeAdvisoryNamespace); err != nil {
+		return types.User{}, err
+	}
 	user, err := scanUser(tx.QueryRow(ctx, `
 select id, email, display_name, password_hash, is_owner, created_at, updated_at, disabled_at
 from users

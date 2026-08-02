@@ -119,12 +119,17 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		invitations, err := s.service.ListSignupInvitations(r.Context(), *authContext)
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListSignupInvitationsPage(r.Context(), *authContext, pageRequest)
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"invitations": invitations})
+		writeJSON(w, http.StatusOK, page)
 	case http.MethodPost:
 		var input struct {
 			ExpiresInMinutes int      `json:"expires_in_minutes"`
@@ -140,6 +145,10 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "expires_in_minutes must not be negative.")
 			return
 		}
+		if len(input.TeamIDs) > types.MaxOwnerPageLimit {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "at most 100 initial teams may be selected")
+			return
+		}
 		result, err := s.service.CreateSignupInvitation(r.Context(), *authContext, time.Duration(input.ExpiresInMinutes)*time.Minute, input.TeamIDs...)
 		if err != nil {
 			writeServiceError(w, err)
@@ -149,11 +158,7 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AppPublicURL != "" {
 			signupURL = strings.TrimRight(s.cfg.AppPublicURL, "/") + signupURL
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"invitation": result.Invitation,
-			"token":      result.Token,
-			"signup_url": signupURL,
-		})
+		writeJSON(w, http.StatusCreated, map[string]any{"invitation": result.Invitation, "token": result.Token, "signup_url": signupURL})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -187,12 +192,17 @@ func (s *Server) ownerUsers(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	users, err := s.service.ListUsers(r.Context(), *authContext)
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.ListUsersPage(r.Context(), *authContext, pageRequest)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) ownerCredentials(w http.ResponseWriter, r *http.Request) {
@@ -203,12 +213,17 @@ func (s *Server) ownerCredentials(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	credentials, err := s.service.ListOwnerAPIKeys(r.Context(), *authContext)
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.ListOwnerAPIKeysPage(r.Context(), *authContext, pageRequest)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"credentials": credentials})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) ownerCredential(w http.ResponseWriter, r *http.Request) {
@@ -239,16 +254,20 @@ func (s *Server) ownerContentThreads(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	threads, err := s.service.ListOwnerContentThreads(r.Context(), ownerContext, types.OwnerContentListParams{
-		Limit:   numberQuery(r, "limit", 100),
-		UserID:  strings.TrimSpace(r.URL.Query().Get("user_id")),
-		TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.ListOwnerContentThreadsPage(r.Context(), ownerContext, types.OwnerContentListParams{
+		Limit: pageRequest.Limit, Offset: pageRequest.Offset,
+		UserID: strings.TrimSpace(r.URL.Query().Get("user_id")), TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
 	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) ownerContentSearch(w http.ResponseWriter, r *http.Request) {
@@ -259,17 +278,20 @@ func (s *Server) ownerContentSearch(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	threads, err := s.service.SearchOwnerContentThreads(r.Context(), ownerContext, types.OwnerContentSearchParams{
-		Query:   strings.TrimSpace(r.URL.Query().Get("query")),
-		Limit:   numberQuery(r, "limit", 100),
-		UserID:  strings.TrimSpace(r.URL.Query().Get("user_id")),
-		TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.SearchOwnerContentThreadsPage(r.Context(), ownerContext, types.OwnerContentSearchParams{
+		Query: strings.TrimSpace(r.URL.Query().Get("query")), Limit: pageRequest.Limit, Offset: pageRequest.Offset,
+		UserID: strings.TrimSpace(r.URL.Query().Get("user_id")), TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
 	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) ownerContentThread(w http.ResponseWriter, r *http.Request) {
@@ -332,12 +354,17 @@ func (s *Server) ownerTeams(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		teams, err := s.service.ListOwnerTeams(r.Context(), *authContext)
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListOwnerTeamsPage(r.Context(), *authContext, pageRequest)
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"teams": teams})
+		writeJSON(w, http.StatusOK, page)
 	case http.MethodPost:
 		var input struct {
 			Slug string `json:"slug"`
@@ -388,18 +415,17 @@ func (s *Server) ownerTeam(w http.ResponseWriter, r *http.Request) {
 		if !method(w, r, http.MethodGet) {
 			return
 		}
-		teams, err := s.service.ListOwnerTeams(r.Context(), *authContext)
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListOwnerTeamMembersPage(r.Context(), *authContext, parts[0], pageRequest)
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
-		for _, team := range teams {
-			if team.ID == parts[0] {
-				writeJSON(w, http.StatusOK, map[string]any{"team": team.Team, "members": team.Members})
-				return
-			}
-		}
-		writeCodedError(w, http.StatusNotFound, "TEAM_NOT_FOUND", "Team not found.")
+		writeJSON(w, http.StatusOK, page)
 		return
 	}
 	if len(parts) == 3 && parts[0] != "" && parts[1] == "members" && parts[2] != "" {
@@ -446,13 +472,27 @@ func (s *Server) ownerUserAction(w http.ResponseWriter, r *http.Request) {
 	if authContext == nil {
 		return
 	}
-	if !method(w, r, http.MethodPost) {
-		return
-	}
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/users/"), "/")
 	parts := strings.Split(path, "/")
 	if len(parts) != 2 || parts[0] == "" {
 		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && parts[1] == "teams" {
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListOwnerUserTeamsPage(r.Context(), *authContext, parts[0], pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
+	if !method(w, r, http.MethodPost) {
 		return
 	}
 	disabled := false
@@ -985,10 +1025,6 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.threadVisibility(w, r, threadID)
 		return
 	}
-	if tail == "public-link" {
-		s.threadPublicLink(w, r, threadID)
-		return
-	}
 	http.NotFound(w, r)
 }
 
@@ -1017,71 +1053,6 @@ func (s *Server) threadVisibility(w http.ResponseWriter, r *http.Request, thread
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
-	case http.MethodPut:
-		var input struct {
-			TeamIDs []string `json:"team_ids"`
-		}
-		if err := parseJSON(r, &input); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		visibility, err := s.service.SetThreadVisibility(r.Context(), *authContext, threadID, input.TeamIDs)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *Server) threadPublicLink(w http.ResponseWriter, r *http.Request, threadID string) {
-	w.Header().Set("Cache-Control", "no-store")
-	authContext, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		link, err := s.service.GetThreadPublicLink(r.Context(), *authContext, threadID)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		publicURL := ""
-		if link != nil && link.Token != "" {
-			publicURL = strings.TrimRight(s.requestBaseURL(r), "/") + "/share/" + url.PathEscape(link.Token)
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"link": link, "public_url": publicURL})
-	case http.MethodPost:
-		var input struct {
-			Rotate bool `json:"rotate"`
-		}
-		if r.Body != nil && r.ContentLength != 0 {
-			if err := parseJSON(r, &input); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
-		result, err := s.service.CreateThreadPublicLink(r.Context(), *authContext, threadID, s.requestBaseURL(r), input.Rotate)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		link := result.Link
-		link.TokenHash = ""
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"link":       link,
-			"token":      result.Token,
-			"public_url": result.PublicURL,
-		})
-	case http.MethodDelete:
-		if err := s.service.RevokeThreadPublicLink(r.Context(), *authContext, threadID); err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"revoked": threadID})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1103,17 +1074,28 @@ func (s *Server) publicThreadSubroutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
 		return
 	}
-	if len(parts) == 4 && parts[0] != "" && parts[1] == "assets" && parts[2] != "" && parts[3] == "download" {
+	if len(parts) == 4 && parts[0] != "" && parts[1] == "assets" && parts[2] != "" {
 		if !method(w, r, http.MethodGet) {
 			return
 		}
-		downloadURL, err := s.service.PublicAssetDownloadURL(r.Context(), parts[0], parts[2])
-		if err != nil {
-			writeServiceError(w, err)
+		switch parts[3] {
+		case "download":
+			downloadURL, err := s.service.PublicAssetDownloadURL(r.Context(), parts[0], parts[2])
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"download_url": downloadURL})
+			return
+		case "preview":
+			previewURL, err := s.service.PublicAssetPreviewURL(r.Context(), parts[0], parts[2])
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			http.Redirect(w, r, previewURL, http.StatusTemporaryRedirect)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"download_url": downloadURL})
-		return
 	}
 	http.NotFound(w, r)
 }
@@ -1530,7 +1512,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 			status = http.StatusForbidden
 		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS":
 			status = http.StatusConflict
-		case "ATTACHMENT_PURGED":
+		case "ATTACHMENT_PURGED", "ATTACHMENT_UNAVAILABLE":
 			status = http.StatusGone
 		case "TEAM_SLUG_CONFLICT":
 			status = http.StatusConflict
@@ -1590,6 +1572,19 @@ func method(w http.ResponseWriter, r *http.Request, expected string) bool {
 	}
 	w.WriteHeader(http.StatusMethodNotAllowed)
 	return false
+}
+
+func ownerPageRequest(r *http.Request) (types.PageRequest, error) {
+	request := types.PageRequest{Limit: numberQuery(r, "limit", types.DefaultOwnerPageLimit)}
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if cursor != "" {
+		offset, err := strconv.Atoi(cursor)
+		if err != nil || offset < 0 {
+			return types.PageRequest{}, errors.New("cursor must be a non-negative continuation offset")
+		}
+		request.Offset = offset
+	}
+	return types.NormalizePageRequest(request), nil
 }
 
 func numberQuery(r *http.Request, name string, fallback int) int {
@@ -1656,24 +1651,31 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
 				continue
 			}
-			expires := 300
-			isImage := asset.MimeType != nil && strings.HasPrefix(*asset.MimeType, "image/")
-			if isImage {
-				expires = 900
+			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset.ID, 300)
+			if serviceErrorCode(err) == "ATTACHMENT_UNAVAILABLE" {
+				asset.Unavailable = true
+				asset.UnavailableReason = "Attachment unavailable"
+				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+				continue
 			}
-			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset.ID, expires)
 			if err != nil {
 				return viewerThread{}, err
 			}
 			var previewURL *string
-			if isImage {
-				previewURL = &downloadURL
+			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
+				preview, err := svc.SignedAssetPreviewURL(r.Context(), authContext, asset.ID, 900)
+				if serviceErrorCode(err) == "ATTACHMENT_UNAVAILABLE" {
+					asset.Unavailable = true
+					asset.UnavailableReason = "Attachment unavailable"
+					vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+					continue
+				}
+				if err != nil {
+					return viewerThread{}, err
+				}
+				previewURL = &preview
 			}
-			vm.Assets = append(vm.Assets, viewerAsset{
-				Asset:       asset,
-				DownloadURL: &downloadURL,
-				PreviewURL:  previewURL,
-			})
+			vm.Assets = append(vm.Assets, viewerAsset{Asset: asset, DownloadURL: &downloadURL, PreviewURL: previewURL})
 		}
 		result.Messages = append(result.Messages, vm)
 	}
@@ -1681,12 +1683,7 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 }
 
 func withOwnerContentAssetURLs(r *http.Request, svc *service.Service, ownerContext service.OwnerWebContext, thread *types.OwnerContentThreadDetail) (ownerViewerThread, error) {
-	result := ownerViewerThread{
-		Thread:     thread.Thread,
-		Owner:      thread.Owner,
-		Messages:   []viewerMessage{},
-		Visibility: thread.Visibility,
-	}
+	result := ownerViewerThread{Thread: thread.Thread, Owner: thread.Owner, Messages: []viewerMessage{}, Visibility: thread.Visibility}
 	for _, message := range thread.Messages {
 		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
 		for _, asset := range message.Assets {
@@ -1694,26 +1691,34 @@ func withOwnerContentAssetURLs(r *http.Request, svc *service.Service, ownerConte
 				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
 				continue
 			}
-			expires := 300
-			isImage := asset.MimeType != nil && strings.HasPrefix(*asset.MimeType, "image/")
-			if isImage {
-				expires = 900
+			downloadURL, err := svc.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, asset.ID, 300)
+			if serviceErrorCode(err) == "ATTACHMENT_UNAVAILABLE" {
+				asset.Unavailable = true
+				asset.UnavailableReason = "Attachment unavailable"
+				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+				continue
 			}
-			downloadURL, err := svc.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, asset.ID, expires)
 			if err != nil {
 				return ownerViewerThread{}, err
 			}
 			var previewURL *string
-			if isImage {
+			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
 				previewURL = &downloadURL
 			}
-			vm.Assets = append(vm.Assets, viewerAsset{
-				Asset:       asset,
-				DownloadURL: &downloadURL,
-				PreviewURL:  previewURL,
-			})
+			vm.Assets = append(vm.Assets, viewerAsset{Asset: asset, DownloadURL: &downloadURL, PreviewURL: previewURL})
 		}
 		result.Messages = append(result.Messages, vm)
 	}
 	return result, nil
+}
+
+func serviceErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var coded service.CodedError
+	if errors.As(err, &coded) {
+		return coded.Code
+	}
+	return ""
 }

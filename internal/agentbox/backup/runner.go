@@ -13,9 +13,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"agentbox/internal/agentbox/identity"
 )
 
-const manifestSchemaVersion = 1
+const manifestSchemaVersion = 2
 
 type Runner struct {
 	Snapshots SnapshotSource
@@ -37,6 +39,10 @@ func (r Runner) Run(ctx context.Context, options Options) (Manifest, error) {
 	}
 	if strings.TrimSpace(options.SourceBucket) == "" {
 		return Manifest{}, fmt.Errorf("source bucket is required")
+	}
+	options.ProposedOwnerEmail = identity.NormalizeEmail(options.ProposedOwnerEmail)
+	if options.ProposedOwnerEmail == "" {
+		return Manifest{}, fmt.Errorf("proposed owner email is required")
 	}
 	if strings.TrimSpace(options.BackupBucket) == "" {
 		options.BackupBucket = options.SourceBucket
@@ -63,6 +69,13 @@ func (r Runner) Run(ctx context.Context, options Options) (Manifest, error) {
 			DumpFile:       "database.dump",
 			DumpFormat:     "PostgreSQL custom",
 			RestoreCommand: "pg_restore --clean --if-exists --no-owner --no-acl --dbname <recovery-database-url> database.dump",
+		},
+		OwnerBackfill: OwnerBackfillManifest{
+			ProposedOwnerEmail:    options.ProposedOwnerEmail,
+			ProposedOwnerID:       identity.ProposedOwnerID(options.ProposedOwnerEmail),
+			ThreadIDs:             []string{},
+			AmbiguousThreadIDs:    []string{},
+			UnassignableThreadIDs: []string{},
 		},
 		Objects: ObjectManifest{
 			SourceBucket: options.SourceBucket,
@@ -92,6 +105,7 @@ func (r Runner) Run(ctx context.Context, options Options) (Manifest, error) {
 			if snapshotData.Orphans.Total() > 0 {
 				manifest.addError("database_orphan_rows", fmt.Sprintf("database contains %d orphaned content rows", snapshotData.Orphans.Total()), "", "")
 			}
+			populateOwnerBackfill(snapshotData.ThreadOwnership, &manifest)
 
 			dumpPath := filepath.Join(runDirectory, manifest.Database.DumpFile)
 			temporaryDumpPath := dumpPath + ".tmp"
@@ -178,13 +192,27 @@ func (r Runner) backupObjects(ctx context.Context, options Options, references [
 
 		source, err := r.Objects.HeadObject(ctx, options.SourceBucket, key)
 		if errors.Is(err, ErrObjectNotFound) {
-			item.Status = "missing"
-			item.Error = "referenced object is missing from the source bucket"
-			manifest.Objects.MissingObjectCount++
-			manifest.addError("referenced_object_missing", item.Error, key, firstRecordID(item.References))
+			if referencesBlockMissing(item.References) {
+				item.Status = "missing"
+				item.Error = "referenced object is missing from the source bucket"
+				manifest.Objects.MissingObjectCount++
+				manifest.addError("referenced_object_missing", item.Error, key, firstRecordID(item.References))
+			} else {
+				item.Status = "not_materialized"
+				item.Error = "active pending-upload intent has no source object yet"
+				manifest.Objects.UnmaterializedPendingCount++
+				manifest.Issues = append(manifest.Issues, Issue{
+					Severity:   "warning",
+					Code:       "pending_upload_not_materialized",
+					Message:    item.Error,
+					StorageKey: key,
+					RecordID:   firstRecordID(item.References),
+				})
+			}
 			manifest.Objects.Objects = append(manifest.Objects.Objects, item)
 			continue
 		}
+
 		if err != nil {
 			item.Status = "head_failed"
 			item.Error = err.Error()
@@ -266,6 +294,50 @@ func (r Runner) backupObjects(ctx context.Context, options Options, references [
 			Message:  fmt.Sprintf("source inventory contains %d objects not referenced by assets or pending uploads", manifest.Objects.UnreferencedCount),
 		})
 	}
+}
+
+func populateOwnerBackfill(ownership []ThreadOwnership, manifest *Manifest) {
+	ownerID := manifest.OwnerBackfill.ProposedOwnerID
+	threadIDs := make([]string, 0, len(ownership))
+	for _, item := range ownership {
+		threadID := strings.TrimSpace(item.ThreadID)
+		if threadID == "" {
+			manifest.OwnerBackfill.UnassignableThreadIDs = append(manifest.OwnerBackfill.UnassignableThreadIDs, item.ThreadID)
+			continue
+		}
+		threadIDs = append(threadIDs, threadID)
+		switch strings.TrimSpace(item.OwnerUserID) {
+		case "":
+		case ownerID:
+			manifest.OwnerBackfill.AlreadyAssignedCount++
+		default:
+			manifest.OwnerBackfill.AmbiguousThreadIDs = append(manifest.OwnerBackfill.AmbiguousThreadIDs, threadID)
+		}
+	}
+	sort.Strings(threadIDs)
+	sort.Strings(manifest.OwnerBackfill.AmbiguousThreadIDs)
+	sort.Strings(manifest.OwnerBackfill.UnassignableThreadIDs)
+	manifest.OwnerBackfill.ThreadIDs = threadIDs
+	manifest.OwnerBackfill.ThreadCount = len(threadIDs)
+	digest := sha256.Sum256([]byte(strings.Join(threadIDs, "\n")))
+	manifest.OwnerBackfill.ThreadIDsSHA256 = hex.EncodeToString(digest[:])
+	if len(manifest.OwnerBackfill.AmbiguousThreadIDs) > 0 || len(manifest.OwnerBackfill.UnassignableThreadIDs) > 0 {
+		manifest.addError(
+			"owner_backfill_ambiguous",
+			fmt.Sprintf("%d threads already have a different owner and %d thread IDs are unassignable", len(manifest.OwnerBackfill.AmbiguousThreadIDs), len(manifest.OwnerBackfill.UnassignableThreadIDs)),
+			"",
+			"",
+		)
+	}
+}
+
+func referencesBlockMissing(references []ObjectReference) bool {
+	for _, reference := range references {
+		if reference.MissingBlocks || reference.Kind != "pending_upload" {
+			return true
+		}
+	}
+	return false
 }
 
 func WriteManifest(path string, manifest Manifest) error {

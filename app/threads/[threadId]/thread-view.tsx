@@ -20,6 +20,8 @@ type Asset = {
   download_url?: string | null;
   preview_url?: string | null;
   purged_at?: string | null;
+  unavailable?: boolean;
+  unavailable_reason?: string;
 };
 
 type Message = {
@@ -274,7 +276,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                         <span className="asset-label">Attachments</span>
                         {message.assets.map((asset) => (
                           <div key={asset.id} className="asset-card">
-                            {!asset.purged_at && asset.preview_url && (
+                            {!asset.purged_at && !asset.unavailable && asset.preview_url && (
                               <a className="preview-link" href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img className="preview-image" src={asset.preview_url} alt={asset.file_name} loading="lazy" />
@@ -286,6 +288,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
                             </div>
                             {asset.purged_at ? (
                               <span className="asset-tombstone">Attachment deleted by deployment owner</span>
+                            ) : asset.unavailable ? (
+                              <span className="asset-tombstone">{asset.unavailable_reason || "Attachment unavailable"}</span>
                             ) : asset.download_url && (
                               <a className="download-link" href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>
                             )}

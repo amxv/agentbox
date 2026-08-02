@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,37 @@ import (
 	"agentbox/internal/agentbox/service"
 	"agentbox/internal/agentbox/types"
 )
+
+func setThreadVisibilityForTest(ctx context.Context, repository interface {
+	ManageThreadVisibility(context.Context, string, string, types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
+}, userID string, threadID string, desiredTeamIDs []string) (types.ThreadVisibility, error) {
+	current, err := repository.ManageThreadVisibility(ctx, userID, threadID, types.ManageThreadVisibilityInput{})
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	desired := map[string]bool{}
+	for _, teamID := range desiredTeamIDs {
+		desired[teamID] = true
+	}
+	currentIDs := map[string]bool{}
+	input := types.ManageThreadVisibilityInput{}
+	for _, team := range current.SharedTeams {
+		currentIDs[team.ID] = true
+		if !desired[team.ID] {
+			input.RemoveTeams = append(input.RemoveTeams, team.ID)
+		}
+	}
+	for _, teamID := range desiredTeamIDs {
+		if !currentIDs[teamID] {
+			input.AddTeams = append(input.AddTeams, teamID)
+		}
+	}
+	state, err := repository.ManageThreadVisibility(ctx, userID, threadID, input)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return types.ThreadVisibility{ThreadID: state.ThreadID, OwnerUserID: state.OwnerUserID, SharedTeams: state.SharedTeams}, nil
+}
 
 func TestHealth(t *testing.T) {
 	svc := service.New(&db.MemoryRepository{}, &assets.FakeStore{})
@@ -295,7 +327,8 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) {
 	imageType := "image/png"
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
 	passwordHash, err := authpkg.HashPassword("secret")
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +351,7 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	store.PutAssetObject("agentbox/thread/message/image.png", 10, &imageType)
 	server := NewServer(config.Config{AdminKey: "adm", Environment: "production", SessionCookieName: config.DefaultSessionCookieName}, svc)
 
 	unauthorized := httptest.NewRecorder()
@@ -354,7 +388,7 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 		t.Fatal(err)
 	}
 	asset := payload.Thread.Messages[0].Assets[0]
-	if asset.DownloadURL == "" || asset.PreviewURL == nil || *asset.PreviewURL != asset.DownloadURL {
+	if asset.DownloadURL == "" || asset.PreviewURL == nil || *asset.PreviewURL == asset.DownloadURL || !strings.Contains(*asset.PreviewURL, "inline") {
 		t.Fatalf("viewer asset = %#v", asset)
 	}
 }
@@ -838,7 +872,7 @@ func TestOwnerAttachmentPurgeHTTPIsBrowserOnlyAndRendersTombstones(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(t.Context(), target.ID, thread.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(t.Context(), repo, target.ID, thread.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
 	storageKey := "agentbox/http-purge/exact.bin"
@@ -949,6 +983,7 @@ func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.PutAssetObject(message.Assets[0].StorageKey, 21, nil)
 	ownerKeySecret := "owner-content-api-key"
 	if _, err := repo.CreateAPIKey(t.Context(), owner.ID, "owner-content-key", "custom", dbHashForTest(ownerKeySecret), "owner-cont", []string{"threads:read", "assets:read"}); err != nil {
 		t.Fatal(err)
@@ -1429,7 +1464,8 @@ func TestMCPOriginValidation(t *testing.T) {
 
 func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
 	if _, err := svc.CreateAPIKey(t.Context(), authContext("global", "user"), "user"); err != nil {
 		t.Fatal(err)
 	}
@@ -1473,6 +1509,8 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if !strings.HasPrefix(intentPayload.Uploads[0].StorageKey, "agentbox/usr_user/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
 		t.Fatalf("storage key = %q", intentPayload.Uploads[0].StorageKey)
 	}
+	contentType := "text/markdown"
+	store.PutAssetObject(intentPayload.Uploads[0].StorageKey, 12, &contentType)
 
 	postBody := `{"body":"attached","uploaded_assets":[{"upload_id":"` + intentPayload.Uploads[0].UploadID + `"}]}`
 	post := httptest.NewRecorder()
@@ -1499,7 +1537,8 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 
 func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
 	authA := authContext("global", "agent-a")
 	authA.UserID = "usr_a"
 	authA.UserDisplayName = "User A"
@@ -1659,6 +1698,7 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 		CreatedAt:  messageA.CreatedAt,
 		CreatedBy:  "agent-a",
 	})
+	store.PutAssetObject("agentbox/legacy-thread/message/legacy.txt", 1, nil)
 	downloadLegacyA := httptest.NewRecorder()
 	reqDownloadLegacyA := httptest.NewRequest(http.MethodGet, "/api/assets/asset_legacy_a/download-url", nil)
 	reqDownloadLegacyA.Header.Set("authorization", "Bearer "+keyA.Key)
@@ -1689,7 +1729,8 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 
 func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
 	authA := authContext("global", "agent-a")
 	authA.UserID = "usr_share_a"
 	authA.UserDisplayName = "Share A"
@@ -1749,10 +1790,14 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 		t.Fatalf("private thread visible before share: status=%d body=%s", privateB.Code, privateB.Body.String())
 	}
 
-	shareBody, _ := json.Marshal(map[string]any{"team_ids": []string{team.ID, team.ID}})
-	shared := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyA.Key, string(shareBody))
+	shareBody, _ := json.Marshal(map[string]any{"add_teams": []string{team.ID, team.ID}})
+	shared := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", keyA.Key, string(shareBody))
 	if shared.Code != http.StatusOK || !strings.Contains(shared.Body.String(), `"slug":"shared-team"`) {
 		t.Fatalf("share status=%d body=%s", shared.Code, shared.Body.String())
+	}
+	retiredPut := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyA.Key, `{"team_ids":[]}`)
+	if retiredPut.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("retired visibility PUT remained live: status=%d body=%s", retiredPut.Code, retiredPut.Body.String())
 	}
 
 	listB := request(http.MethodGet, "/api/threads", keyB.Key, "")
@@ -1798,15 +1843,18 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 	}
 	var uploadPayload struct {
 		Uploads []struct {
-			UploadID string `json:"upload_id"`
+			UploadID   string `json:"upload_id"`
+			StorageKey string `json:"storage_key"`
 		} `json:"uploads"`
 	}
 	if err := json.Unmarshal(uploadIntent.Body.Bytes(), &uploadPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(uploadPayload.Uploads) != 1 || uploadPayload.Uploads[0].UploadID == "" {
+	if len(uploadPayload.Uploads) != 1 || uploadPayload.Uploads[0].UploadID == "" || uploadPayload.Uploads[0].StorageKey == "" {
 		t.Fatalf("team upload payload=%#v", uploadPayload)
 	}
+	teamContentType := "text/plain"
+	store.PutAssetObject(uploadPayload.Uploads[0].StorageKey, 4, &teamContentType)
 	finalizeBody, _ := json.Marshal(map[string]any{
 		"body":       "team upload finalization",
 		"upload_ids": []string{uploadPayload.Uploads[0].UploadID},
@@ -1830,7 +1878,7 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 		t.Fatalf("team asset signing status=%d body=%s", downloadB.Code, downloadB.Body.String())
 	}
 
-	unshared := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyB.Key, `{"team_ids":[]}`)
+	unshared := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", keyB.Key, `{"remove_teams":["`+team.ID+`"]}`)
 	if unshared.Code != http.StatusOK || !strings.Contains(unshared.Body.String(), `"shared_teams":[]`) {
 		t.Fatalf("participant unshare status=%d body=%s", unshared.Code, unshared.Body.String())
 	}
@@ -1843,7 +1891,7 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 		t.Fatalf("thread owner lost access: status=%d body=%s", ownerStillHasAccess.Code, ownerStillHasAccess.Body.String())
 	}
 
-	sharedAgain := request(http.MethodPut, "/api/threads/"+thread.ID+"/visibility", keyA.Key, string(shareBody))
+	sharedAgain := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", keyA.Key, string(shareBody))
 	if sharedAgain.Code != http.StatusOK {
 		t.Fatalf("reshare status=%d body=%s", sharedAgain.Code, sharedAgain.Body.String())
 	}
@@ -1875,15 +1923,9 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}
 	svc := service.New(repo, store)
-	ownerAuth := authContext("global", "public-owner")
-	ownerAuth.UserID = "usr_http_public_owner"
-	ownerAuth.UserDisplayName = "HTTP Public Owner"
-	memberAuth := authContext("global", "public-member")
-	memberAuth.UserID = "usr_http_public_member"
-	memberAuth.UserDisplayName = "HTTP Public Member"
-	outsiderAuth := authContext("global", "public-outsider")
-	outsiderAuth.UserID = "usr_http_public_outsider"
-	outsiderAuth.UserDisplayName = "HTTP Public Outsider"
+	ownerAuth := types.AuthContext{UserID: "usr_http_public_owner", UserDisplayName: "HTTP Public Owner", SubjectType: types.AuthSubjectUserSession, SessionID: "sess_http_public_owner", ActorName: "Web dashboard"}
+	memberAuth := types.AuthContext{UserID: "usr_http_public_member", UserDisplayName: "HTTP Public Member", SubjectType: types.AuthSubjectUserSession, SessionID: "sess_http_public_member", ActorName: "Web dashboard"}
+	outsiderAuth := types.AuthContext{UserID: "usr_http_public_outsider", UserDisplayName: "HTTP Public Outsider", SubjectType: types.AuthSubjectUserSession, SessionID: "sess_http_public_outsider", ActorName: "Web dashboard"}
 	repo.Users = append(repo.Users,
 		types.User{ID: ownerAuth.UserID, Email: "http-public-owner@example.com", DisplayName: ownerAuth.UserDisplayName},
 		types.User{ID: memberAuth.UserID, Email: "http-public-member@example.com", DisplayName: memberAuth.UserDisplayName},
@@ -1915,37 +1957,26 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(t.Context(), ownerAuth.UserID, thread.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(t.Context(), repo, ownerAuth.UserID, thread.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
-	mimeType := "text/plain"
-	message, err := repo.PostMessage(t.Context(), ownerAuth.UserID, thread.ID, ownerAuth, "HTTP public body", nil, []types.NewAsset{{
-		StorageKey: "agentbox/" + ownerAuth.UserID + "/" + thread.ID + "/http-public.txt",
-		FileName:   "http-public.txt",
-		MimeType:   &mimeType,
-		SizeBytes:  7,
-	}})
+	mimeType := "image/png"
+	message, err := repo.PostMessage(t.Context(), ownerAuth.UserID, thread.ID, ownerAuth, "HTTP public body", nil, []types.NewAsset{{StorageKey: "agentbox/" + ownerAuth.UserID + "/" + thread.ID + "/http-public.png", FileName: "http-public.png", MimeType: &mimeType, SizeBytes: 7}})
 	if err != nil || len(message.Assets) != 1 {
 		t.Fatalf("public HTTP fixture message=%#v err=%v", message, err)
 	}
+	store.PutAssetObject(message.Assets[0].StorageKey, 7, &mimeType)
 	otherThread, err := repo.CreateThread(t.Context(), ownerAuth.UserID, "HTTP other marker", ownerAuth)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherMessage, err := repo.PostMessage(t.Context(), ownerAuth.UserID, otherThread.ID, ownerAuth, "HTTP other body", nil, []types.NewAsset{{
-		StorageKey: "agentbox/" + ownerAuth.UserID + "/" + otherThread.ID + "/http-other.txt",
-		FileName:   "http-other.txt",
-		MimeType:   &mimeType,
-		SizeBytes:  5,
-	}})
+	otherMessage, err := repo.PostMessage(t.Context(), ownerAuth.UserID, otherThread.ID, ownerAuth, "HTTP other body", nil, []types.NewAsset{{StorageKey: "agentbox/" + ownerAuth.UserID + "/" + otherThread.ID + "/http-other.png", FileName: "http-other.png", MimeType: &mimeType, SizeBytes: 5}})
 	if err != nil || len(otherMessage.Assets) != 1 {
 		t.Fatalf("other HTTP fixture message=%#v err=%v", otherMessage, err)
 	}
+	store.PutAssetObject(otherMessage.Assets[0].StorageKey, 5, &mimeType)
 
-	server := NewServer(config.Config{
-		SessionCookieName: config.DefaultSessionCookieName,
-		AppPublicURL:      "https://agentbox.example",
-	}, svc)
+	server := NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName, AppPublicURL: "https://agentbox.example"}, svc)
 	request := func(method string, path string, secret string, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -1960,36 +1991,41 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 		return response
 	}
 
-	initial := request(http.MethodGet, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, "")
-	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"link":null`) || initial.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("initial public-link status=%d cache=%q body=%s", initial.Code, initial.Header().Get("Cache-Control"), initial.Body.String())
+	initial := request(http.MethodGet, "/api/threads/"+thread.ID+"/visibility", memberKey.Key, "")
+	if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), `"public":false`) || strings.Contains(initial.Body.String(), `"public_url":"https://`) {
+		t.Fatalf("initial visibility status=%d body=%s", initial.Code, initial.Body.String())
 	}
-	createdResponse := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, `{"rotate":false}`)
-	if createdResponse.Code != http.StatusCreated || createdResponse.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("create public-link status=%d cache=%q body=%s", createdResponse.Code, createdResponse.Header().Get("Cache-Control"), createdResponse.Body.String())
+	createdResponse := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", memberKey.Key, `{"public":true}`)
+	if createdResponse.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
 	}
 	var created struct {
-		Link      types.ThreadPublicLink `json:"link"`
-		Token     string                 `json:"token"`
-		PublicURL string                 `json:"public_url"`
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
 	}
 	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.Token || created.Link.TokenHash != "" {
-		t.Fatalf("created public HTTP payload=%#v body=%s", created, createdResponse.Body.String())
+	if created.Visibility.PublicLink == nil || !strings.HasPrefix(created.Visibility.PublicURL, "https://agentbox.example/share/agpub_") || created.Visibility.PublicLink.Token != "" || created.Visibility.PublicLink.TokenHash != "" {
+		t.Fatalf("created public visibility=%#v body=%s", created, createdResponse.Body.String())
 	}
-	duplicate := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, `{"rotate":false}`)
-	if duplicate.Code != http.StatusConflict || !strings.Contains(duplicate.Body.String(), "PUBLIC_LINK_EXISTS") {
-		t.Fatalf("duplicate public-link status=%d body=%s", duplicate.Code, duplicate.Body.String())
+	createdToken := strings.TrimPrefix(created.Visibility.PublicURL, "https://agentbox.example/share/")
+	idempotent := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", memberKey.Key, `{"public":true}`)
+	if idempotent.Code != http.StatusOK || !strings.Contains(idempotent.Body.String(), createdToken) {
+		t.Fatalf("idempotent publish status=%d body=%s", idempotent.Code, idempotent.Body.String())
 	}
-	metadata := request(http.MethodGet, "/api/threads/"+thread.ID+"/public-link", ownerKey.Key, "")
-	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"public_url":"`+created.PublicURL+`"`) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
-		t.Fatalf("public-link metadata status=%d body=%s", metadata.Code, metadata.Body.String())
+	metadata := request(http.MethodGet, "/api/threads/"+thread.ID+"/visibility", ownerKey.Key, "")
+	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"public_url":"https://agentbox.example/share/`+createdToken+`"`) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
+		t.Fatalf("visibility metadata status=%d body=%s", metadata.Code, metadata.Body.String())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		retired := request(method, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, `{}`)
+		if retired.Code != http.StatusNotFound {
+			t.Fatalf("retired public-link %s remained live: status=%d body=%s", method, retired.Code, retired.Body.String())
+		}
 	}
 
-	publicView := request(http.MethodGet, "/api/public/threads/"+created.Token, "", "")
-	if publicView.Code != http.StatusOK || publicView.Header().Get("Cache-Control") != "no-store" || !strings.Contains(publicView.Body.String(), "HTTP public marker") || !strings.Contains(publicView.Body.String(), message.Assets[0].ID) {
+	publicView := request(http.MethodGet, "/api/public/threads/"+createdToken, "", "")
+	if publicView.Code != http.StatusOK || publicView.Header().Get("Cache-Control") != "no-store" || !strings.Contains(publicView.Body.String(), "HTTP public marker") || !strings.Contains(publicView.Body.String(), message.Assets[0].ID) || !strings.Contains(publicView.Body.String(), `"preview_path"`) {
 		t.Fatalf("public view status=%d cache=%q body=%s", publicView.Code, publicView.Header().Get("Cache-Control"), publicView.Body.String())
 	}
 	for _, forbidden := range []string{"tenant_id", "owner_user_id", "created_by_user_id", "created_by_key_id", "storage_key", "token_hash"} {
@@ -1997,53 +2033,58 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 			t.Fatalf("public HTTP payload leaked %q: %s", forbidden, publicView.Body.String())
 		}
 	}
-	publicWrite := request(http.MethodPost, "/api/public/threads/"+created.Token, "", `{"body":"blocked"}`)
+	publicWrite := request(http.MethodPost, "/api/public/threads/"+createdToken, "", `{"body":"blocked"}`)
 	if publicWrite.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("public link accepted write: status=%d body=%s", publicWrite.Code, publicWrite.Body.String())
 	}
-	publicDownload := request(http.MethodGet, "/api/public/threads/"+created.Token+"/assets/"+message.Assets[0].ID+"/download", "", "")
+	publicDownload := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/download", "", "")
 	if publicDownload.Code != http.StatusOK || !strings.Contains(publicDownload.Body.String(), `"download_url"`) {
 		t.Fatalf("public download status=%d body=%s", publicDownload.Code, publicDownload.Body.String())
 	}
-	crossThreadDownload := request(http.MethodGet, "/api/public/threads/"+created.Token+"/assets/"+otherMessage.Assets[0].ID+"/download", "", "")
+	publicPreview := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/preview", "", "")
+	if publicPreview.Code != http.StatusTemporaryRedirect || !strings.Contains(publicPreview.Header().Get("Location"), "inline") {
+		t.Fatalf("public preview status=%d location=%q body=%s", publicPreview.Code, publicPreview.Header().Get("Location"), publicPreview.Body.String())
+	}
+	crossThreadDownload := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+otherMessage.Assets[0].ID+"/download", "", "")
 	if crossThreadDownload.Code != http.StatusNotFound || !strings.Contains(crossThreadDownload.Body.String(), "PUBLIC_ASSET_NOT_FOUND") {
 		t.Fatalf("cross-thread public download status=%d body=%s", crossThreadDownload.Code, crossThreadDownload.Body.String())
 	}
 
-	outsiderRotate := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", outsiderKey.Key, `{"rotate":true}`)
+	outsiderRotate := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", outsiderKey.Key, `{"regenerate_public_link":true}`)
 	if outsiderRotate.Code != http.StatusNotFound {
 		t.Fatalf("outsider rotated public link: status=%d body=%s", outsiderRotate.Code, outsiderRotate.Body.String())
 	}
-	rotatedResponse := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", ownerKey.Key, `{"rotate":true}`)
-	if rotatedResponse.Code != http.StatusCreated {
-		t.Fatalf("rotate public-link status=%d body=%s", rotatedResponse.Code, rotatedResponse.Body.String())
+	rotatedResponse := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", ownerKey.Key, `{"regenerate_public_link":true}`)
+	if rotatedResponse.Code != http.StatusOK {
+		t.Fatalf("rotate visibility status=%d body=%s", rotatedResponse.Code, rotatedResponse.Body.String())
 	}
 	var rotated struct {
-		Token string `json:"token"`
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
 	}
 	if err := json.Unmarshal(rotatedResponse.Body.Bytes(), &rotated); err != nil {
 		t.Fatal(err)
 	}
-	if rotated.Token == "" || rotated.Token == created.Token {
-		t.Fatalf("rotated public token=%#v", rotated)
+	rotatedToken := strings.TrimPrefix(rotated.Visibility.PublicURL, "https://agentbox.example/share/")
+	if rotated.Visibility.PublicLink == nil || !strings.HasPrefix(rotatedToken, "agpub_") || rotatedToken == createdToken {
+		t.Fatalf("rotated public visibility=%#v", rotated)
 	}
-	oldView := request(http.MethodGet, "/api/public/threads/"+created.Token, "", "")
+	oldView := request(http.MethodGet, "/api/public/threads/"+createdToken, "", "")
 	if oldView.Code != http.StatusNotFound {
 		t.Fatalf("old public URL remained active: status=%d body=%s", oldView.Code, oldView.Body.String())
 	}
-	newView := request(http.MethodGet, "/api/public/threads/"+rotated.Token, "", "")
+	newView := request(http.MethodGet, "/api/public/threads/"+rotatedToken, "", "")
 	if newView.Code != http.StatusOK {
 		t.Fatalf("rotated public URL inactive: status=%d body=%s", newView.Code, newView.Body.String())
 	}
-	revoke := request(http.MethodDelete, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, "")
-	if revoke.Code != http.StatusOK {
-		t.Fatalf("revoke public-link status=%d body=%s", revoke.Code, revoke.Body.String())
+	unpublish := request(http.MethodPatch, "/api/threads/"+thread.ID+"/visibility", memberKey.Key, `{"public":false}`)
+	if unpublish.Code != http.StatusOK || !strings.Contains(unpublish.Body.String(), `"public":false`) {
+		t.Fatalf("unpublish status=%d body=%s", unpublish.Code, unpublish.Body.String())
 	}
-	revokedView := request(http.MethodGet, "/api/public/threads/"+rotated.Token, "", "")
+	revokedView := request(http.MethodGet, "/api/public/threads/"+rotatedToken, "", "")
 	if revokedView.Code != http.StatusNotFound {
 		t.Fatalf("revoked public URL remained active: status=%d body=%s", revokedView.Code, revokedView.Body.String())
 	}
-	revokedDownload := request(http.MethodGet, "/api/public/threads/"+rotated.Token+"/assets/"+message.Assets[0].ID+"/download", "", "")
+	revokedDownload := request(http.MethodGet, "/api/public/threads/"+rotatedToken+"/assets/"+message.Assets[0].ID+"/download", "", "")
 	if revokedDownload.Code != http.StatusNotFound {
 		t.Fatalf("revoked public URL signed attachment: status=%d body=%s", revokedDownload.Code, revokedDownload.Body.String())
 	}
@@ -2051,7 +2092,8 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 
 func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
 	adminAuth := authContext("global", "admin")
 	adminAuth.SubjectType = types.AuthSubjectUserSession
 	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, Email: "admin@example.com", DisplayName: "Admin"})
@@ -2072,6 +2114,7 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	if len(message.Assets) != 1 {
 		t.Fatalf("expected asset, got %#v", message.Assets)
 	}
+	store.PutAssetObject(message.Assets[0].StorageKey, int64(len("seed bytes")), &textType)
 	restrictedKey, err := svc.CreateAPIKeyWithScopes(t.Context(), adminAuth, "keys-only", []string{"keys:read"})
 	if err != nil {
 		t.Fatal(err)

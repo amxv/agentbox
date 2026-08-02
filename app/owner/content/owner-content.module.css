@@ -38,3 +38,8 @@
 .cardFoot > span:first-child { color: color-mix(in srgb, var(--foreground) 46%, transparent); font-size: 10px; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 820px) { .topbar { padding: 0 18px; } .topbar nav span { display: none; } .shell { width: min(100% - 28px, 1160px); padding-top: 22px; } .warning, .hero, .cardHead, .cardFoot { align-items: flex-start; flex-direction: column; } .count { text-align: left; } .filters { grid-template-columns: 1fr; } }
+
+.pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 0 4px; }
+.pager button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 9px; padding: 8px 13px; cursor: pointer; }
+.pager button:disabled { cursor: default; opacity: .45; }
+.pager span { color: var(--muted); font-size: 13px; }

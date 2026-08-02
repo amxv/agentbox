@@ -215,18 +215,21 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
   }
 
   const sharedCount = visibility?.shared_teams.length ?? 0;
-  const label = loading ? "Visibility" : sharedCount === 0 ? "Private" : sharedCount === 1 ? visibility?.shared_teams[0]?.name ?? "1 team" : `${sharedCount} teams`;
+  const isPublic = visibility?.public ?? false;
+  const teamLabel = sharedCount === 0 ? "" : sharedCount === 1 ? visibility?.shared_teams[0]?.name ?? "1 team" : `${sharedCount} teams`;
+  const label = loading ? "Visibility" : isPublic && teamLabel ? `${teamLabel} · Public` : isPublic ? "Public" : teamLabel || "Private";
+  const privateOnly = selectedTeamIDs.length === 0 && !isPublic;
 
   return (
     <div className={styles.root}>
       <button
-        className={`${styles.trigger} ${sharedCount > 0 ? styles.shared : ""}`}
+        className={`${styles.trigger} ${sharedCount > 0 || isPublic ? styles.shared : ""}`}
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls="thread-visibility-panel"
       >
-        <span className={styles.triggerIcon}>{sharedCount > 0 ? "◌" : "●"}</span>
+        <span className={styles.triggerIcon}>{isPublic ? "◎" : sharedCount > 0 ? "◌" : "●"}</span>
         <span><small>Visibility</small><strong>{label}</strong></span>
       </button>
 
@@ -240,9 +243,9 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
 
           {error && <div className={styles.error}>{error}</div>}
 
-          <label className={`${styles.option} ${selectedTeamIDs.length === 0 ? styles.selected : ""}`}>
-            <input type="radio" name="thread-visibility-mode" checked={selectedTeamIDs.length === 0} onChange={() => setSelectedTeamIDs([])}/>
-            <span><strong>Private</strong><small>Only the owner and their credentials.</small></span>
+          <label className={`${styles.option} ${privateOnly ? styles.selected : ""}`}>
+            <input type="radio" name="thread-visibility-mode" checked={privateOnly} onChange={() => setSelectedTeamIDs([])}/>
+            <span><strong>{isPublic ? "No team access" : "Private"}</strong><small>{isPublic ? "The public read-only link remains live until revoked below." : "Only the owner and their credentials."}</small></span>
           </label>
 
           <div className={styles.teamSection}>

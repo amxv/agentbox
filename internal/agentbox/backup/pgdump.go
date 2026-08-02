@@ -29,13 +29,14 @@ func (d PGDump) Dump(ctx context.Context, snapshotID string, destinationPath str
 	command := exec.CommandContext(
 		ctx,
 		binary,
+		"--dbname="+d.DatabaseURL,
 		"--format=custom",
 		"--no-owner",
 		"--no-acl",
 		"--snapshot="+snapshotID,
 		"--file="+destinationPath,
 	)
-	command.Env = append(os.Environ(), "PGDATABASE="+d.DatabaseURL)
+	command.Env = os.Environ()
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {

@@ -11,7 +11,7 @@ import (
 
 func TestParseOptionsUsesSafeDefaults(t *testing.T) {
 	clearBackupEnv(t)
-	options, err := parseOptions([]string{"--output-dir", "/secure/backups"}, config.Config{R2Bucket: "attachments"}, &bytes.Buffer{}, time.Date(2026, 8, 1, 12, 34, 56, 0, time.UTC))
+	options, err := parseOptions([]string{"--output-dir", "/secure/backups", "--owner-email", "owner@example.com"}, config.Config{R2Bucket: "attachments"}, &bytes.Buffer{}, time.Date(2026, 8, 1, 12, 34, 56, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,7 @@ func TestParseOptionsAllowsExplicitRecoveryDestination(t *testing.T) {
 		"--backup-bucket", "recovery",
 		"--backup-prefix", "/snapshots/cutover-1/",
 		"--pg-dump-binary", "/usr/local/bin/pg_dump",
+		"--owner-email", "owner@example.com",
 		"--timeout", "30m",
 	}, config.Config{}, &bytes.Buffer{}, time.Time{})
 	if err != nil {
@@ -54,7 +55,7 @@ func TestParseOptionsAllowsExplicitRecoveryDestination(t *testing.T) {
 
 func TestParseOptionsRequiresOutputDirectory(t *testing.T) {
 	clearBackupEnv(t)
-	_, err := parseOptions(nil, config.Config{R2Bucket: "attachments"}, &bytes.Buffer{}, time.Now())
+	_, err := parseOptions([]string{"--owner-email", "owner@example.com"}, config.Config{R2Bucket: "attachments"}, &bytes.Buffer{}, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "output-dir") {
 		t.Fatalf("error = %v", err)
 	}
@@ -68,6 +69,7 @@ func clearBackupEnv(t *testing.T) {
 		"AGENTBOX_BACKUP_BUCKET",
 		"AGENTBOX_BACKUP_PREFIX",
 		"AGENTBOX_PG_DUMP_BINARY",
+		"AGENTBOX_OWNER_EMAIL",
 	} {
 		t.Setenv(name, "")
 	}

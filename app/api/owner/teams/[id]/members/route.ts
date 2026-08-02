@@ -7,8 +7,9 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
+  const url = new URL(request.url);
   return proxyToGoBackend({
-    path: `/api/owner/teams/${encodeURIComponent(id)}/members`,
+    path: `/api/owner/teams/${encodeURIComponent(id)}/members${url.search}`,
     request
   });
 }

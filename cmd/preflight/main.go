@@ -20,14 +20,15 @@ import (
 const defaultPreflightTimeout = 2 * time.Hour
 
 type commandOptions struct {
-	OutputDir    string
-	RunID        string
-	SourceBucket string
-	SourcePrefix string
-	BackupBucket string
-	BackupPrefix string
-	PGDumpBinary string
-	Timeout      time.Duration
+	OutputDir          string
+	RunID              string
+	SourceBucket       string
+	SourcePrefix       string
+	BackupBucket       string
+	BackupPrefix       string
+	PGDumpBinary       string
+	ProposedOwnerEmail string
+	Timeout            time.Duration
 }
 
 func main() {
@@ -71,12 +72,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		Objects: store,
 	}
 	manifest, runErr := runner.Run(ctx, backup.Options{
-		RunID:        options.RunID,
-		OutputDir:    options.OutputDir,
-		SourceBucket: options.SourceBucket,
-		SourcePrefix: options.SourcePrefix,
-		BackupBucket: options.BackupBucket,
-		BackupPrefix: options.BackupPrefix,
+		ProposedOwnerEmail: options.ProposedOwnerEmail,
+		RunID:              options.RunID,
+		OutputDir:          options.OutputDir,
+		SourceBucket:       options.SourceBucket,
+		SourcePrefix:       options.SourcePrefix,
+		BackupBucket:       options.BackupBucket,
+		BackupPrefix:       options.BackupPrefix,
 	})
 
 	manifestPath := ""
@@ -103,14 +105,15 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 func parseOptions(args []string, cfg config.Config, stderr io.Writer, now time.Time) (commandOptions, error) {
 	runID := now.UTC().Format("20060102T150405Z")
 	defaults := commandOptions{
-		OutputDir:    strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_OUTPUT_DIR")),
-		RunID:        runID,
-		SourceBucket: cfg.R2Bucket,
-		SourcePrefix: strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_SOURCE_PREFIX")),
-		BackupBucket: strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_BUCKET")),
-		BackupPrefix: strings.Trim(strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_PREFIX")), "/"),
-		PGDumpBinary: firstNonEmpty(strings.TrimSpace(os.Getenv("AGENTBOX_PG_DUMP_BINARY")), "pg_dump"),
-		Timeout:      defaultPreflightTimeout,
+		OutputDir:          strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_OUTPUT_DIR")),
+		RunID:              runID,
+		SourceBucket:       cfg.R2Bucket,
+		SourcePrefix:       strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_SOURCE_PREFIX")),
+		BackupBucket:       strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_BUCKET")),
+		BackupPrefix:       strings.Trim(strings.TrimSpace(os.Getenv("AGENTBOX_BACKUP_PREFIX")), "/"),
+		PGDumpBinary:       firstNonEmpty(strings.TrimSpace(os.Getenv("AGENTBOX_PG_DUMP_BINARY")), "pg_dump"),
+		ProposedOwnerEmail: strings.TrimSpace(os.Getenv("AGENTBOX_OWNER_EMAIL")),
+		Timeout:            defaultPreflightTimeout,
 	}
 	if defaults.BackupBucket == "" {
 		defaults.BackupBucket = defaults.SourceBucket
@@ -126,6 +129,7 @@ func parseOptions(args []string, cfg config.Config, stderr io.Writer, now time.T
 	set.StringVar(&options.BackupBucket, "backup-bucket", options.BackupBucket, "R2 recovery bucket (defaults to the source bucket)")
 	set.StringVar(&options.BackupPrefix, "backup-prefix", options.BackupPrefix, "R2 recovery prefix (defaults to agentbox-recovery/<run-id>)")
 	set.StringVar(&options.PGDumpBinary, "pg-dump-binary", options.PGDumpBinary, "pg_dump executable")
+	set.StringVar(&options.ProposedOwnerEmail, "owner-email", options.ProposedOwnerEmail, "permanent owner email used to calculate the exact owner backfill")
 	set.DurationVar(&options.Timeout, "timeout", options.Timeout, "maximum preflight duration")
 	if err := set.Parse(args); err != nil {
 		return commandOptions{}, err
@@ -141,11 +145,15 @@ func parseOptions(args []string, cfg config.Config, stderr io.Writer, now time.T
 	options.BackupBucket = strings.TrimSpace(options.BackupBucket)
 	options.BackupPrefix = strings.Trim(strings.TrimSpace(options.BackupPrefix), "/")
 	options.PGDumpBinary = strings.TrimSpace(options.PGDumpBinary)
+	options.ProposedOwnerEmail = strings.TrimSpace(options.ProposedOwnerEmail)
 	if options.RunID == "" {
 		return commandOptions{}, errors.New("--run-id must not be empty")
 	}
 	if options.OutputDir == "" {
 		return commandOptions{}, errors.New("--output-dir or AGENTBOX_BACKUP_OUTPUT_DIR is required")
+	}
+	if options.ProposedOwnerEmail == "" {
+		return commandOptions{}, errors.New("--owner-email or AGENTBOX_OWNER_EMAIL is required")
 	}
 	if options.BackupBucket == "" {
 		options.BackupBucket = options.SourceBucket
@@ -202,6 +210,13 @@ func printSummary(output io.Writer, manifest backup.Manifest, manifestPath strin
 		manifest.Objects.CopiedObjectCount,
 		manifest.Objects.AlreadyBackedUpCount,
 		manifest.Objects.UnreferencedCount,
+	)
+	fmt.Fprintf(output, "Owner backfill: email=%s id=%s threads=%d digest=%s ambiguous=%d\n",
+		manifest.OwnerBackfill.ProposedOwnerEmail,
+		manifest.OwnerBackfill.ProposedOwnerID,
+		manifest.OwnerBackfill.ThreadCount,
+		manifest.OwnerBackfill.ThreadIDsSHA256,
+		len(manifest.OwnerBackfill.AmbiguousThreadIDs)+len(manifest.OwnerBackfill.UnassignableThreadIDs),
 	)
 	fmt.Fprintf(output, "Issues: %d\n", len(manifest.Issues))
 	if manifestPath != "" {

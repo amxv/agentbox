@@ -16,6 +16,7 @@ import (
 
 type FakeStore struct {
 	MaxFileSizeBytes int64
+	AssetBucket      string
 	Uploads          []types.NewAsset
 	Buckets          map[string]map[string]backup.ObjectMetadata
 	CopyCalls        []backup.CopyObjectRequest
@@ -24,28 +25,37 @@ type FakeStore struct {
 	ListFailures     map[string]error
 	CopyFailures     map[string]error
 	DeleteFailures   map[string]error
+	AfterUpload      func(types.NewAsset)
+	BeforeDelete     func(string)
 	mutex            sync.Mutex
 }
 
 func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams) (types.NewAsset, error) {
 	f.mutex.Lock()
-	defer f.mutex.Unlock()
 	limit := f.MaxFileSizeBytes
 	if limit == 0 {
 		limit = 25 * 1024 * 1024
 	}
 	if int64(len(params.Bytes)) > limit {
+		f.mutex.Unlock()
 		return types.NewAsset{}, errTooLarge(limit)
 	}
 	fileName := SanitizeFilename(params.FileName)
 	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
-	asset := types.NewAsset{
-		StorageKey: storageKey,
-		FileName:   fileName,
-		MimeType:   InferMimeType(fileName, params.MimeType),
-		SizeBytes:  int64(len(params.Bytes)),
-	}
+	asset := types.NewAsset{StorageKey: storageKey, FileName: fileName, MimeType: InferMimeType(fileName, params.MimeType), SizeBytes: int64(len(params.Bytes))}
 	f.Uploads = append(f.Uploads, asset)
+	bucket := f.AssetBucket
+	if bucket == "" {
+		bucket = "assets"
+	}
+	f.ensureBucket(bucket)
+	now := time.Now().UTC()
+	f.Buckets[bucket][storageKey] = backup.ObjectMetadata{Bucket: bucket, Key: storageKey, SizeBytes: asset.SizeBytes, ContentType: asset.MimeType, LastModified: &now}
+	hook := f.AfterUpload
+	f.mutex.Unlock()
+	if hook != nil {
+		hook(asset)
+	}
 	return asset, nil
 }
 
@@ -59,6 +69,24 @@ func (f *FakeStore) PutObject(bucket string, key string, sizeBytes int64, etag s
 		Key:          key,
 		SizeBytes:    sizeBytes,
 		ETag:         normalizeETag(etag),
+		LastModified: &now,
+	}
+}
+
+func (f *FakeStore) PutAssetObject(key string, sizeBytes int64, contentType *string) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	bucket := f.AssetBucket
+	if bucket == "" {
+		bucket = "assets"
+	}
+	f.ensureBucket(bucket)
+	now := time.Now().UTC()
+	f.Buckets[bucket][key] = backup.ObjectMetadata{
+		Bucket:       bucket,
+		Key:          key,
+		SizeBytes:    sizeBytes,
+		ContentType:  contentType,
 		LastModified: &now,
 	}
 }
@@ -156,7 +184,11 @@ func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params Signe
 		expires = 300
 	}
 	q.Set("X-Amz-Expires", strconv.Itoa(expires))
-	q.Set("response-content-disposition", `attachment; filename="`+params.FileName+`"`)
+	disposition := "attachment"
+	if params.Inline {
+		disposition = "inline"
+	}
+	q.Set("response-content-disposition", disposition+`; filename="`+params.FileName+`"`)
 	if params.MimeType != nil {
 		q.Set("response-content-type", *params.MimeType)
 	}
@@ -164,17 +196,32 @@ func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params Signe
 	return u.String(), nil
 }
 
+func (f *FakeStore) HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error) {
+	bucket := f.AssetBucket
+	if bucket == "" {
+		bucket = "assets"
+	}
+	return f.HeadObject(ctx, bucket, storageKey)
+}
+
 func (f *FakeStore) DeleteAssetObject(_ context.Context, storageKey string) error {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
 	storageKey = strings.TrimSpace(storageKey)
 	if storageKey == "" {
 		return errors.New("asset storage key is required")
 	}
+	f.mutex.Lock()
 	f.DeleteCalls = append(f.DeleteCalls, storageKey)
-	if err := f.DeleteFailures[storageKey]; err != nil {
-		return err
+	failure := f.DeleteFailures[storageKey]
+	hook := f.BeforeDelete
+	f.mutex.Unlock()
+	if failure != nil {
+		return failure
 	}
+	if hook != nil {
+		hook(storageKey)
+	}
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
 	for bucket, objects := range f.Buckets {
 		delete(objects, storageKey)
 		f.Buckets[bucket] = objects

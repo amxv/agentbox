@@ -16,6 +16,37 @@ import (
 	"agentbox/internal/agentbox/types"
 )
 
+func setThreadVisibilityForTest(ctx context.Context, repository interface {
+	ManageThreadVisibility(context.Context, string, string, types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
+}, userID string, threadID string, desiredTeamIDs []string) (types.ThreadVisibility, error) {
+	current, err := repository.ManageThreadVisibility(ctx, userID, threadID, types.ManageThreadVisibilityInput{})
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	desired := map[string]bool{}
+	for _, teamID := range desiredTeamIDs {
+		desired[teamID] = true
+	}
+	currentIDs := map[string]bool{}
+	input := types.ManageThreadVisibilityInput{}
+	for _, team := range current.SharedTeams {
+		currentIDs[team.ID] = true
+		if !desired[team.ID] {
+			input.RemoveTeams = append(input.RemoveTeams, team.ID)
+		}
+	}
+	for _, teamID := range desiredTeamIDs {
+		if !currentIDs[teamID] {
+			input.AddTeams = append(input.AddTeams, teamID)
+		}
+	}
+	state, err := repository.ManageThreadVisibility(ctx, userID, threadID, input)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return types.ThreadVisibility{ThreadID: state.ThreadID, OwnerUserID: state.OwnerUserID, SharedTeams: state.SharedTeams}, nil
+}
+
 func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 	passwordHash, err := authpkg.HashPassword("secret-password")
 	if err != nil {
@@ -113,6 +144,135 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 	}
 	if authenticated, err := svc.AuthenticateAPIKey(context.Background(), credential.Key); err != nil || authenticated != nil {
 		t.Fatalf("disabled user credential authenticated: auth=%#v err=%v", authenticated, err)
+	}
+}
+
+func TestDirectUploadFinalizationValidatesBatchMetadataAndReplay(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := New(repo, store)
+	user := types.User{ID: "usr_upload_integrity", Email: "upload@example.com", DisplayName: "Uploader"}
+	repo.Users = append(repo.Users, user)
+	authContext := types.AuthContext{UserID: user.ID, UserDisplayName: user.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_upload", ActorName: "Web dashboard"}
+	thread, err := svc.CreateThread(context.Background(), authContext, "Upload integrity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mimeType := "text/plain"
+	if _, err := svc.CreatePresignedUploads(context.Background(), authContext, thread.ID, []types.UploadIntentFile{{FileName: "first.txt", MimeType: &mimeType, SizeBytes: 4}, {FileName: "", SizeBytes: 1}}); !hasCodedError(err, "INVALID_ARGUMENT") {
+		t.Fatalf("invalid batch error=%v", err)
+	}
+	if len(repo.Pending) != 0 {
+		t.Fatalf("invalid batch left hidden pending rows: %#v", repo.Pending)
+	}
+	uploads, err := svc.CreatePresignedUploads(context.Background(), authContext, thread.ID, []types.UploadIntentFile{{FileName: "ready.txt", MimeType: &mimeType, SizeBytes: 4}})
+	if err != nil || len(uploads) != 1 {
+		t.Fatalf("uploads=%#v err=%v", uploads, err)
+	}
+	params := PostMessageParams{ThreadID: thread.ID, Body: "finalize", UploadedAssets: []types.UploadedAssetReference{{UploadID: uploads[0].UploadID}}}
+	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_NOT_MATERIALIZED") {
+		t.Fatalf("missing object finalization error=%v", err)
+	}
+	if len(repo.Messages) != 0 || repo.Pending[0].ConsumedAt != nil {
+		t.Fatalf("missing object mutated state messages=%#v pending=%#v", repo.Messages, repo.Pending)
+	}
+	store.PutAssetObject(uploads[0].StorageKey, 5, &mimeType)
+	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
+		t.Fatalf("size mismatch error=%v", err)
+	}
+	wrongType := "application/octet-stream"
+	store.PutAssetObject(uploads[0].StorageKey, 4, &wrongType)
+	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
+		t.Fatalf("type mismatch error=%v", err)
+	}
+	store.PutAssetObject(uploads[0].StorageKey, 4, &mimeType)
+	message, err := svc.PostMessage(context.Background(), authContext, params)
+	if err != nil || len(message.Assets) != 1 || repo.Pending[0].ConsumedAt == nil {
+		t.Fatalf("finalized message=%#v pending=%#v err=%v", message, repo.Pending, err)
+	}
+	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_UNAVAILABLE") {
+		t.Fatalf("replay error=%v", err)
+	}
+	if len(repo.Messages) != 1 || len(repo.Assets) != 1 {
+		t.Fatalf("replay duplicated rows messages=%d assets=%d", len(repo.Messages), len(repo.Assets))
+	}
+}
+
+func TestServerUploadCompensatesWhenAccessIsLostAfterObjectWrite(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := New(repo, store)
+	owner := types.User{ID: "usr_comp_owner", Email: "owner-comp@example.com", DisplayName: "Owner"}
+	member := types.User{ID: "usr_comp_member", Email: "member-comp@example.com", DisplayName: "Member"}
+	repo.Users = append(repo.Users, owner, member)
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_comp_owner", ActorName: "Web dashboard"}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_comp_member", ActorName: "Web dashboard"}
+	team, err := repo.CreateTeam(context.Background(), "comp-team", "Comp Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.ID, member.ID} {
+		if _, err := repo.AddTeamMember(context.Background(), team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread, err := svc.CreateThread(context.Background(), ownerAuth, "Compensation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, owner.ID, thread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	store.AfterUpload = func(types.NewAsset) { _, _ = repo.RemoveTeamMember(context.Background(), team.ID, member.ID) }
+	_, err = svc.PostMessageWithAsset(context.Background(), memberAuth, PostMessageWithAssetParams{ThreadID: thread.ID, Body: "must fail", Bytes: []byte("orphan me not"), FileName: "comp.txt"})
+	if !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("post after access loss error=%v", err)
+	}
+	if len(store.Uploads) != 1 || len(store.DeleteCalls) != 1 || store.DeleteCalls[0] != store.Uploads[0].StorageKey {
+		t.Fatalf("upload compensation uploads=%#v deletes=%#v", store.Uploads, store.DeleteCalls)
+	}
+	if len(repo.Messages) != 0 || len(repo.Assets) != 0 {
+		t.Fatalf("failed post committed rows messages=%#v assets=%#v", repo.Messages, repo.Assets)
+	}
+	if _, err := store.HeadAssetObject(context.Background(), store.Uploads[0].StorageKey); err == nil {
+		t.Fatal("compensated object still exists")
+	}
+}
+
+func TestMissingAttachmentIsUnavailableAcrossAuthenticatedAndPublicSigning(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := New(repo, store)
+	user := types.User{ID: "usr_missing_asset", Email: "missing@example.com", DisplayName: "Missing"}
+	repo.Users = append(repo.Users, user)
+	authContext := types.AuthContext{UserID: user.ID, UserDisplayName: user.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_missing", ActorName: "Web dashboard"}
+	thread, err := svc.CreateThread(context.Background(), authContext, "Missing object")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mimeType := "image/png"
+	message, err := repo.PostMessage(context.Background(), user.ID, thread.ID, authContext, "missing", nil, []types.NewAsset{{StorageKey: "missing/external.png", FileName: "external.png", MimeType: &mimeType, SizeBytes: 9}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SignedAssetDownloadURL(context.Background(), authContext, message.Assets[0].ID, 300); !hasCodedError(err, "ATTACHMENT_UNAVAILABLE") {
+		t.Fatalf("authenticated missing object error=%v", err)
+	}
+	publish := true
+	visibility, err := svc.ManageThreadVisibility(context.Background(), authContext, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{Public: &publish})
+	if err != nil || visibility.PublicLink == nil {
+		t.Fatalf("publish=%#v err=%v", visibility, err)
+	}
+	view, err := svc.GetPublicThread(context.Background(), visibility.PublicLink.Token)
+	if err != nil || len(view.Messages) != 1 || len(view.Messages[0].Assets) != 1 {
+		t.Fatalf("public view=%#v err=%v", view, err)
+	}
+	publicAsset := view.Messages[0].Assets[0]
+	if !publicAsset.Unavailable || publicAsset.DownloadPath != "" || publicAsset.PreviewPath != "" {
+		t.Fatalf("missing public asset=%#v", publicAsset)
+	}
+	if _, err := svc.PublicAssetDownloadURL(context.Background(), visibility.PublicLink.Token, message.Assets[0].ID); !hasCodedError(err, "ATTACHMENT_UNAVAILABLE") {
+		t.Fatalf("public missing object error=%v", err)
 	}
 }
 
@@ -468,14 +628,14 @@ func TestUnifiedThreadFiltersAndVisibilitySummaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), owner.UserID, teamThread.ID, []string{engineering.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, owner.UserID, teamThread.ID, []string{engineering.ID}); err != nil {
 		t.Fatal(err)
 	}
 	multiThread, err := svc.CreateThread(context.Background(), owner, "filter marker multi public")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), owner.UserID, multiThread.ID, []string{engineering.ID, research.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, owner.UserID, multiThread.ID, []string{engineering.ID, research.ID}); err != nil {
 		t.Fatal(err)
 	}
 	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: multiThread.ID, Token: "agpub_filter_multi", TokenHash: "filter-multi-hash", TokenPrefix: "agpub_filter", CreatedAt: multiThread.CreatedAt, UpdatedAt: multiThread.UpdatedAt})
@@ -583,7 +743,7 @@ func TestOwnerCredentialAdministrationAndDisablementPreserveSharedContent(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), member.ID, sharedThread.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, member.ID, sharedThread.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if thread, err := svc.GetThread(context.Background(), teammateAuth, sharedThread.ID); err != nil || thread == nil {
@@ -686,14 +846,14 @@ func TestOwnerAttachmentPurgeIsUploaderScopedResumableAndTombstoned(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), target.ID, targetThread.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, target.ID, targetThread.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
 	otherThread, err := svc.CreateThread(context.Background(), otherAuth, "Other-owned shared thread")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), other.ID, otherThread.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, other.ID, otherThread.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
 	targetKey := "agentbox/purge/target-owned.txt"
@@ -711,6 +871,9 @@ func TestOwnerAttachmentPurgeIsUploaderScopedResumableAndTombstoned(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.PutAssetObject(targetKey, 10, nil)
+	store.PutAssetObject(crossThreadTargetKey, 30, nil)
+	store.PutAssetObject(otherKey, 20, nil)
 	publicToken := "agpub_purge_fixture"
 	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: targetThread.ID, Token: publicToken, TokenHash: hashSecret(publicToken), TokenPrefix: tokenPrefix(publicToken), CreatedAt: targetThread.CreatedAt, UpdatedAt: targetThread.UpdatedAt})
 
@@ -825,13 +988,14 @@ func TestOwnerContentContextIsBrowserOnlyAndDoesNotBypassNormalAccess(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), member.ID, memberShared.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, member.ID, memberShared.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
 	message, err := repo.PostMessage(context.Background(), member.ID, memberPrivate.ID, memberAuth, "private searchable evidence", nil, []types.NewAsset{{StorageKey: "agentbox/owner-content/private.txt", FileName: "private.txt", SizeBytes: 17}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.PutAssetObject(message.Assets[0].StorageKey, 17, nil)
 	if _, err := svc.GetThread(context.Background(), ownerAuth, memberPrivate.ID); !errors.Is(err, ErrThreadNotFound) {
 		t.Fatalf("normal owner access bypassed private thread: %v", err)
 	}
@@ -1116,61 +1280,54 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(context.Background(), owner.ID, thread.ID, []string{team.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, owner.ID, thread.ID, []string{team.ID}); err != nil {
 		t.Fatal(err)
 	}
-	mimeType := "text/plain"
-	message, err := repo.PostMessage(context.Background(), owner.ID, thread.ID, ownerAuth, "Public body", nil, []types.NewAsset{{
-		StorageKey: "agentbox/" + owner.ID + "/" + thread.ID + "/public.txt",
-		FileName:   "public.txt",
-		MimeType:   &mimeType,
-		SizeBytes:  6,
-	}})
+	mimeType := "image/png"
+	message, err := repo.PostMessage(context.Background(), owner.ID, thread.ID, ownerAuth, "Public body", nil, []types.NewAsset{{StorageKey: "agentbox/" + owner.ID + "/" + thread.ID + "/public.png", FileName: "public.png", MimeType: &mimeType, SizeBytes: 6}})
 	if err != nil || len(message.Assets) != 1 {
 		t.Fatalf("public fixture message=%#v err=%v", message, err)
 	}
+	store.PutAssetObject(message.Assets[0].StorageKey, 6, &mimeType)
 	otherThread, err := repo.CreateThread(context.Background(), owner.ID, "Other private", ownerAuth)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherMessage, err := repo.PostMessage(context.Background(), owner.ID, otherThread.ID, ownerAuth, "Other body", nil, []types.NewAsset{{
-		StorageKey: "agentbox/" + owner.ID + "/" + otherThread.ID + "/other.txt",
-		FileName:   "other.txt",
-		MimeType:   &mimeType,
-		SizeBytes:  5,
-	}})
+	otherMessage, err := repo.PostMessage(context.Background(), owner.ID, otherThread.ID, ownerAuth, "Other body", nil, []types.NewAsset{{StorageKey: "agentbox/" + owner.ID + "/" + otherThread.ID + "/other.png", FileName: "other.png", MimeType: &mimeType, SizeBytes: 5}})
 	if err != nil || len(otherMessage.Assets) != 1 {
 		t.Fatalf("other fixture message=%#v err=%v", otherMessage, err)
 	}
+	store.PutAssetObject(otherMessage.Assets[0].StorageKey, 5, &mimeType)
 
-	if link, err := svc.GetThreadPublicLink(context.Background(), memberAuth, thread.ID); err != nil || link != nil {
-		t.Fatalf("initial public link=%#v err=%v", link, err)
+	initial, err := svc.ManageThreadVisibility(context.Background(), memberAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{})
+	if err != nil || initial.Public || initial.PublicLink != nil {
+		t.Fatalf("initial visibility=%#v err=%v", initial, err)
 	}
-	created, err := svc.CreateThreadPublicLink(context.Background(), memberAuth, thread.ID, "https://agentbox.example", false)
+	publish := true
+	created, err := svc.ManageThreadVisibility(context.Background(), memberAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{Public: &publish})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.Token || created.Link.TokenHash == "" || created.Link.TokenHash == created.Token {
-		t.Fatalf("created public link=%#v", created)
+	if !created.Public || created.PublicLink == nil || !strings.HasPrefix(created.PublicLink.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.PublicLink.Token || created.PublicLink.TokenHash == "" || created.PublicLink.TokenHash == created.PublicLink.Token {
+		t.Fatalf("created visibility=%#v", created)
 	}
-	if _, err := svc.CreateThreadPublicLink(context.Background(), memberAuth, thread.ID, "https://agentbox.example", false); !hasCodedError(err, "PUBLIC_LINK_EXISTS") {
-		t.Fatalf("duplicate public link error=%v", err)
+	createdToken := created.PublicLink.Token
+	idempotent, err := svc.ManageThreadVisibility(context.Background(), memberAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{Public: &publish})
+	if err != nil || idempotent.PublicLink == nil || idempotent.PublicLink.Token != createdToken {
+		t.Fatalf("idempotent publish=%#v err=%v", idempotent, err)
 	}
-	metadata, err := svc.GetThreadPublicLink(context.Background(), ownerAuth, thread.ID)
-	if err != nil || metadata == nil || metadata.TokenPrefix == "" {
+	metadata, err := svc.ManageThreadVisibility(context.Background(), ownerAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{})
+	if err != nil || metadata.PublicLink == nil || metadata.PublicLink.TokenPrefix == "" || metadata.PublicURL == "" {
 		t.Fatalf("public metadata=%#v err=%v", metadata, err)
 	}
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(metadataJSON), created.Token) || strings.Contains(string(metadataJSON), created.Link.TokenHash) || strings.Contains(string(metadataJSON), "token_hash") {
-		t.Fatalf("public metadata leaked token material: %s", metadataJSON)
-	}
 
-	publicView, err := svc.GetPublicThread(context.Background(), created.Token)
+	publicView, err := svc.GetPublicThread(context.Background(), createdToken)
 	if err != nil || publicView == nil || publicView.ID != thread.ID || len(publicView.Messages) != 1 || len(publicView.Messages[0].Assets) != 1 {
 		t.Fatalf("public view=%#v err=%v", publicView, err)
+	}
+	publicAsset := publicView.Messages[0].Assets[0]
+	if publicAsset.DownloadPath == "" || publicAsset.PreviewPath == "" || publicAsset.Unavailable {
+		t.Fatalf("public image asset=%#v", publicAsset)
 	}
 	publicJSON, err := json.Marshal(publicView)
 	if err != nil {
@@ -1182,47 +1339,45 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 			t.Fatalf("public payload leaked %q: %s", forbidden, serialized)
 		}
 	}
-	if !strings.Contains(publicView.Messages[0].Assets[0].DownloadPath, "/api/public/threads/") || !strings.Contains(publicView.Messages[0].Assets[0].DownloadPath, message.Assets[0].ID) {
-		t.Fatalf("public asset path=%q", publicView.Messages[0].Assets[0].DownloadPath)
-	}
-	if downloadURL, err := svc.PublicAssetDownloadURL(context.Background(), created.Token, message.Assets[0].ID); err != nil || downloadURL == "" {
+	if downloadURL, err := svc.PublicAssetDownloadURL(context.Background(), createdToken, message.Assets[0].ID); err != nil || downloadURL == "" {
 		t.Fatalf("public asset signing url=%q err=%v", downloadURL, err)
 	}
-	if _, err := svc.PublicAssetDownloadURL(context.Background(), created.Token, otherMessage.Assets[0].ID); !hasCodedError(err, "PUBLIC_ASSET_NOT_FOUND") {
+	if previewURL, err := svc.PublicAssetPreviewURL(context.Background(), createdToken, message.Assets[0].ID); err != nil || !strings.Contains(previewURL, "inline") {
+		t.Fatalf("public preview url=%q err=%v", previewURL, err)
+	}
+	if _, err := svc.PublicAssetDownloadURL(context.Background(), createdToken, otherMessage.Assets[0].ID); !hasCodedError(err, "PUBLIC_ASSET_NOT_FOUND") {
 		t.Fatalf("cross-thread public asset signing error=%v", err)
 	}
 
-	if _, err := svc.CreateThreadPublicLink(context.Background(), outsiderAuth, thread.ID, "https://agentbox.example", true); !hasCodedError(err, "THREAD_NOT_FOUND") {
+	if _, err := svc.ManageThreadVisibility(context.Background(), outsiderAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{RegeneratePublicLink: true}); !hasCodedError(err, "THREAD_NOT_FOUND") {
 		t.Fatalf("outsider rotated public link: %v", err)
 	}
-	rotated, err := svc.CreateThreadPublicLink(context.Background(), memberAuth, thread.ID, "https://agentbox.example", true)
-	if err != nil {
-		t.Fatal(err)
+	rotated, err := svc.ManageThreadVisibility(context.Background(), memberAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{RegeneratePublicLink: true})
+	if err != nil || rotated.PublicLink == nil || rotated.PublicLink.Token == createdToken {
+		t.Fatalf("rotated visibility=%#v err=%v", rotated, err)
 	}
-	if rotated.Token == created.Token || rotated.Link.ThreadID != thread.ID {
-		t.Fatalf("rotated public link=%#v original=%#v", rotated, created)
-	}
-	if _, err := svc.GetPublicThread(context.Background(), created.Token); !hasCodedError(err, "PUBLIC_LINK_NOT_FOUND") {
+	rotatedToken := rotated.PublicLink.Token
+	if _, err := svc.GetPublicThread(context.Background(), createdToken); !hasCodedError(err, "PUBLIC_LINK_NOT_FOUND") {
 		t.Fatalf("old public token remained active: %v", err)
 	}
-	if view, err := svc.GetPublicThread(context.Background(), rotated.Token); err != nil || view == nil || view.ID != thread.ID {
+	if view, err := svc.GetPublicThread(context.Background(), rotatedToken); err != nil || view == nil || view.ID != thread.ID {
 		t.Fatalf("rotated public token view=%#v err=%v", view, err)
 	}
-	if err := svc.RevokeThreadPublicLink(context.Background(), memberAuth, thread.ID); err != nil {
-		t.Fatal(err)
+
+	unpublish := false
+	unpublished, err := svc.ManageThreadVisibility(context.Background(), memberAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{Public: &unpublish})
+	if err != nil || unpublished.Public || unpublished.PublicLink != nil {
+		t.Fatalf("unpublish=%#v err=%v", unpublished, err)
 	}
-	if _, err := svc.GetPublicThread(context.Background(), rotated.Token); !hasCodedError(err, "PUBLIC_LINK_NOT_FOUND") {
+	if _, err := svc.GetPublicThread(context.Background(), rotatedToken); !hasCodedError(err, "PUBLIC_LINK_NOT_FOUND") {
 		t.Fatalf("revoked public token remained active: %v", err)
 	}
-	if _, err := svc.PublicAssetDownloadURL(context.Background(), rotated.Token, message.Assets[0].ID); !hasCodedError(err, "PUBLIC_ASSET_NOT_FOUND") {
+	if _, err := svc.PublicAssetDownloadURL(context.Background(), rotatedToken, message.Assets[0].ID); !hasCodedError(err, "PUBLIC_ASSET_NOT_FOUND") {
 		t.Fatalf("revoked public token signed asset: %v", err)
 	}
-	if link, err := svc.GetThreadPublicLink(context.Background(), ownerAuth, thread.ID); err != nil || link != nil {
-		t.Fatalf("revoked public metadata=%#v err=%v", link, err)
-	}
-	recreated, err := svc.CreateThreadPublicLink(context.Background(), ownerAuth, thread.ID, "https://agentbox.example", false)
-	if err != nil || recreated.Token == rotated.Token {
-		t.Fatalf("recreated public link=%#v err=%v", recreated, err)
+	recreated, err := svc.ManageThreadVisibility(context.Background(), ownerAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{Public: &publish})
+	if err != nil || recreated.PublicLink == nil || recreated.PublicLink.Token == rotatedToken {
+		t.Fatalf("recreated visibility=%#v err=%v", recreated, err)
 	}
 }
 

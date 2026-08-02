@@ -16,6 +16,8 @@ type Asset = {
   download_url?: string;
   preview_url?: string;
   purged_at?: string;
+  unavailable?: boolean;
+  unavailable_reason?: string;
 };
 
 type Message = {
@@ -119,12 +121,12 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
             <header><div><strong>{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong><span>Message {index + 1}</span></div><time dateTime={message.created_at}>{formatDate(message.created_at)}</time></header>
             <MessageContent body={message.body} contentType={message.body_content_type} />
             {message.assets.length > 0 && <div className={styles.assets}>{message.assets.map((asset) => <div className={styles.asset} key={asset.id}>
-              {!asset.purged_at && asset.preview_url && <>
+              {!asset.purged_at && !asset.unavailable && asset.preview_url && <>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={asset.preview_url} alt={asset.file_name} loading="lazy" />
               </>}
               <div><strong>{asset.file_name}</strong><span>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</span></div>
-              {asset.purged_at ? <em>Attachment deleted by deployment owner</em> : asset.download_url && <a href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>}
+              {asset.purged_at ? <em>Attachment deleted by deployment owner</em> : asset.unavailable ? <em>{asset.unavailable_reason || "Attachment unavailable"}</em> : asset.download_url && <a href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>}
             </div>)}</div>}
           </article>)}
         </section>

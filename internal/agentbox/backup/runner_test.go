@@ -30,20 +30,22 @@ func TestRunnerProducesReadyManifestAndIsIdempotent(t *testing.T) {
 			Assets:         2,
 			PendingUploads: 1,
 		},
+		ThreadOwnership: []backup.ThreadOwnership{{ThreadID: "thr_2"}, {ThreadID: "thr_1"}},
 		References: []backup.ObjectReference{
-			{Kind: "asset", RecordID: "ast_1", StorageKey: "agentbox/a.bin", SizeBytes: 3},
-			{Kind: "asset", RecordID: "ast_2", StorageKey: "agentbox/b.bin", SizeBytes: 5},
+			{Kind: "asset", RecordID: "ast_1", MissingBlocks: true, StorageKey: "agentbox/a.bin", SizeBytes: 3},
+			{Kind: "asset", RecordID: "ast_2", MissingBlocks: true, StorageKey: "agentbox/b.bin", SizeBytes: 5},
 			{Kind: "pending_upload", RecordID: "upl_1", StorageKey: "agentbox/b.bin", SizeBytes: 5},
 		},
 	}}
 	dumper := &fakeDumper{contents: []byte("recoverable postgres dump")}
 	runner := backup.Runner{Snapshots: snapshotSource, Dumper: dumper, Objects: store}
 	options := backup.Options{
-		RunID:        "run-1",
-		OutputDir:    outputDir,
-		SourceBucket: "primary",
-		BackupBucket: "primary",
-		BackupPrefix: "agentbox-recovery/run-1",
+		ProposedOwnerEmail: "owner@example.com",
+		RunID:              "run-1",
+		OutputDir:          outputDir,
+		SourceBucket:       "primary",
+		BackupBucket:       "primary",
+		BackupPrefix:       "agentbox-recovery/run-1",
 		Now: func() time.Time {
 			return time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 		},
@@ -55,6 +57,9 @@ func TestRunnerProducesReadyManifestAndIsIdempotent(t *testing.T) {
 	}
 	if !manifest.Ready {
 		t.Fatalf("manifest is not ready: %#v", manifest.Issues)
+	}
+	if manifest.OwnerBackfill.ProposedOwnerEmail != "owner@example.com" || manifest.OwnerBackfill.ProposedOwnerID == "" || manifest.OwnerBackfill.ThreadCount != 2 || strings.Join(manifest.OwnerBackfill.ThreadIDs, ",") != "thr_1,thr_2" || manifest.OwnerBackfill.ThreadIDsSHA256 == "" {
+		t.Fatalf("owner backfill manifest=%#v", manifest.OwnerBackfill)
 	}
 	if manifest.Objects.ReferencedObjectCount != 2 || manifest.Objects.CopiedObjectCount != 2 {
 		t.Fatalf("unexpected object summary: %#v", manifest.Objects)
@@ -114,9 +119,9 @@ func TestRunnerReportsMissingReferencedObjectAndStillWritesDump(t *testing.T) {
 			SnapshotID: "snapshot-missing",
 			Counts:     backup.TableCounts{Threads: 1, Messages: 1, Assets: 3},
 			References: []backup.ObjectReference{
-				{Kind: "asset", RecordID: "ast_1", StorageKey: "agentbox/present-1.bin", SizeBytes: 3},
-				{Kind: "asset", RecordID: "ast_2", StorageKey: "agentbox/present-2.bin", SizeBytes: 4},
-				{Kind: "asset", RecordID: "ast_3", StorageKey: "agentbox/missing.bin", SizeBytes: 5},
+				{Kind: "asset", RecordID: "ast_1", MissingBlocks: true, StorageKey: "agentbox/present-1.bin", SizeBytes: 3},
+				{Kind: "asset", RecordID: "ast_2", MissingBlocks: true, StorageKey: "agentbox/present-2.bin", SizeBytes: 4},
+				{Kind: "asset", RecordID: "ast_3", MissingBlocks: true, StorageKey: "agentbox/missing.bin", SizeBytes: 5},
 			},
 		}},
 		Dumper:  &fakeDumper{contents: []byte("dump survives missing R2 object")},
@@ -124,11 +129,12 @@ func TestRunnerReportsMissingReferencedObjectAndStillWritesDump(t *testing.T) {
 	}
 
 	manifest, err := runner.Run(context.Background(), backup.Options{
-		RunID:        "missing",
-		OutputDir:    t.TempDir(),
-		SourceBucket: "primary",
-		BackupBucket: "recovery",
-		BackupPrefix: "run/missing",
+		ProposedOwnerEmail: "owner@example.com",
+		RunID:              "missing",
+		OutputDir:          t.TempDir(),
+		SourceBucket:       "primary",
+		BackupBucket:       "recovery",
+		BackupPrefix:       "run/missing",
 	})
 	if !errors.Is(err, backup.ErrPreflightNotReady) {
 		t.Fatalf("Run error = %v, want ErrPreflightNotReady", err)
@@ -156,11 +162,12 @@ func TestRunnerBlocksReadinessForOrphansAndDumpFailure(t *testing.T) {
 		Objects: &assets.FakeStore{},
 	}
 	manifest, err := runner.Run(context.Background(), backup.Options{
-		RunID:        "orphaned",
-		OutputDir:    t.TempDir(),
-		SourceBucket: "primary",
-		BackupBucket: "recovery",
-		BackupPrefix: "run/orphaned",
+		ProposedOwnerEmail: "owner@example.com",
+		RunID:              "orphaned",
+		OutputDir:          t.TempDir(),
+		SourceBucket:       "primary",
+		BackupBucket:       "recovery",
+		BackupPrefix:       "run/orphaned",
 	})
 	if !errors.Is(err, backup.ErrPreflightNotReady) || manifest.Ready {
 		t.Fatalf("Run = ready %v, error %v", manifest.Ready, err)
@@ -170,14 +177,49 @@ func TestRunnerBlocksReadinessForOrphansAndDumpFailure(t *testing.T) {
 	}
 }
 
+func TestRunnerTreatsUnmaterializedPendingIntentAsWarning(t *testing.T) {
+	runner := backup.Runner{
+		Snapshots: &fakeSnapshotSource{data: backup.SnapshotData{
+			SnapshotID:      "snapshot-pending",
+			ThreadOwnership: []backup.ThreadOwnership{{ThreadID: "thr_pending"}},
+			References:      []backup.ObjectReference{{Kind: "pending_upload", RecordID: "upl_pending", StorageKey: "agentbox/not-materialized.bin", SizeBytes: 4}},
+		}},
+		Dumper:  &fakeDumper{contents: []byte("dump")},
+		Objects: &assets.FakeStore{},
+	}
+	manifest, err := runner.Run(context.Background(), backup.Options{ProposedOwnerEmail: "owner@example.com", RunID: "pending", OutputDir: t.TempDir(), SourceBucket: "primary", BackupBucket: "recovery", BackupPrefix: "run/pending"})
+	if err != nil || !manifest.Ready || manifest.Objects.MissingObjectCount != 0 || manifest.Objects.UnmaterializedPendingCount != 1 || !manifestHasIssue(manifest, "pending_upload_not_materialized", "agentbox/not-materialized.bin") {
+		t.Fatalf("pending intent manifest=%#v err=%v", manifest, err)
+	}
+}
+
+func TestRunnerBlocksAmbiguousOwnerBackfill(t *testing.T) {
+	runner := backup.Runner{
+		Snapshots: &fakeSnapshotSource{data: backup.SnapshotData{
+			SnapshotID: "snapshot-owner-ambiguous",
+			ThreadOwnership: []backup.ThreadOwnership{
+				{ThreadID: "thr_unowned"},
+				{ThreadID: "thr_other", OwnerUserID: "usr_someone_else"},
+			},
+		}},
+		Dumper:  &fakeDumper{contents: []byte("dump")},
+		Objects: &assets.FakeStore{},
+	}
+	manifest, err := runner.Run(context.Background(), backup.Options{ProposedOwnerEmail: "owner@example.com", RunID: "owner-ambiguous", OutputDir: t.TempDir(), SourceBucket: "primary", BackupBucket: "recovery", BackupPrefix: "run/owner-ambiguous"})
+	if !errors.Is(err, backup.ErrPreflightNotReady) || manifest.Ready || len(manifest.OwnerBackfill.AmbiguousThreadIDs) != 1 || manifest.OwnerBackfill.AmbiguousThreadIDs[0] != "thr_other" || !manifestHasIssue(manifest, "owner_backfill_ambiguous", "") {
+		t.Fatalf("ambiguous owner manifest=%#v err=%v", manifest, err)
+	}
+}
+
 func TestRunnerRejectsBackupPrefixInsideSourceInventory(t *testing.T) {
 	_, err := (backup.Runner{}).Run(context.Background(), backup.Options{
-		RunID:        "bad-prefix",
-		OutputDir:    t.TempDir(),
-		SourceBucket: "primary",
-		SourcePrefix: "agentbox",
-		BackupBucket: "primary",
-		BackupPrefix: "agentbox/recovery",
+		ProposedOwnerEmail: "owner@example.com",
+		RunID:              "bad-prefix",
+		OutputDir:          t.TempDir(),
+		SourceBucket:       "primary",
+		SourcePrefix:       "agentbox",
+		BackupBucket:       "primary",
+		BackupPrefix:       "agentbox/recovery",
 	})
 	if err == nil || !strings.Contains(err.Error(), "outside source inventory prefix") {
 		t.Fatalf("error = %v", err)

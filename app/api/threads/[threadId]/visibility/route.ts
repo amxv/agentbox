@@ -15,11 +15,3 @@ async function proxy(request: Request, context: Context) {
 export async function GET(request: Request, context: Context) {
   return proxy(request, context);
 }
-
-export async function PUT(request: Request, context: Context) {
-  return proxy(request, context);
-}
-
-export async function PATCH(request: Request, context: Context) {
-  return proxy(request, context);
-}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +24,37 @@ import (
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/version"
 )
+
+func setThreadVisibilityForTest(ctx context.Context, repository interface {
+	ManageThreadVisibility(context.Context, string, string, types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
+}, userID string, threadID string, desiredTeamIDs []string) (types.ThreadVisibility, error) {
+	current, err := repository.ManageThreadVisibility(ctx, userID, threadID, types.ManageThreadVisibilityInput{})
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	desired := map[string]bool{}
+	for _, teamID := range desiredTeamIDs {
+		desired[teamID] = true
+	}
+	currentIDs := map[string]bool{}
+	input := types.ManageThreadVisibilityInput{}
+	for _, team := range current.SharedTeams {
+		currentIDs[team.ID] = true
+		if !desired[team.ID] {
+			input.RemoveTeams = append(input.RemoveTeams, team.ID)
+		}
+	}
+	for _, teamID := range desiredTeamIDs {
+		if !currentIDs[teamID] {
+			input.AddTeams = append(input.AddTeams, teamID)
+		}
+	}
+	state, err := repository.ManageThreadVisibility(ctx, userID, threadID, input)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return types.ThreadVisibility{ThreadID: state.ThreadID, OwnerUserID: state.OwnerUserID, SharedTeams: state.SharedTeams}, nil
+}
 
 func TestCLIGlobalVersionFlags(t *testing.T) {
 	for _, args := range [][]string{{"--version"}, {"-V"}, {"version"}} {
@@ -365,7 +397,7 @@ func TestCLIVisibilityReadsAndMutatesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.SetThreadVisibility(t.Context(), authContext.UserID, thread.ID, []string{oldTeam.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(t.Context(), repo, authContext.UserID, thread.ID, []string{oldTeam.ID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -927,5 +959,6 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	fake.PutAssetObject("agentbox/usr_seed/seed/message/seed.txt", int64(len("seed bytes")), &textType)
 	return httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "adm"}, svc))
 }

@@ -56,10 +56,10 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 	if len(data.References) != 2 {
 		t.Fatalf("references = %#v", data.References)
 	}
-	if data.References[0] != (backup.ObjectReference{Kind: "asset", RecordID: "ast_snapshot", StorageKey: "agentbox/existing.bin", SizeBytes: 12}) {
+	if data.References[0] != (backup.ObjectReference{Kind: "asset", RecordID: "ast_snapshot", StorageKey: "agentbox/existing.bin", SizeBytes: 12, MissingBlocks: true}) {
 		t.Fatalf("unexpected asset reference: %#v", data.References[0])
 	}
-	if data.References[1] != (backup.ObjectReference{Kind: "pending_upload", RecordID: "upl_snapshot", StorageKey: "agentbox/pending.bin", SizeBytes: 15}) {
+	if data.References[1] != (backup.ObjectReference{Kind: "pending_upload", RecordID: "upl_snapshot", StorageKey: "agentbox/pending.bin", SizeBytes: 15, MissingBlocks: false}) {
 		t.Fatalf("unexpected pending-upload reference: %#v", data.References[1])
 	}
 	if err := snapshot.Close(ctx); err != nil {
@@ -70,6 +70,83 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 	}
 }
 
+func TestOpenContentSnapshotRunsAgainstExactLegacy0005Schema(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.migrateThrough(ctx, "0005"); err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`insert into threads (id, tenant_id, title, created_by) values ('thr_legacy_backup', 'ten_default', 'Legacy backup', 'legacy')`,
+		`insert into messages (id, thread_id, tenant_id, author, body) values ('msg_legacy_backup', 'thr_legacy_backup', 'ten_default', 'legacy', 'body')`,
+		`insert into assets (id, message_id, tenant_id, storage_key, file_name, size_bytes, created_by) values ('ast_legacy_backup', 'msg_legacy_backup', 'ten_default', 'opaque/legacy.bin', 'legacy.bin', 7, 'legacy')`,
+		`insert into pending_uploads (id, thread_id, tenant_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_legacy_backup', 'thr_legacy_backup', 'ten_default', 'opaque/not-yet-uploaded.bin', 'pending.bin', 9, now() + interval '1 hour', 'legacy')`,
+	}
+	for _, statement := range statements {
+		if _, err := repository.pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := repository.OpenContentSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("legacy 0005 preflight snapshot failed: %v", err)
+	}
+	defer snapshot.Close(ctx)
+	data := snapshot.Data()
+	if data.Counts != (backup.TableCounts{Threads: 1, Messages: 1, Assets: 1, PendingUploads: 1}) {
+		t.Fatalf("legacy counts=%#v", data.Counts)
+	}
+	if len(data.References) != 2 || !data.References[0].MissingBlocks || data.References[1].MissingBlocks {
+		t.Fatalf("legacy references=%#v", data.References)
+	}
+	if len(data.ThreadOwnership) != 1 || data.ThreadOwnership[0].ThreadID != "thr_legacy_backup" || data.ThreadOwnership[0].OwnerUserID != "" {
+		t.Fatalf("legacy ownership proposal input=%#v", data.ThreadOwnership)
+	}
+}
+
+func TestOpenContentSnapshotExcludesExpiredConsumedAndAssetBackedPendingRows(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `insert into threads (id, owner_user_id, title, created_by) values ('thr_pending_inventory', $1, 'Pending inventory', 'test')`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `insert into messages (id, thread_id, author, body) values ('msg_pending_inventory', 'thr_pending_inventory', 'test', 'body')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_pending_inventory', 'msg_pending_inventory', 'shared/key.bin', 'shared.bin', 3, 'test')`); err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by, consumed_at) values ('upl_consumed', 'thr_pending_inventory', 'consumed/key.bin', 'consumed.bin', 1, now()+interval '1 hour', 'test', now())`,
+		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_expired', 'thr_pending_inventory', 'expired/key.bin', 'expired.bin', 1, now()-interval '1 minute', 'test')`,
+		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_asset_backed', 'thr_pending_inventory', 'shared/key.bin', 'shared.bin', 3, now()+interval '1 hour', 'test')`,
+		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_active', 'thr_pending_inventory', 'active/key.bin', 'active.bin', 2, now()+interval '1 hour', 'test')`,
+	}
+	for _, statement := range statements {
+		if _, err := repository.pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := repository.OpenContentSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close(ctx)
+	data := snapshot.Data()
+	if len(data.References) != 2 {
+		t.Fatalf("inventory should contain one asset and one active intent: %#v", data.References)
+	}
+	for _, reference := range data.References {
+		if reference.RecordID == "upl_consumed" || reference.RecordID == "upl_expired" || reference.RecordID == "upl_asset_backed" {
+			t.Fatalf("retired pending row remained in backup inventory: %#v", reference)
+		}
+	}
+}
 func TestPGDumpCreatesReadableArchiveFromExportedSnapshot(t *testing.T) {
 	pgDumpPath, err := exec.LookPath("pg_dump")
 	if err != nil {

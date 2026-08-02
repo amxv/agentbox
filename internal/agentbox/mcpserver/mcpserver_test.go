@@ -15,6 +15,37 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+func setThreadVisibilityForTest(ctx context.Context, repository interface {
+	ManageThreadVisibility(context.Context, string, string, types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
+}, userID string, threadID string, desiredTeamIDs []string) (types.ThreadVisibility, error) {
+	current, err := repository.ManageThreadVisibility(ctx, userID, threadID, types.ManageThreadVisibilityInput{})
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	desired := map[string]bool{}
+	for _, teamID := range desiredTeamIDs {
+		desired[teamID] = true
+	}
+	currentIDs := map[string]bool{}
+	input := types.ManageThreadVisibilityInput{}
+	for _, team := range current.SharedTeams {
+		currentIDs[team.ID] = true
+		if !desired[team.ID] {
+			input.RemoveTeams = append(input.RemoveTeams, team.ID)
+		}
+	}
+	for _, teamID := range desiredTeamIDs {
+		if !currentIDs[teamID] {
+			input.AddTeams = append(input.AddTeams, teamID)
+		}
+	}
+	state, err := repository.ManageThreadVisibility(ctx, userID, threadID, input)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return types.ThreadVisibility{ThreadID: state.ThreadID, OwnerUserID: state.OwnerUserID, SharedTeams: state.SharedTeams}, nil
+}
+
 func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	ctx := context.Background()
 	repo := &db.MemoryRepository{}
@@ -198,7 +229,7 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := repo.SetThreadVisibility(ctx, auth.UserID, payload.Thread.ID, []string{oldTeam.ID}); err != nil {
+	if _, err := setThreadVisibilityForTest(ctx, repo, auth.UserID, payload.Thread.ID, []string{oldTeam.ID}); err != nil {
 		t.Fatal(err)
 	}
 	managed, err := session.CallTool(ctx, &mcp.CallToolParams{

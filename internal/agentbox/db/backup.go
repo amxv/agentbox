@@ -60,31 +60,87 @@ select
 		return fail(fmt.Errorf("count orphaned content rows: %w", err))
 	}
 
-	rows, err := transaction.Query(ctx, `
-select 'asset' as kind, id, storage_key, size_bytes::bigint
+	hasPurgedAt, err := snapshotColumnExists(ctx, transaction, "assets", "purged_at")
+	if err != nil {
+		return fail(err)
+	}
+	hasOwnerUserID, err := snapshotColumnExists(ctx, transaction, "threads", "owner_user_id")
+	if err != nil {
+		return fail(err)
+	}
+
+	assetPredicate := "true"
+	if hasPurgedAt {
+		assetPredicate = "purged_at is null"
+	}
+	rows, err := transaction.Query(ctx, fmt.Sprintf(`
+select 'asset' as kind, id, storage_key, size_bytes::bigint, true as missing_blocks_readiness
 from assets
-where purged_at is null
+where %s
 union all
-select 'pending_upload' as kind, id, storage_key, size_bytes::bigint
-from pending_uploads
+select 'pending_upload' as kind, p.id, p.storage_key, p.size_bytes::bigint, false as missing_blocks_readiness
+from pending_uploads p
+where p.consumed_at is null
+  and p.expires_at > now()
+  and not exists (select 1 from assets a where a.storage_key = p.storage_key)
 order by kind, id
-`)
+`, assetPredicate))
 	if err != nil {
 		return fail(fmt.Errorf("list content object references: %w", err))
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var reference backup.ObjectReference
-		if err := rows.Scan(&reference.Kind, &reference.RecordID, &reference.StorageKey, &reference.SizeBytes); err != nil {
+		if err := rows.Scan(&reference.Kind, &reference.RecordID, &reference.StorageKey, &reference.SizeBytes, &reference.MissingBlocks); err != nil {
+			rows.Close()
 			return fail(fmt.Errorf("scan content object reference: %w", err))
 		}
 		data.References = append(data.References, reference)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return fail(fmt.Errorf("iterate content object references: %w", err))
 	}
+	rows.Close()
+
+	ownershipQuery := `select id, '' from threads order by id`
+	if hasOwnerUserID {
+		ownershipQuery = `select id, coalesce(owner_user_id, '') from threads order by id`
+	}
+	ownershipRows, err := transaction.Query(ctx, ownershipQuery)
+	if err != nil {
+		return fail(fmt.Errorf("list thread ownership for proposed owner backfill: %w", err))
+	}
+	for ownershipRows.Next() {
+		var ownership backup.ThreadOwnership
+		if err := ownershipRows.Scan(&ownership.ThreadID, &ownership.OwnerUserID); err != nil {
+			ownershipRows.Close()
+			return fail(fmt.Errorf("scan thread ownership: %w", err))
+		}
+		data.ThreadOwnership = append(data.ThreadOwnership, ownership)
+	}
+	if err := ownershipRows.Err(); err != nil {
+		ownershipRows.Close()
+		return fail(fmt.Errorf("iterate thread ownership: %w", err))
+	}
+	ownershipRows.Close()
 
 	return &contentSnapshot{transaction: transaction, data: data}, nil
+}
+
+func snapshotColumnExists(ctx context.Context, transaction pgx.Tx, tableName string, columnName string) (bool, error) {
+	var exists bool
+	if err := transaction.QueryRow(ctx, `
+select exists (
+  select 1
+  from information_schema.columns
+  where table_schema = current_schema()
+    and table_name = $1
+    and column_name = $2
+)
+`, tableName, columnName).Scan(&exists); err != nil {
+		return false, fmt.Errorf("inspect %s.%s: %w", tableName, columnName, err)
+	}
+	return exists, nil
 }
 
 func (s *contentSnapshot) Data() backup.SnapshotData {

@@ -42,6 +42,13 @@ type ThreadSummary = {
 };
 
 type TeamWithMembers = Team & { members: User[] };
+type PageInfo = {
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_cursor?: string;
+  previous_cursor?: string;
+};
 
 async function responseJSON(response: Response) {
   const data = await response.json().catch(() => ({}));
@@ -72,29 +79,32 @@ export function OwnerContentView() {
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [userID, setUserID] = useState("");
   const [teamRef, setTeamRef] = useState("");
+  const [cursor, setCursor] = useState("");
+  const [page, setPage] = useState<PageInfo>({ limit: 25, offset: 0, has_more: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const session = await fetchSession();
+      const session = await fetchSession(signal);
       if (!session?.is_owner || session.subject_type !== "user_session") {
         router.replace("/login?next=/owner/content");
         return;
       }
       setAuth(session);
-      const params = new URLSearchParams({ limit: "100" });
+      const params = new URLSearchParams({ limit: "25" });
+      if (cursor) params.set("cursor", cursor);
       if (userID) params.set("user_id", userID);
       if (teamRef) params.set("team", teamRef);
       const contentPath = submittedQuery
         ? `/api/owner/content/search?${new URLSearchParams({ ...Object.fromEntries(params), query: submittedQuery }).toString()}`
         : `/api/owner/content/threads?${params.toString()}`;
       const [contentResponse, usersResponse, teamsResponse] = await Promise.all([
-        fetch(contentPath, { cache: "no-store" }),
-        fetch("/api/owner/users", { cache: "no-store" }),
-        fetch("/api/owner/teams", { cache: "no-store" })
+        fetch(contentPath, { cache: "no-store", signal }),
+        fetch("/api/owner/users?limit=100", { cache: "no-store", signal }),
+        fetch("/api/owner/teams?limit=100", { cache: "no-store", signal })
       ]);
       if ([contentResponse, usersResponse, teamsResponse].some((response) => response.status === 401 || response.status === 403)) {
         router.replace("/login?next=/owner/content");
@@ -106,18 +116,24 @@ export function OwnerContentView() {
         responseJSON(teamsResponse)
       ]);
       setThreads(contentData.threads ?? []);
+      setPage(contentData.page ?? { limit: 25, offset: 0, has_more: false });
       setUsers(usersData.users ?? []);
       setTeams(teamsData.teams ?? []);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, [router, submittedQuery, teamRef, userID]);
+  }, [cursor, router, submittedQuery, teamRef, userID]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timer);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void load(controller.signal); }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [load]);
 
   const selectedUser = useMemo(() => users.find((user) => user.id === userID), [userID, users]);
@@ -125,7 +141,18 @@ export function OwnerContentView() {
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
+    setCursor("");
     setSubmittedQuery(query.trim());
+  }
+
+  function changeUser(value: string) {
+    setCursor("");
+    setUserID(value);
+  }
+
+  function changeTeam(value: string) {
+    setCursor("");
+    setTeamRef(value);
   }
 
   return (
@@ -158,18 +185,18 @@ export function OwnerContentView() {
           <form onSubmit={submitSearch} className={styles.search}>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles and message bodies" aria-label="Search all content" />
             <button type="submit">Search</button>
-            {submittedQuery && <button type="button" className={styles.ghost} onClick={() => { setQuery(""); setSubmittedQuery(""); }}>Clear</button>}
+            {submittedQuery && <button type="button" className={styles.ghost} onClick={() => { setCursor(""); setQuery(""); setSubmittedQuery(""); }}>Clear</button>}
           </form>
           <label>
             <span>User</span>
-            <select value={userID} onChange={(event) => setUserID(event.target.value)}>
+            <select value={userID} onChange={(event) => changeUser(event.target.value)}>
               <option value="">All users</option>
               {users.map((user) => <option value={user.id} key={user.id}>{user.display_name}{user.disabled_at ? " · disabled" : ""}</option>)}
             </select>
           </label>
           <label>
             <span>Team share</span>
-            <select value={teamRef} onChange={(event) => setTeamRef(event.target.value)}>
+            <select value={teamRef} onChange={(event) => changeTeam(event.target.value)}>
               <option value="">All teams</option>
               {teams.map((team) => <option value={team.id} key={team.id}>{team.name}</option>)}
             </select>
@@ -206,6 +233,11 @@ export function OwnerContentView() {
             </Link>
           ))}
         </section>}
+        {!loading && !error && (page.previous_cursor !== undefined || page.next_cursor !== undefined) && <div className={styles.pager}>
+          <button type="button" disabled={page.previous_cursor === undefined} onClick={() => setCursor(page.previous_cursor ?? "")}>Newer</button>
+          <span>Showing {page.offset + 1}–{page.offset + threads.length}</span>
+          <button type="button" disabled={page.next_cursor === undefined} onClick={() => setCursor(page.next_cursor ?? "")}>Older</button>
+        </div>}
       </section>
     </main>
   );
