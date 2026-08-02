@@ -1605,7 +1605,7 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/public/"+created.Token || created.Link.TokenHash != "" {
+	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.Token || created.Link.TokenHash != "" {
 		t.Fatalf("created public HTTP payload=%#v body=%s", created, createdResponse.Body.String())
 	}
 	duplicate := request(http.MethodPost, "/api/threads/"+thread.ID+"/public-link", memberKey.Key, `{"rotate":false}`)

@@ -212,6 +212,112 @@ func (s *Service) SetThreadVisibility(ctx context.Context, auth types.AuthContex
 	return visibility, nil
 }
 
+type ThreadPublicLinkResult struct {
+	Link      types.ThreadPublicLink `json:"link"`
+	Token     string                 `json:"token"`
+	PublicURL string                 `json:"public_url"`
+}
+
+func (s *Service) GetThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadPublicLink, error) {
+	if err := requireScope(auth, "threads:read"); err != nil {
+		return nil, err
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
+	}
+	access, err := s.repo.ResolveThreadAccess(ctx, auth.UserID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if access == nil {
+		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	return s.repo.GetThreadPublicLink(ctx, auth.UserID, threadID)
+}
+
+func (s *Service) CreateThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string, baseURL string, rotate bool) (ThreadPublicLinkResult, error) {
+	if err := requireScope(auth, "threads:write"); err != nil {
+		return ThreadPublicLinkResult{}, err
+	}
+	threadID = strings.TrimSpace(threadID)
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if threadID == "" || baseURL == "" {
+		return ThreadPublicLinkResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id and deployment base URL are required."}
+	}
+	token, err := generatePublicToken()
+	if err != nil {
+		return ThreadPublicLinkResult{}, err
+	}
+	link, err := s.repo.CreateThreadPublicLink(ctx, auth.UserID, threadID, hashSecret(token), tokenPrefix(token), rotate)
+	if errors.Is(err, types.ErrThreadNotFound) {
+		return ThreadPublicLinkResult{}, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	if errors.Is(err, types.ErrThreadPublicLinkExists) {
+		return ThreadPublicLinkResult{}, CodedError{Code: "PUBLIC_LINK_EXISTS", Message: "A public link is already active. Rotate it explicitly to replace the URL.", Err: err}
+	}
+	if err != nil {
+		return ThreadPublicLinkResult{}, err
+	}
+	return ThreadPublicLinkResult{
+		Link:      link,
+		Token:     token,
+		PublicURL: baseURL + "/share/" + url.PathEscape(token),
+	}, nil
+}
+
+func (s *Service) RevokeThreadPublicLink(ctx context.Context, auth types.AuthContext, threadID string) error {
+	if err := requireScope(auth, "threads:write"); err != nil {
+		return err
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "thread_id is required."}
+	}
+	_, err := s.repo.RevokeThreadPublicLink(ctx, auth.UserID, threadID)
+	if errors.Is(err, types.ErrThreadNotFound) {
+		return CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
+	}
+	return err
+}
+
+func (s *Service) GetPublicThread(ctx context.Context, token string) (*types.PublicThreadView, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, CodedError{Code: "PUBLIC_LINK_NOT_FOUND", Message: "Shared thread not found."}
+	}
+	thread, err := s.repo.GetThreadByPublicTokenHash(ctx, hashSecret(token))
+	if err != nil {
+		return nil, err
+	}
+	if thread == nil {
+		return nil, CodedError{Code: "PUBLIC_LINK_NOT_FOUND", Message: "Shared thread not found."}
+	}
+	view := sanitizePublicThread(token, *thread)
+	return &view, nil
+}
+
+func (s *Service) PublicAssetDownloadURL(ctx context.Context, token string, assetID string) (string, error) {
+	token = strings.TrimSpace(token)
+	assetID = strings.TrimSpace(assetID)
+	if token == "" || assetID == "" {
+		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
+	}
+	asset, err := s.repo.GetAssetByPublicTokenHash(ctx, hashSecret(token), assetID)
+	if err != nil {
+		return "", err
+	}
+	if asset == nil {
+		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
+	}
+	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
+		StorageKey:       asset.StorageKey,
+		FileName:         asset.FileName,
+		MimeType:         asset.MimeType,
+		ExpiresInSeconds: 300,
+	})
+}
+
 func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID string) (*types.Asset, error) {
 	if err := requireScope(auth, "assets:read"); err != nil {
 		return nil, err

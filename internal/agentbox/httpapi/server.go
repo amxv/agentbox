@@ -68,6 +68,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/onboarding/connectors/", s.onboardingConnector)
 	s.mux.HandleFunc("/api/threads", s.threads)
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
+	s.mux.HandleFunc("/api/public/threads/", s.publicThreadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
 	s.mux.HandleFunc("/api/viewer/threads", s.viewerThreads)
 	s.mux.HandleFunc("/api/viewer/threads/", s.viewerThread)
@@ -798,6 +799,124 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.createUploadIntents(w, r, threadID)
 		return
 	}
+	if tail == "visibility" {
+		s.threadVisibility(w, r, threadID)
+		return
+	}
+	if tail == "public-link" {
+		s.threadPublicLink(w, r, threadID)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) threadVisibility(w http.ResponseWriter, r *http.Request, threadID string) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		visibility, err := s.service.GetThreadVisibility(r.Context(), *authContext, threadID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
+	case http.MethodPut:
+		var input struct {
+			TeamIDs []string `json:"team_ids"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		visibility, err := s.service.SetThreadVisibility(r.Context(), *authContext, threadID, input.TeamIDs)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) threadPublicLink(w http.ResponseWriter, r *http.Request, threadID string) {
+	w.Header().Set("Cache-Control", "no-store")
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		link, err := s.service.GetThreadPublicLink(r.Context(), *authContext, threadID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"link": link})
+	case http.MethodPost:
+		var input struct {
+			Rotate bool `json:"rotate"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			if err := parseJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		result, err := s.service.CreateThreadPublicLink(r.Context(), *authContext, threadID, s.requestBaseURL(r), input.Rotate)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		link := result.Link
+		link.TokenHash = ""
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"link":       link,
+			"token":      result.Token,
+			"public_url": result.PublicURL,
+		})
+	case http.MethodDelete:
+		if err := s.service.RevokeThreadPublicLink(r.Context(), *authContext, threadID); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": threadID})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) publicThreadSubroutes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/public/threads/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 1 && parts[0] != "" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		thread, err := s.service.GetPublicThread(r.Context(), parts[0])
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
+		return
+	}
+	if len(parts) == 4 && parts[0] != "" && parts[1] == "assets" && parts[2] != "" && parts[3] == "download" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		downloadURL, err := s.service.PublicAssetDownloadURL(r.Context(), parts[0], parts[2])
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"download_url": downloadURL})
+		return
+	}
 	http.NotFound(w, r)
 }
 
@@ -859,6 +978,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 		BodyContentType *string                        `json:"body_content_type"`
 		File            *types.ChatGPTFileReference    `json:"file"`
 		UploadedAssets  []types.UploadedAssetReference `json:"uploaded_assets"`
+		UploadIDs       []string                       `json:"upload_ids"`
 	}
 	if err := parseJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -880,6 +1000,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 			MimeType:    input.File.MimeType,
 			FileName:    input.File.FileName,
 		}
+	}
+	for _, uploadID := range input.UploadIDs {
+		input.UploadedAssets = append(input.UploadedAssets, types.UploadedAssetReference{UploadID: uploadID})
 	}
 	message, err := s.service.PostMessage(r.Context(), *authContext, service.PostMessageParams{
 		ThreadID:        threadID,
@@ -955,7 +1078,7 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, au
 func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/assets/")
 	assetID, tail, ok := splitFirst(rest)
-	if !ok || tail != "download-url" {
+	if !ok || (tail != "download-url" && tail != "download") {
 		http.NotFound(w, r)
 		return
 	}
@@ -1233,11 +1356,11 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		code = coded.Code
 		message = coded.Message
 		switch coded.Code {
-		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND":
+		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND", "PUBLIC_LINK_NOT_FOUND", "PUBLIC_ASSET_NOT_FOUND":
 			status = http.StatusNotFound
 		case "PERMISSION_DENIED", "BROWSER_SESSION_REQUIRED", "OWNER_BROWSER_REQUIRED":
 			status = http.StatusForbidden
-		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS":
+		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS":
 			status = http.StatusConflict
 		case "TEAM_SLUG_CONFLICT":
 			status = http.StatusConflict

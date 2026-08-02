@@ -1809,6 +1809,8 @@ pre,
 
 .composer-toggle-row {
   display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
   justify-content: flex-start;
   margin-bottom: 0.75rem;
 }

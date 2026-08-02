@@ -679,7 +679,7 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/public/"+created.Token || created.Link.TokenHash == "" || created.Link.TokenHash == created.Token {
+	if !strings.HasPrefix(created.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.Token || created.Link.TokenHash == "" || created.Link.TokenHash == created.Token {
 		t.Fatalf("created public link=%#v", created)
 	}
 	if _, err := svc.CreateThreadPublicLink(context.Background(), memberAuth, thread.ID, "https://agentbox.example", false); !hasCodedError(err, "PUBLIC_LINK_EXISTS") {

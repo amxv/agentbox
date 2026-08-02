@@ -9,6 +9,7 @@ import { MessageComposer } from "../../components/message-composer";
 import { postDashboardMessage } from "../../components/agentbox-write";
 import { AuthContext, fetchSession, signOutSession } from "../../components/session";
 import { ThemeSwitcher } from "../../components/theme-switcher";
+import { ThreadVisibilityControl } from "./thread-visibility-control";
 
 type Asset = {
   id: string;
@@ -175,6 +176,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           <button className="button button--solid" type="button" onClick={() => setShowReplyComposer((value) => !value)}>
             {showReplyComposer ? "Close" : "+ Reply"}
           </button>
+          {thread && <ThreadVisibilityControl threadId={thread.id} />}
         </div>
 
         {showReplyComposer && (
