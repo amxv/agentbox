@@ -22,14 +22,11 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
 		Users: []types.User{{
 			ID:           "usr_owner",
-			TenantID:     types.DefaultTenantID,
 			Email:        "owner@example.com",
 			DisplayName:  "Owner Person",
 			PasswordHash: &passwordHash,
-			Role:         "admin",
 			IsOwner:      true,
 		}},
 	}
@@ -42,10 +39,6 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 	if sessionAuth.UserID != "usr_owner" || sessionAuth.UserDisplayName != "Owner Person" || !sessionAuth.IsOwner || sessionAuth.ActorID == "" || sessionAuth.ActorID != sessionAuth.SessionID {
 		t.Fatalf("unexpected browser auth context: %#v", sessionAuth)
 	}
-	if sessionAuth.TenantID != types.DefaultTenantID {
-		t.Fatalf("tenant selector changed account choice: %#v", sessionAuth)
-	}
-
 	credential, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), sessionAuth, "ChatGPT", "chatgpt", []string{"threads:read", "threads:write"})
 	if err != nil {
 		t.Fatal(err)
@@ -124,9 +117,7 @@ func TestSessionAndCredentialResolveSameUserWithDistinctActors(t *testing.T) {
 }
 
 func TestOwnerSetupTokensBootstrapRecoverRevokeAndRejectReplay(t *testing.T) {
-	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
-	}
+	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
 
 	first, err := svc.IssueOwnerSetupToken(context.Background(), 5*time.Minute)
@@ -196,14 +187,11 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
 		Users: []types.User{{
 			ID:           "usr_owner",
-			TenantID:     types.DefaultTenantID,
 			Email:        "owner@example.com",
 			DisplayName:  "Owner",
 			PasswordHash: &ownerPasswordHash,
-			Role:         "admin",
 			IsOwner:      true,
 		}},
 	}
@@ -244,7 +232,7 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if member.ID == "" || member.IsOwner || member.Role != "member" || memberAuth.UserID != member.ID || memberSessionSecret == "" {
+	if member.ID == "" || member.IsOwner || memberAuth.UserID != member.ID || memberSessionSecret == "" {
 		t.Fatalf("unexpected registration: auth=%#v user=%#v", memberAuth, member)
 	}
 	memberTeams, err := svc.ListMyTeams(context.Background(), memberAuth)
@@ -454,7 +442,7 @@ func TestUnifiedThreadFiltersAndVisibilitySummaries(t *testing.T) {
 	member := types.AuthContext{UserID: "usr_filter_member", UserDisplayName: "Filter Member", ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
 	outsider := types.AuthContext{UserID: "usr_filter_outsider", UserDisplayName: "Filter Outsider", ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
 	for _, authContext := range []types.AuthContext{owner, member, outsider} {
-		repo.Users = append(repo.Users, types.User{ID: authContext.UserID, TenantID: types.DefaultTenantID, Email: authContext.UserID + "@example.com", DisplayName: authContext.UserDisplayName, Role: "member"})
+		repo.Users = append(repo.Users, types.User{ID: authContext.UserID, Email: authContext.UserID + "@example.com", DisplayName: authContext.UserDisplayName})
 	}
 	engineering, err := repo.CreateTeam(context.Background(), "engineering", "Engineering")
 	if err != nil {
@@ -570,9 +558,9 @@ func TestUnifiedThreadFiltersAndVisibilitySummaries(t *testing.T) {
 func TestOwnerCredentialAdministrationAndDisablementPreserveSharedContent(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
-	owner := types.User{ID: "usr_phase11_owner", TenantID: types.DefaultTenantID, Email: "owner-phase11@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
-	member := types.User{ID: "usr_phase11_member", TenantID: types.DefaultTenantID, Email: "member-phase11@example.com", DisplayName: "Member", Role: "member"}
-	teammate := types.User{ID: "usr_phase11_teammate", TenantID: types.DefaultTenantID, Email: "teammate-phase11@example.com", DisplayName: "Teammate", Role: "member"}
+	owner := types.User{ID: "usr_phase11_owner", Email: "owner-phase11@example.com", DisplayName: "Owner", IsOwner: true}
+	member := types.User{ID: "usr_phase11_member", Email: "member-phase11@example.com", DisplayName: "Member"}
+	teammate := types.User{ID: "usr_phase11_teammate", Email: "teammate-phase11@example.com", DisplayName: "Teammate"}
 	repo.Users = append(repo.Users, owner, member, teammate)
 	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_phase11_owner", ActorName: "Web dashboard", IsOwner: true}
 	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_phase11_member", ActorName: "Web dashboard"}
@@ -677,9 +665,9 @@ func TestOwnerAttachmentPurgeIsUploaderScopedResumableAndTombstoned(t *testing.T
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{DeleteFailures: map[string]error{}}
 	svc := New(repo, store)
-	owner := types.User{ID: "usr_purge_owner", TenantID: types.DefaultTenantID, Email: "purge-owner@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
-	target := types.User{ID: "usr_purge_target", TenantID: types.DefaultTenantID, Email: "purge-target@example.com", DisplayName: "Target", Role: "member"}
-	other := types.User{ID: "usr_purge_other", TenantID: types.DefaultTenantID, Email: "purge-other@example.com", DisplayName: "Other", Role: "member"}
+	owner := types.User{ID: "usr_purge_owner", Email: "purge-owner@example.com", DisplayName: "Owner", IsOwner: true}
+	target := types.User{ID: "usr_purge_target", Email: "purge-target@example.com", DisplayName: "Target"}
+	other := types.User{ID: "usr_purge_other", Email: "purge-other@example.com", DisplayName: "Other"}
 	repo.Users = append(repo.Users, owner, target, other)
 	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_purge_owner", ActorName: "Web dashboard", IsOwner: true}
 	targetAuth := types.AuthContext{UserID: target.ID, UserDisplayName: target.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_purge_target", ActorName: "Web dashboard"}
@@ -810,9 +798,9 @@ func TestOwnerContentContextIsBrowserOnlyAndDoesNotBypassNormalAccess(t *testing
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}
 	svc := New(repo, store)
-	owner := types.User{ID: "usr_owner_content_owner", TenantID: types.DefaultTenantID, Email: "owner-content@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
-	member := types.User{ID: "usr_owner_content_member", TenantID: types.DefaultTenantID, Email: "member-content@example.com", DisplayName: "Member", Role: "member"}
-	other := types.User{ID: "usr_owner_content_other", TenantID: types.DefaultTenantID, Email: "other-content@example.com", DisplayName: "Other", Role: "member"}
+	owner := types.User{ID: "usr_owner_content_owner", Email: "owner-content@example.com", DisplayName: "Owner", IsOwner: true}
+	member := types.User{ID: "usr_owner_content_member", Email: "member-content@example.com", DisplayName: "Member"}
+	other := types.User{ID: "usr_owner_content_other", Email: "other-content@example.com", DisplayName: "Other"}
 	repo.Users = append(repo.Users, owner, member, other)
 	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_owner_content", ActorName: "Web dashboard", IsOwner: true}
 	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_member_content", ActorName: "Web dashboard"}
@@ -903,15 +891,15 @@ func TestOwnerContentContextIsBrowserOnlyAndDoesNotBypassNormalAccess(t *testing
 func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
-	tenantA := testAuth(types.DefaultTenantID, "shared")
+	tenantA := testAuth("global", "shared")
 	tenantA.UserID = "usr_a"
 	tenantA.UserDisplayName = "User A"
-	tenantB := testAuth(types.DefaultTenantID, "shared")
+	tenantB := testAuth("global", "shared")
 	tenantB.UserID = "usr_b"
 	tenantB.UserDisplayName = "User B"
 	repo.Users = append(repo.Users,
-		types.User{ID: tenantA.UserID, TenantID: types.DefaultTenantID, Email: "a@example.com", DisplayName: "User A", Role: "member"},
-		types.User{ID: tenantB.UserID, TenantID: types.DefaultTenantID, Email: "b@example.com", DisplayName: "User B", Role: "member"},
+		types.User{ID: tenantA.UserID, Email: "a@example.com", DisplayName: "User A"},
+		types.User{ID: tenantB.UserID, Email: "b@example.com", DisplayName: "User B"},
 	)
 
 	keyA, err := svc.CreateAPIKey(context.Background(), tenantA, "shared")
@@ -985,10 +973,8 @@ func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T)
 	svc := New(repo, &assets.FakeStore{})
 	user := types.User{
 		ID:          "usr_onboarding",
-		TenantID:    types.DefaultTenantID,
 		Email:       "onboarding@example.com",
 		DisplayName: "Onboarding User",
-		Role:        "member",
 		CreatedAt:   "2026-08-02T00:00:00.000Z",
 		UpdatedAt:   "2026-08-02T00:00:00.000Z",
 	}
@@ -1108,9 +1094,9 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}
 	svc := New(repo, store)
-	owner := types.User{ID: "usr_public_owner", TenantID: types.DefaultTenantID, Email: "public-owner@example.com", DisplayName: "Public Owner", Role: "member"}
-	member := types.User{ID: "usr_public_member", TenantID: types.DefaultTenantID, Email: "public-member@example.com", DisplayName: "Public Member", Role: "member"}
-	outsider := types.User{ID: "usr_public_outsider", TenantID: types.DefaultTenantID, Email: "public-outsider@example.com", DisplayName: "Public Outsider", Role: "member"}
+	owner := types.User{ID: "usr_public_owner", Email: "public-owner@example.com", DisplayName: "Public Owner"}
+	member := types.User{ID: "usr_public_member", Email: "public-member@example.com", DisplayName: "Public Member"}
+	outsider := types.User{ID: "usr_public_outsider", Email: "public-outsider@example.com", DisplayName: "Public Outsider"}
 	repo.Users = append(repo.Users, owner, member, outsider)
 	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_public_owner", ActorName: "Web dashboard", Scopes: defaultAPIKeyScopes()}
 	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectAPIKey, KeyID: "key_public_member", ActorName: "Member agent", Scopes: defaultAPIKeyScopes()}
@@ -1243,8 +1229,8 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})
-	adminAuth := types.AuthContext{TenantID: "ten_a", UserID: "usr_admin", SubjectType: types.AuthSubjectUserSession, ActorName: "admin", Role: "admin"}
-	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, TenantID: "ten_a", Email: "admin@example.com", DisplayName: "Admin", Role: "admin"})
+	adminAuth := types.AuthContext{UserID: "usr_admin", SubjectType: types.AuthSubjectUserSession, ActorName: "admin"}
+	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, Email: "admin@example.com", DisplayName: "Admin"})
 	thread, err := svc.CreateThread(context.Background(), adminAuth, "Scoped")
 	if err != nil {
 		t.Fatal(err)
@@ -1323,19 +1309,11 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	}
 }
 
-func testAuth(tenantID string, actorName string) types.AuthContext {
+func testAuth(userRef string, actorName string) types.AuthContext {
 	return types.AuthContext{
-		TenantID:    tenantID,
-		UserID:      "usr_" + tenantID,
+		UserID:      "usr_" + userRef,
 		SubjectType: types.AuthSubjectAPIKey,
 		ActorName:   actorName,
-		KeyID:       "key_" + tenantID,
-	}
-}
-
-func TestLegacyTenantProvisioningIsDisabled(t *testing.T) {
-	svc := New(&db.MemoryRepository{}, &assets.FakeStore{})
-	if _, err := svc.ProvisionTenant(context.Background(), ProvisionTenantParams{}); !hasCodedError(err, "LEGACY_TENANT_PROVISIONING_DISABLED") {
-		t.Fatalf("legacy tenant provisioning error=%v", err)
+		KeyID:       "key_" + userRef,
 	}
 }

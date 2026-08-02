@@ -22,7 +22,6 @@ type Config struct {
 	R2AccessKeyID       string
 	R2SecretAccessKey   string
 	R2Bucket            string
-	R2PublicBaseURL     string
 	MaxFileSizeBytes    int64
 	MultipartLimitBytes int64
 	Environment         string
@@ -46,7 +45,6 @@ func LoadFromEnv() Config {
 		R2AccessKeyID:       os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretAccessKey:   os.Getenv("R2_SECRET_ACCESS_KEY"),
 		R2Bucket:            os.Getenv("R2_BUCKET"),
-		R2PublicBaseURL:     strings.TrimRight(os.Getenv("R2_PUBLIC_BASE_URL"), "/"),
 		MaxFileSizeBytes:    maxFileSize,
 		MultipartLimitBytes: multipartLimit(maxFileSize),
 		Environment:         firstNonEmpty(os.Getenv("AGENTBOX_ENV"), os.Getenv("NODE_ENV")),

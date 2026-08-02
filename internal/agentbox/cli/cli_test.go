@@ -331,14 +331,12 @@ func TestCLIVisibilityReadsAndMutatesAtomically(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	repo := &db.MemoryRepository{}
 	authContext := types.AuthContext{
-		TenantID:        types.DefaultTenantID,
 		UserID:          "usr_visibility_cli",
 		UserDisplayName: "Visibility CLI",
 		SubjectType:     types.AuthSubjectUserSession,
 		ActorName:       "Web dashboard",
-		Role:            "member",
 	}
-	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, TenantID: types.DefaultTenantID, Email: "visibility-cli@example.com", DisplayName: authContext.UserDisplayName, Role: "member"})
+	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, Email: "visibility-cli@example.com", DisplayName: authContext.UserDisplayName})
 	svc := service.New(repo, &assets.FakeStore{})
 	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use"}); err != nil {
 		t.Fatal(err)
@@ -750,9 +748,7 @@ func TestCLIAdminKeyManagementIsDisabled(t *testing.T) {
 }
 
 func TestCLIOwnerSetupTokenPrintsBrowserLinkWithoutDeploymentSecret(t *testing.T) {
-	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
-	}
+	repo := &db.MemoryRepository{}
 	server := httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "deployment-secret"}, service.New(repo, &assets.FakeStore{})))
 	t.Cleanup(server.Close)
 
@@ -849,17 +845,14 @@ func TestCLILoginSavesUserProfile(t *testing.T) {
 	}
 	user := types.User{
 		ID:           "usr_acme",
-		TenantID:     types.DefaultTenantID,
 		Email:        "admin@example.com",
 		DisplayName:  "Acme Admin",
 		PasswordHash: &passwordHash,
-		Role:         "member",
 	}
 	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
-		Users:   []types.User{user},
+		Users: []types.User{user},
 	}
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	svc := service.New(repo, &assets.FakeStore{})
 	apiServer := httpapi.NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -867,13 +860,11 @@ func TestCLILoginSavesUserProfile(t *testing.T) {
 			state := req.URL.Query().Get("state")
 			redirectURI := req.URL.Query().Get("redirect_uri")
 			result, err := svc.AuthorizeCLILogin(req.Context(), types.AuthContext{
-				TenantID:    types.DefaultTenantID,
 				UserID:      user.ID,
 				SubjectType: types.AuthSubjectUserSession,
 				ActorID:     "sess_browser",
 				ActorName:   "Web dashboard",
 				SessionID:   "sess_browser",
-				Role:        user.Role,
 			}, state, redirectURI)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -943,15 +934,15 @@ func TestShouldReadStdinForPipe(t *testing.T) {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := &db.MemoryRepository{}
-	authContext := types.AuthContext{TenantID: types.DefaultTenantID, UserID: "usr_seed", SubjectType: types.AuthSubjectUserSession, ActorName: "seed", Role: "admin"}
-	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, TenantID: types.DefaultTenantID, Email: "seed@example.com", DisplayName: "Seed", Role: "admin"})
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	authContext := types.AuthContext{UserID: "usr_seed", SubjectType: types.AuthSubjectUserSession, ActorName: "seed"}
+	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, Email: "seed@example.com", DisplayName: "Seed"})
+	svc := service.New(repo, &assets.FakeStore{})
 	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use", "keys:read", "keys:write"}); err != nil {
 		t.Fatal(err)
 	}
 	repo.APIKeys[0].Key = "dev-key"
 	repo.APIKeys[0].TokenHash = dbHashForTest("dev-key")
-	fake := &assets.FakeStore{PublicBaseURL: "https://assets.example.com"}
+	fake := &assets.FakeStore{}
 	svc = service.New(repo, fake)
 	thread, err := svc.CreateThread(t.Context(), authContext, "Seed")
 	if err != nil {

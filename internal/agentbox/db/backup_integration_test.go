@@ -20,7 +20,7 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.pool.Exec(ctx, `insert into threads (id, tenant_id, owner_user_id, title, created_by) values ('thr_snapshot', 'ten_default', $1, 'Snapshot', 'test')`, owner.ID); err != nil {
+	if _, err := repository.pool.Exec(ctx, `insert into threads (id, owner_user_id, title, created_by) values ('thr_snapshot', $1, 'Snapshot', 'test')`, owner.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -28,10 +28,10 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{sql: `insert into messages (id, tenant_id, thread_id, author, body) values ('msg_snapshot', 'ten_default', 'thr_snapshot', 'test', 'body')`},
-		{sql: `insert into assets (id, tenant_id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'ten_default', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`},
-		{sql: `insert into assets (id, tenant_id, message_id, storage_key, file_name, size_bytes, created_by, created_by_user_id, purged_at, purged_by_user_id) values ('ast_snapshot_purged', 'ten_default', 'msg_snapshot', 'agentbox/deleted.bin', 'deleted.bin', 9, 'test', $1, now(), $1)`, args: []any{owner.ID}},
-		{sql: `insert into pending_uploads (id, tenant_id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'ten_default', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`},
+		{sql: `insert into messages (id, thread_id, author, body) values ('msg_snapshot', 'thr_snapshot', 'test', 'body')`},
+		{sql: `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`},
+		{sql: `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by, created_by_user_id, purged_at, purged_by_user_id) values ('ast_snapshot_purged', 'msg_snapshot', 'agentbox/deleted.bin', 'deleted.bin', 9, 'test', $1, now(), $1)`, args: []any{owner.ID}},
+		{sql: `insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`},
 	}
 	for _, statement := range statements {
 		if _, err := repository.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -88,7 +88,7 @@ func TestPGDumpCreatesReadableArchiveFromExportedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.pool.Exec(ctx, `insert into threads (id, tenant_id, owner_user_id, title, created_by) values ('thr_dump', 'ten_default', $1, 'Dump fixture', 'test')`, owner.ID); err != nil {
+	if _, err := repository.pool.Exec(ctx, `insert into threads (id, owner_user_id, title, created_by) values ('thr_dump', $1, 'Dump fixture', 'test')`, owner.ID); err != nil {
 		t.Fatal(err)
 	}
 

@@ -17,7 +17,6 @@ type MemoryRepository struct {
 	Assets            []types.Asset
 	Pending           []types.PendingUpload
 	APIKeys           []types.APIKey
-	Tenants           []types.Tenant
 	Users             []types.User
 	Sessions          []types.UserSession
 	CLICodes          []types.CLILoginCode
@@ -390,7 +389,6 @@ func (m *MemoryRepository) GetThreadByPublicTokenHash(_ context.Context, tokenHa
 			for _, asset := range m.Assets {
 				if asset.MessageID == message.ID {
 					copyAsset := asset
-					copyAsset.PublicURL = nil
 					copyMessage.Assets = append(copyMessage.Assets, copyAsset)
 				}
 			}
@@ -436,7 +434,6 @@ func (m *MemoryRepository) GetAssetByPublicTokenHash(_ context.Context, tokenHas
 			return nil, nil
 		}
 		copyAsset := asset
-		copyAsset.PublicURL = nil
 		return &copyAsset, nil
 	}
 	return nil, nil
@@ -541,7 +538,6 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 		}
 		results = append(results, types.SearchThreadResult{
 			ID:                       thread.ID,
-			TenantID:                 firstNonEmptyString(thread.TenantID, types.DefaultTenantID),
 			OwnerUserID:              thread.OwnerUserID,
 			Title:                    thread.Title,
 			CreatedAt:                thread.CreatedAt,
@@ -664,7 +660,6 @@ func (m *MemoryRepository) GetOwnerContentThread(_ context.Context, ownerUserID 
 			for _, asset := range m.Assets {
 				if asset.MessageID == message.ID {
 					copyAsset := asset
-					copyAsset.PublicURL = nil
 					copyAsset.DownloadURL = nil
 					assets = append(assets, copyAsset)
 				}
@@ -694,7 +689,6 @@ func (m *MemoryRepository) GetOwnerContentAsset(_ context.Context, assetID strin
 	for _, asset := range m.Assets {
 		if asset.ID == strings.TrimSpace(assetID) {
 			copyAsset := asset
-			copyAsset.PublicURL = nil
 			copyAsset.DownloadURL = nil
 			return &copyAsset, nil
 		}
@@ -706,7 +700,6 @@ func (m *MemoryRepository) CreateThread(_ context.Context, userID string, title 
 	now := isoMillis(time.Now())
 	thread := types.Thread{
 		ID:                       "thr_" + uuid.NewString(),
-		TenantID:                 types.DefaultTenantID,
 		OwnerUserID:              userID,
 		Title:                    title,
 		CreatedAt:                now,
@@ -726,7 +719,6 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, userID str
 	now := isoMillis(time.Now())
 	thread := types.Thread{
 		ID:                       "thr_" + uuid.NewString(),
-		TenantID:                 types.DefaultTenantID,
 		OwnerUserID:              userID,
 		Title:                    title,
 		CreatedAt:                now,
@@ -740,7 +732,6 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, userID str
 	}
 	message := types.Message{
 		ID:                       "msg_" + uuid.NewString(),
-		TenantID:                 thread.TenantID,
 		ThreadID:                 thread.ID,
 		Author:                   auth.ActorName,
 		Body:                     body,
@@ -771,7 +762,6 @@ func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID 
 			for _, asset := range m.Assets {
 				if asset.MessageID == message.ID {
 					copy := asset
-					copy.PublicURL = nil
 					copy.DownloadURL = nil
 					assets = append(assets, copy)
 				}
@@ -855,7 +845,6 @@ func (m *MemoryRepository) GetAsset(_ context.Context, userID string, assetID st
 			for _, thread := range m.Threads {
 				if thread.ID == message.ThreadID && m.normalThreadAccess(thread, userID) != nil {
 					copy := asset
-					copy.PublicURL = nil
 					copy.DownloadURL = nil
 					return &copy, nil
 				}
@@ -900,7 +889,6 @@ func (m *MemoryRepository) MarkAssetPurged(_ context.Context, assetID string, ow
 		}
 		asset.PurgeLastAttemptAt = &now
 		asset.PurgeError = nil
-		asset.PublicURL = nil
 		return true, nil
 	}
 	return false, nil
@@ -935,10 +923,6 @@ func (m *MemoryRepository) CreatePendingUpload(_ context.Context, userID string,
 		return types.PendingUpload{}, types.ErrThreadNotFound
 	}
 	now := isoMillis(time.Now())
-	if upload.TenantID == "" {
-		upload.TenantID = types.DefaultTenantID
-	}
-	upload.PublicURL = nil
 	upload.CreatedAt = now
 	if upload.ExpiresAt == "" {
 		upload.ExpiresAt = isoMillis(time.Now().Add(15 * time.Minute))
@@ -998,7 +982,6 @@ func (m *MemoryRepository) PostMessage(_ context.Context, userID string, threadI
 	now := isoMillis(time.Now())
 	message := types.Message{
 		ID:                       "msg_" + uuid.NewString(),
-		TenantID:                 firstNonEmptyString(m.Threads[threadIndex].TenantID, types.DefaultTenantID),
 		ThreadID:                 threadID,
 		Author:                   auth.ActorName,
 		Body:                     body,
@@ -1016,14 +999,12 @@ func (m *MemoryRepository) PostMessage(_ context.Context, userID string, threadI
 	for _, asset := range newAssets {
 		createdAsset := types.Asset{
 			ID:                       "asset_" + uuid.NewString(),
-			TenantID:                 message.TenantID,
 			MessageID:                message.ID,
 			StorageKey:               asset.StorageKey,
 			FileName:                 asset.FileName,
 			Filename:                 asset.FileName,
 			MimeType:                 asset.MimeType,
 			SizeBytes:                asset.SizeBytes,
-			PublicURL:                nil,
 			DownloadURL:              nil,
 			CreatedAt:                now,
 			CreatedBy:                auth.ActorName,
@@ -1053,10 +1034,8 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, userID string, name s
 	if !userExists {
 		m.Users = append(m.Users, types.User{
 			ID:          userID,
-			TenantID:    types.DefaultTenantID,
 			Email:       userID + "@example.invalid",
 			DisplayName: userID,
-			Role:        "member",
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		})
@@ -1283,46 +1262,6 @@ func (m *MemoryRepository) MarkAPIKeyUsed(_ context.Context, keyID string) error
 	return nil
 }
 
-func (m *MemoryRepository) UpsertTenant(_ context.Context, tenant types.Tenant) (types.Tenant, error) {
-	now := isoMillis(time.Now())
-	if tenant.ID == "" {
-		tenant.ID = tenantOf(tenant.Slug)
-	}
-	tenant.Slug = strings.TrimSpace(tenant.Slug)
-	tenant.Name = strings.TrimSpace(tenant.Name)
-	for i := range m.Tenants {
-		if strings.EqualFold(m.Tenants[i].Slug, tenant.Slug) {
-			m.Tenants[i].Name = tenant.Name
-			m.Tenants[i].UpdatedAt = now
-			return m.Tenants[i], nil
-		}
-	}
-	tenant.CreatedAt = now
-	tenant.UpdatedAt = now
-	m.Tenants = append(m.Tenants, tenant)
-	return tenant, nil
-}
-
-func (m *MemoryRepository) GetTenant(_ context.Context, idOrSlug string) (*types.Tenant, error) {
-	idOrSlug = strings.TrimSpace(idOrSlug)
-	for _, tenant := range m.Tenants {
-		if tenant.ID == idOrSlug || tenant.Slug == idOrSlug {
-			copy := tenant
-			return &copy, nil
-		}
-	}
-	if idOrSlug == types.DefaultTenantID || idOrSlug == "default" {
-		return &types.Tenant{
-			ID:        types.DefaultTenantID,
-			Slug:      "default",
-			Name:      "Default",
-			CreatedAt: isoMillis(time.Now()),
-			UpdatedAt: isoMillis(time.Now()),
-		}, nil
-	}
-	return nil, nil
-}
-
 func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displayName string, passwordHash string) (types.User, error) {
 	now := isoMillis(time.Now())
 	email = strings.TrimSpace(email)
@@ -1337,7 +1276,6 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 			}
 			m.Users[i].DisplayName = displayName
 			m.Users[i].PasswordHash = &passwordHash
-			m.Users[i].Role = "admin"
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
 			m.assignLegacyThreadsToOwner(m.Users[i].ID)
@@ -1348,7 +1286,6 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 		if strings.EqualFold(m.Users[i].Email, email) {
 			m.Users[i].DisplayName = displayName
 			m.Users[i].PasswordHash = &passwordHash
-			m.Users[i].Role = "admin"
 			m.Users[i].IsOwner = true
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
@@ -1358,11 +1295,9 @@ func (m *MemoryRepository) BootstrapOwner(_ context.Context, email string, displ
 	}
 	owner := types.User{
 		ID:           "usr_" + uuid.NewString(),
-		TenantID:     types.DefaultTenantID,
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: &passwordHash,
-		Role:         "admin",
 		IsOwner:      true,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -1447,7 +1382,6 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 			}
 			m.Users[i].DisplayName = displayName
 			m.Users[i].PasswordHash = &passwordHash
-			m.Users[i].Role = "admin"
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
 			m.assignLegacyThreadsToOwner(m.Users[i].ID)
@@ -1458,7 +1392,6 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 		if strings.EqualFold(m.Users[i].Email, email) {
 			m.Users[i].DisplayName = displayName
 			m.Users[i].PasswordHash = &passwordHash
-			m.Users[i].Role = "admin"
 			m.Users[i].IsOwner = true
 			m.Users[i].DisabledAt = nil
 			m.Users[i].UpdatedAt = now
@@ -1468,11 +1401,9 @@ func (m *MemoryRepository) bootstrapOwner(email string, displayName string, pass
 	}
 	owner := types.User{
 		ID:           "usr_" + uuid.NewString(),
-		TenantID:     types.DefaultTenantID,
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: &passwordHash,
-		Role:         "admin",
 		IsOwner:      true,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -1588,11 +1519,9 @@ func (m *MemoryRepository) RegisterWithSignupInvitation(_ context.Context, token
 	}
 	user := types.User{
 		ID:           "usr_" + uuid.NewString(),
-		TenantID:     types.DefaultTenantID,
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: &passwordHash,
-		Role:         "member",
 		CreatedAt:    nowValue,
 		UpdatedAt:    nowValue,
 	}
@@ -1880,29 +1809,15 @@ func (m *MemoryRepository) SetUserDisabled(_ context.Context, userID string, dis
 	return types.User{}, types.ErrUserNotFound
 }
 
-func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error) {
+func (m *MemoryRepository) CreateUser(_ context.Context, email string, displayName string, passwordHash *string) (types.User, error) {
 	now := isoMillis(time.Now())
 	email = strings.TrimSpace(email)
 	displayName = strings.TrimSpace(displayName)
-	for i := range m.Users {
-		if strings.EqualFold(m.Users[i].Email, email) {
-			m.Users[i].DisplayName = displayName
-			if passwordHash != nil {
-				m.Users[i].PasswordHash = passwordHash
-			}
-			m.Users[i].Role = role
-			m.Users[i].UpdatedAt = now
-			m.Users[i].DisabledAt = nil
-			return m.Users[i], nil
-		}
-	}
 	user := types.User{
 		ID:           "usr_" + uuid.NewString(),
-		TenantID:     tenantOf(tenantID),
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: passwordHash,
-		Role:         role,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -1910,7 +1825,7 @@ func (m *MemoryRepository) UpsertProvisionedUser(_ context.Context, tenantID str
 	return user, nil
 }
 
-func (m *MemoryRepository) FindUserByEmail(_ context.Context, _ string, email string) (*types.User, error) {
+func (m *MemoryRepository) FindUserByEmail(_ context.Context, email string) (*types.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	for _, user := range m.Users {
 		if user.DisabledAt != nil || strings.ToLower(strings.TrimSpace(user.Email)) != email {
@@ -2014,23 +1929,6 @@ func (m *MemoryRepository) ConsumeCLILoginCode(_ context.Context, codeHash strin
 		return nil, nil, nil
 	}
 	return nil, nil, nil
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func tenantOf(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return types.DefaultTenantID
-	}
-	return value
 }
 
 func pendingUploadOwnedBy(upload types.PendingUpload, owner types.AuthContext) bool {

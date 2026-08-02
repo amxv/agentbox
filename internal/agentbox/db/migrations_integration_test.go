@@ -28,10 +28,8 @@ func TestMigrateLegacySchemaIsIdempotentAndPreservesContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range migrations[:4] {
-		if _, err := repository.pool.Exec(ctx, migration.SQL); err != nil {
-			t.Fatalf("apply legacy migration %s: %v", migration.Name, err)
-		}
+	if err := repository.migrateThrough(ctx, "0004"); err != nil {
+		t.Fatal(err)
 	}
 
 	legacyStatements := []string{
@@ -46,8 +44,8 @@ func TestMigrateLegacySchemaIsIdempotentAndPreservesContent(t *testing.T) {
 			t.Fatalf("seed legacy schema: %v", err)
 		}
 	}
-	if _, err := repository.pool.Exec(ctx, migrations[4].SQL); err != nil {
-		t.Fatalf("apply legacy auth migration %s: %v", migrations[4].Name, err)
+	if err := repository.migrateThrough(ctx, "0005"); err != nil {
+		t.Fatal(err)
 	}
 	legacyAuthStatements := []string{
 		`insert into users (id, tenant_id, email, display_name, password_hash, role) values ('usr_legacy', 'ten_default', 'legacy@example.com', 'Legacy User', 'hash', 'admin')`,
@@ -60,48 +58,8 @@ func TestMigrateLegacySchemaIsIdempotentAndPreservesContent(t *testing.T) {
 		}
 	}
 
-	if err := repository.Migrate(ctx); err != nil {
+	if err := repository.migrateThrough(ctx, "0016"); err != nil {
 		t.Fatal(err)
-	}
-
-	var migrationCount int
-	var firstLedgerSnapshot string
-	if err := repository.pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&migrationCount); err != nil {
-		t.Fatal(err)
-	}
-	if migrationCount != len(migrations) {
-		t.Fatalf("schema_migrations count = %d, want %d", migrationCount, len(migrations))
-	}
-	if err := repository.pool.QueryRow(ctx, `
-select string_agg(version || ':' || name || ':' || checksum || ':' || applied_at::text, ',' order by version)
-from schema_migrations
-`).Scan(&firstLedgerSnapshot); err != nil {
-		t.Fatal(err)
-	}
-
-	var threadTitle string
-	var threadTenant string
-	if err := repository.pool.QueryRow(ctx, `select title, tenant_id from threads where id = 'thr_legacy'`).Scan(&threadTitle, &threadTenant); err != nil {
-		t.Fatal(err)
-	}
-	if threadTitle != "Legacy thread" || threadTenant != "ten_default" {
-		t.Fatalf("legacy thread changed: title=%q tenant=%q", threadTitle, threadTenant)
-	}
-
-	var messageBody string
-	var storageKey string
-	var pendingStorageKey string
-	if err := repository.pool.QueryRow(ctx, `select body from messages where id = 'msg_legacy'`).Scan(&messageBody); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.pool.QueryRow(ctx, `select storage_key from assets where id = 'ast_legacy'`).Scan(&storageKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.pool.QueryRow(ctx, `select storage_key from pending_uploads where id = 'upl_legacy'`).Scan(&pendingStorageKey); err != nil {
-		t.Fatal(err)
-	}
-	if messageBody != "Preserve this body" || storageKey != "agentbox/legacy/key.bin" || pendingStorageKey != "agentbox/legacy/pending.bin" {
-		t.Fatalf("legacy content changed: body=%q asset=%q pending=%q", messageBody, storageKey, pendingStorageKey)
 	}
 
 	var usersCount int
@@ -119,6 +77,29 @@ select
 	}
 	if usersCount != 0 || sessionsCount != 0 || codesCount != 0 || activeKeyCount != 0 {
 		t.Fatalf("legacy authentication data was retained: users=%d sessions=%d codes=%d api_keys=%d", usersCount, sessionsCount, codesCount, activeKeyCount)
+	}
+
+	var preOwnerID *string
+	if err := repository.pool.QueryRow(ctx, `select owner_user_id from threads where id = 'thr_legacy'`).Scan(&preOwnerID); err != nil {
+		t.Fatal(err)
+	}
+	if preOwnerID != nil {
+		t.Fatalf("legacy thread was assigned before explicit owner setup: %q", *preOwnerID)
+	}
+	if err := repository.Migrate(ctx); err == nil {
+		t.Fatal("irreversible tenant removal succeeded without a permanent owner")
+	} else {
+		var postgresError *pgconn.PgError
+		if !errors.As(err, &postgresError) || postgresError.Code != "23514" || !strings.Contains(err.Error(), "permanent owner setup is required") {
+			t.Fatalf("pre-owner final migration error = %v", err)
+		}
+	}
+	var preCutoverMigrationCount int
+	if err := repository.pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&preCutoverMigrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if preCutoverMigrationCount != 16 {
+		t.Fatalf("failed final migration changed ledger count=%d", preCutoverMigrationCount)
 	}
 
 	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Deployment Owner", "owner-hash")
@@ -140,6 +121,67 @@ where id = 'thr_legacy'
 
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatal(err)
+	}
+	var migrationCount int
+	var firstLedgerSnapshot string
+	if err := repository.pool.QueryRow(ctx, `select count(*) from schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if migrationCount != len(migrations) {
+		t.Fatalf("schema_migrations count = %d, want %d", migrationCount, len(migrations))
+	}
+	if err := repository.pool.QueryRow(ctx, `
+select string_agg(version || ':' || name || ':' || checksum || ':' || applied_at::text, ',' order by version)
+from schema_migrations
+`).Scan(&firstLedgerSnapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	var threadTitle string
+	var messageBody string
+	var messageAuthor string
+	var storageKey string
+	var pendingStorageKey string
+	if err := repository.pool.QueryRow(ctx, `select title from threads where id = 'thr_legacy'`).Scan(&threadTitle); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.pool.QueryRow(ctx, `select body, author from messages where id = 'msg_legacy' and thread_id = 'thr_legacy'`).Scan(&messageBody, &messageAuthor); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.pool.QueryRow(ctx, `select storage_key from assets where id = 'ast_legacy' and message_id = 'msg_legacy'`).Scan(&storageKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.pool.QueryRow(ctx, `select storage_key from pending_uploads where id = 'upl_legacy' and thread_id = 'thr_legacy'`).Scan(&pendingStorageKey); err != nil {
+		t.Fatal(err)
+	}
+	if threadTitle != "Legacy thread" || messageBody != "Preserve this body" || messageAuthor != "Legacy agent" || storageKey != "agentbox/legacy/key.bin" || pendingStorageKey != "agentbox/legacy/pending.bin" {
+		t.Fatalf("legacy content changed: title=%q body=%q author=%q asset=%q pending=%q", threadTitle, messageBody, messageAuthor, storageKey, pendingStorageKey)
+	}
+
+	var tenantTable *string
+	if err := repository.pool.QueryRow(ctx, `select to_regclass('public.tenants')::text`).Scan(&tenantTable); err != nil {
+		t.Fatal(err)
+	}
+	var legacyColumnCount int
+	if err := repository.pool.QueryRow(ctx, `
+select count(*)::int
+from information_schema.columns
+where table_schema = 'public'
+  and (
+    column_name = 'tenant_id'
+    or (table_name = 'users' and column_name = 'role')
+    or (table_name in ('assets', 'pending_uploads') and column_name = 'public_url')
+  )
+`).Scan(&legacyColumnCount); err != nil {
+		t.Fatal(err)
+	}
+	if tenantTable != nil || legacyColumnCount != 0 {
+		t.Fatalf("tenant-era schema remains: tenants=%v columns=%d", tenantTable, legacyColumnCount)
+	}
+
+	access, err := repository.ResolveThreadAccess(ctx, owner.ID, "thr_legacy")
+	if err != nil || access == nil || !access.IsOwner || len(access.MatchedTeamIDs) != 0 {
+		t.Fatalf("legacy thread was not private to permanent owner: access=%#v err=%v", access, err)
 	}
 	var secondLedgerSnapshot string
 	if err := repository.pool.QueryRow(ctx, `
@@ -163,7 +205,7 @@ func TestBootstrapOwnerIsUniqueIdempotentAndProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !first.IsOwner || first.Role != "admin" || first.TenantID != types.DefaultTenantID {
+	if !first.IsOwner {
 		t.Fatalf("unexpected owner: %#v", first)
 	}
 
@@ -190,7 +232,6 @@ func TestBootstrapOwnerIsUniqueIdempotentAndProtected(t *testing.T) {
 	for name, statement := range map[string]string{
 		"demote":  `update users set is_owner = false where id = $1`,
 		"disable": `update users set disabled_at = now() where id = $1`,
-		"role":    `update users set role = 'member' where id = $1`,
 		"delete":  `delete from users where id = $1`,
 	} {
 		if _, err := repository.pool.Exec(ctx, statement, first.ID); err == nil {
@@ -198,10 +239,7 @@ func TestBootstrapOwnerIsUniqueIdempotentAndProtected(t *testing.T) {
 		}
 	}
 
-	if _, err := repository.UpsertTenant(ctx, types.Tenant{ID: "ten_other", Slug: "other", Name: "Other"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repository.UpsertProvisionedUser(ctx, "ten_other", "owner@example.com", "Duplicate", nil, "member"); err == nil {
+	if _, err := repository.CreateUser(ctx, "owner@example.com", "Duplicate", nil); err == nil {
 		t.Fatal("deployment-global email uniqueness was not enforced")
 	}
 }
@@ -216,7 +254,7 @@ func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "member@example.com", "Member", nil, "member")
+	member, err := repository.CreateUser(ctx, "member@example.com", "Member", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +344,7 @@ func TestUserOwnedPrivateThreadAccessUsesOneIndexedBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "member@example.com", "Member Person", nil, "member")
+	member, err := repository.CreateUser(ctx, "member@example.com", "Member Person", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +427,7 @@ func TestUserOwnedPrivateThreadAccessUsesOneIndexedBoundary(t *testing.T) {
 	if message.CreatedByUserID == nil || *message.CreatedByUserID != owner.ID || message.CreatedByKeyID == nil || *message.CreatedByKeyID != ownerKey.ID || message.CreatedByUserDisplayName == nil || *message.CreatedByUserDisplayName != owner.DisplayName || message.CreatedByActorName == nil || *message.CreatedByActorName != ownerKey.Name || len(message.Assets) != 1 {
 		t.Fatalf("connector attribution = %#v", message)
 	}
-	if message.Assets[0].PublicURL != nil || message.Assets[0].DownloadURL != nil {
+	if message.Assets[0].DownloadURL != nil {
 		t.Fatalf("new private asset exposed a direct URL: %#v", message.Assets[0])
 	}
 	if asset, err := repository.GetAsset(ctx, member.ID, message.Assets[0].ID); err != nil || asset != nil {
@@ -418,7 +456,7 @@ func TestUserOwnedPrivateThreadAccessUsesOneIndexedBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if createdUpload.PublicURL != nil || !strings.HasPrefix(createdUpload.StorageKey, "agentbox/"+owner.ID+"/"+ownerThread.ID+"/") {
+	if !strings.HasPrefix(createdUpload.StorageKey, "agentbox/"+owner.ID+"/"+ownerThread.ID+"/") {
 		t.Fatalf("pending upload metadata = %#v", createdUpload)
 	}
 	if _, err := repository.CreatePendingUpload(ctx, member.ID, types.PendingUpload{ID: "upl_cross_user", ThreadID: ownerThread.ID, StorageKey: "blocked", FileName: "blocked.txt", ExpiresAt: isoMillis(expiresAt), CreatedBy: memberBrowser.ActorName}); !errors.Is(err, types.ErrThreadNotFound) {
@@ -481,15 +519,15 @@ func TestTeamSharedThreadAccessIsImmediateCompleteAndIndexed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "share-member@example.com", "Share Member", nil, "member")
+	member, err := repository.CreateUser(ctx, "share-member@example.com", "Share Member", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondMember, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "share-second@example.com", "Second Member", nil, "member")
+	secondMember, err := repository.CreateUser(ctx, "share-second@example.com", "Second Member", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	outsider, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "share-outsider@example.com", "Share Outsider", nil, "member")
+	outsider, err := repository.CreateUser(ctx, "share-outsider@example.com", "Share Outsider", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,11 +799,11 @@ func TestThreadPublicLinksAreSingleRedisplayableRevocableAndIndexed(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "public-link-member@example.com", "Public Link Member", nil, "member")
+	member, err := repository.CreateUser(ctx, "public-link-member@example.com", "Public Link Member", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	outsider, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "public-link-outsider@example.com", "Public Link Outsider", nil, "member")
+	outsider, err := repository.CreateUser(ctx, "public-link-outsider@example.com", "Public Link Outsider", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +886,7 @@ where thread_id = $1
 		t.Fatalf("public thread lookup=%#v err=%v", publicThread, err)
 	}
 	publicAsset, err := repository.GetAssetByPublicTokenHash(ctx, firstHash, message.Assets[0].ID)
-	if err != nil || publicAsset == nil || publicAsset.ID != message.Assets[0].ID || publicAsset.PublicURL != nil {
+	if err != nil || publicAsset == nil || publicAsset.ID != message.Assets[0].ID {
 		t.Fatalf("public asset lookup=%#v err=%v", publicAsset, err)
 	}
 	if asset, err := repository.GetAssetByPublicTokenHash(ctx, firstHash, otherMessage.Assets[0].ID); err != nil || asset != nil {
@@ -986,7 +1024,7 @@ func TestManageThreadVisibilityIsAtomicMembershipBoundAndSelfRevoking(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "visibility-member@example.com", "Visibility Member", nil, "member")
+	member, err := repository.CreateUser(ctx, "visibility-member@example.com", "Visibility Member", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1099,11 +1137,11 @@ func TestAttachmentPurgeCandidatesAndTombstonesAreUploaderScopedAndIndexed(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "purge-target@example.com", "Purge Target", nil, "member")
+	target, err := repository.CreateUser(ctx, "purge-target@example.com", "Purge Target", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "purge-other@example.com", "Purge Other", nil, "member")
+	other, err := repository.CreateUser(ctx, "purge-other@example.com", "Purge Other", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1270,11 +1308,11 @@ func TestOwnerContentRepositoryBypassesOnlyTheExplicitOwnerPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "content-member@example.com", "Content Member", nil, "member")
+	member, err := repository.CreateUser(ctx, "content-member@example.com", "Content Member", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	teammate, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "content-teammate@example.com", "Content Teammate", nil, "member")
+	teammate, err := repository.CreateUser(ctx, "content-teammate@example.com", "Content Teammate", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1516,7 +1554,7 @@ func TestSignupInvitationsRegisterTransactionallyAndDisableUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "existing@example.com", "Existing", nil, "member"); err != nil {
+	if _, err := repository.CreateUser(ctx, "existing@example.com", "Existing", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1572,7 +1610,7 @@ where lower(u.email) = lower('existing@example.com')
 	if err != nil {
 		t.Fatal(err)
 	}
-	if member.IsOwner || member.Role != "member" || session.UserID != member.ID || consumed.ConsumedAt == nil || consumed.ConsumedByUserID == nil || *consumed.ConsumedByUserID != member.ID {
+	if member.IsOwner || session.UserID != member.ID || consumed.ConsumedAt == nil || consumed.ConsumedByUserID == nil || *consumed.ConsumedByUserID != member.ID {
 		t.Fatalf("unexpected registration member=%#v session=%#v invitation=%#v", member, session, consumed)
 	}
 	memberTeams, err := repository.ListUserTeams(ctx, member.ID)
@@ -1897,7 +1935,7 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 		t.Fatalf("recreated local=%#v original=%#v err=%v", recreated, local, err)
 	}
 
-	concurrentUser, err := repository.UpsertProvisionedUser(ctx, types.DefaultTenantID, "concurrent-onboarding@example.com", "Concurrent", nil, "member")
+	concurrentUser, err := repository.CreateUser(ctx, "concurrent-onboarding@example.com", "Concurrent", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

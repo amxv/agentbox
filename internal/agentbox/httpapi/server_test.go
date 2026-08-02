@@ -42,7 +42,7 @@ func TestHealth(t *testing.T) {
 func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	if _, err := svc.CreateAPIKey(t.Context(), authContext(types.DefaultTenantID, "local"), "local"); err != nil {
+	if _, err := svc.CreateAPIKey(t.Context(), authContext("global", "local"), "local"); err != nil {
 		t.Fatal(err)
 	}
 	repo.APIKeys[0].Key = "dev-key"
@@ -225,8 +225,8 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo.Users = append(repo.Users, testUser(types.DefaultTenantID, "usr_viewer", "viewer@example.com", "Viewer Admin", "admin", passwordHash))
-	viewerAuth := authContext(types.DefaultTenantID, "tester")
+	repo.Users = append(repo.Users, testUser("global", "usr_viewer", "viewer@example.com", "Viewer Admin", "admin", passwordHash))
+	viewerAuth := authContext("global", "tester")
 	viewerAuth.UserID = "usr_viewer"
 	viewerAuth.UserDisplayName = "Viewer Admin"
 	thread, err := svc.CreateThread(t.Context(), viewerAuth, "Viewer")
@@ -401,17 +401,13 @@ func TestBrowserSessionAuthLifecycleAndTenantKeys(t *testing.T) {
 
 func TestAuthMeSupportsAPIKeyAndAliasWithoutLeakingSecret(t *testing.T) {
 	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: "ten_acme", Slug: "acme", Name: "Acme"}},
-		Users:   []types.User{{ID: "usr_acme", TenantID: "ten_acme", Email: "admin@example.com", DisplayName: "Acme Admin", Role: "admin"}},
+		Users: []types.User{{ID: "usr_acme", Email: "admin@example.com", DisplayName: "Acme Admin"}},
 	}
 	svc := service.New(repo, &assets.FakeStore{})
 	key, err := svc.CreateAPIKeyWithScopes(t.Context(), types.AuthContext{
-		TenantID:    "ten_acme",
-		TenantSlug:  "acme",
 		SubjectType: types.AuthSubjectUserSession,
 		ActorName:   "Acme Admin",
 		UserID:      "usr_acme",
-		Role:        "admin",
 	}, "raycast", []string{"threads:read", "mcp:use"})
 	if err != nil {
 		t.Fatal(err)
@@ -447,10 +443,9 @@ func TestHTTPUserCredentialsAreIsolatedAndRotatable(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
 		Users: []types.User{
-			testUser(types.DefaultTenantID, "usr_a", "a@example.com", "User A", "admin", passwordHash),
-			testUser(types.DefaultTenantID, "usr_b", "b@example.com", "User B", "member", passwordHash),
+			testUser("global", "usr_a", "a@example.com", "User A", "admin", passwordHash),
+			testUser("global", "usr_b", "b@example.com", "User B", "member", passwordHash),
 		},
 	}
 	repo.Users[0].IsOwner = true
@@ -563,9 +558,7 @@ func TestHTTPUserCredentialsAreIsolatedAndRotatable(t *testing.T) {
 }
 
 func TestCLIAuthAuthorizeAndExchange(t *testing.T) {
-	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: "ten_acme", Slug: "acme", Name: "Acme"}},
-	}
+	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
 	passwordHash, err := authpkg.HashPassword("let-me-in")
 	if err != nil {
@@ -659,9 +652,7 @@ func TestAdminKeyRoutesAreDisabled(t *testing.T) {
 }
 
 func TestOwnerSetupAndRecoveryRequireDeploymentSecretAndRejectReplay(t *testing.T) {
-	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
-	}
+	repo := &db.MemoryRepository{}
 	server := NewServer(config.Config{
 		AdminKey:          "deployment-secret",
 		AppPublicURL:      "https://agentbox.example",
@@ -769,9 +760,9 @@ func TestOwnerSetupAndRecoveryRequireDeploymentSecretAndRejectReplay(t *testing.
 func TestOwnerAttachmentPurgeHTTPIsBrowserOnlyAndRendersTombstones(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{DeleteFailures: map[string]error{}}
-	owner := types.User{ID: "usr_http_purge_owner", TenantID: types.DefaultTenantID, Email: "http-purge-owner@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
-	target := types.User{ID: "usr_http_purge_target", TenantID: types.DefaultTenantID, Email: "http-purge-target@example.com", DisplayName: "Target", Role: "member"}
-	other := types.User{ID: "usr_http_purge_other", TenantID: types.DefaultTenantID, Email: "http-purge-other@example.com", DisplayName: "Other", Role: "member"}
+	owner := types.User{ID: "usr_http_purge_owner", Email: "http-purge-owner@example.com", DisplayName: "Owner", IsOwner: true}
+	target := types.User{ID: "usr_http_purge_target", Email: "http-purge-target@example.com", DisplayName: "Target"}
+	other := types.User{ID: "usr_http_purge_other", Email: "http-purge-other@example.com", DisplayName: "Other"}
 	repo.Users = append(repo.Users, owner, target, other)
 	ownerSecret := "owner-purge-session"
 	otherSecret := "other-purge-session"
@@ -886,8 +877,8 @@ func TestOwnerAttachmentPurgeHTTPIsBrowserOnlyAndRendersTombstones(t *testing.T)
 func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}
-	owner := types.User{ID: "usr_http_content_owner", TenantID: types.DefaultTenantID, Email: "content-owner@example.com", DisplayName: "Content Owner", Role: "admin", IsOwner: true}
-	member := types.User{ID: "usr_http_content_member", TenantID: types.DefaultTenantID, Email: "content-member@example.com", DisplayName: "Content Member", Role: "member"}
+	owner := types.User{ID: "usr_http_content_owner", Email: "content-owner@example.com", DisplayName: "Content Owner", IsOwner: true}
+	member := types.User{ID: "usr_http_content_member", Email: "content-member@example.com", DisplayName: "Content Member"}
 	repo.Users = append(repo.Users, owner, member)
 	ownerSecret := "owner-content-session-secret"
 	memberSecret := "member-content-session-secret"
@@ -993,9 +984,7 @@ func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *tes
 }
 
 func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
-	repo := &db.MemoryRepository{
-		Tenants: []types.Tenant{{ID: types.DefaultTenantID, Slug: "default", Name: "Default"}},
-	}
+	repo := &db.MemoryRepository{}
 	server := NewServer(config.Config{
 		AdminKey:          "deployment-secret",
 		AppPublicURL:      "https://agentbox.example",
@@ -1390,8 +1379,8 @@ func TestMCPOriginValidation(t *testing.T) {
 
 func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
-	if _, err := svc.CreateAPIKey(t.Context(), authContext(types.DefaultTenantID, "user"), "user"); err != nil {
+	svc := service.New(repo, &assets.FakeStore{})
+	if _, err := svc.CreateAPIKey(t.Context(), authContext("global", "user"), "user"); err != nil {
 		t.Fatal(err)
 	}
 	repo.APIKeys[0].Key = "user-key"
@@ -1453,7 +1442,7 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if err := json.Unmarshal(post.Body.Bytes(), &posted); err != nil {
 		t.Fatal(err)
 	}
-	if posted.Message.Author != "user" || len(posted.Message.Assets) != 1 || posted.Message.Assets[0].FileName != "note.md" || posted.Message.Assets[0].PublicURL != nil {
+	if posted.Message.Author != "user" || len(posted.Message.Assets) != 1 || posted.Message.Assets[0].FileName != "note.md" {
 		t.Fatalf("posted = %#v", posted)
 	}
 }
@@ -1461,15 +1450,15 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	authA := authContext(types.DefaultTenantID, "agent-a")
+	authA := authContext("global", "agent-a")
 	authA.UserID = "usr_a"
 	authA.UserDisplayName = "User A"
-	authB := authContext(types.DefaultTenantID, "agent-b")
+	authB := authContext("global", "agent-b")
 	authB.UserID = "usr_b"
 	authB.UserDisplayName = "User B"
 	repo.Users = append(repo.Users,
-		types.User{ID: authA.UserID, TenantID: types.DefaultTenantID, Email: "a@example.com", DisplayName: "User A", Role: "member"},
-		types.User{ID: authB.UserID, TenantID: types.DefaultTenantID, Email: "b@example.com", DisplayName: "User B", Role: "member"},
+		types.User{ID: authA.UserID, Email: "a@example.com", DisplayName: "User A"},
+		types.User{ID: authB.UserID, Email: "b@example.com", DisplayName: "User B"},
 	)
 	keyA, err := svc.CreateAPIKey(t.Context(), authA, "shared")
 	if err != nil {
@@ -1590,11 +1579,10 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 		t.Fatalf("finalizeAWithB status=%d body=%s", finalizeAWithB.Code, finalizeAWithB.Body.String())
 	}
 
-	messageB := types.Message{ID: "msg_b", TenantID: types.DefaultTenantID, ThreadID: payloadB.Thread.ID, Author: "agent-b", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
+	messageB := types.Message{ID: "msg_b", ThreadID: payloadB.Thread.ID, Author: "agent-b", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
 	repo.Messages = append(repo.Messages, messageB)
 	repo.Assets = append(repo.Assets, types.Asset{
 		ID:         "asset_b",
-		TenantID:   types.DefaultTenantID,
 		MessageID:  messageB.ID,
 		StorageKey: "agentbox/ten_b/thread/file.txt",
 		FileName:   "file.txt",
@@ -1610,11 +1598,10 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 		t.Fatalf("downloadBWithA status=%d body=%s", downloadBWithA.Code, downloadBWithA.Body.String())
 	}
 
-	messageA := types.Message{ID: "msg_a", TenantID: types.DefaultTenantID, ThreadID: payloadA.Thread.ID, Author: "agent-a", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
+	messageA := types.Message{ID: "msg_a", ThreadID: payloadA.Thread.ID, Author: "agent-a", Body: "asset", CreatedAt: "2026-07-07T00:00:00.000Z"}
 	repo.Messages = append(repo.Messages, messageA)
 	repo.Assets = append(repo.Assets, types.Asset{
 		ID:         "asset_legacy_a",
-		TenantID:   types.DefaultTenantID,
 		MessageID:  messageA.ID,
 		StorageKey: "agentbox/legacy-thread/message/legacy.txt",
 		FileName:   "legacy.txt",
@@ -1653,19 +1640,19 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	authA := authContext(types.DefaultTenantID, "agent-a")
+	authA := authContext("global", "agent-a")
 	authA.UserID = "usr_share_a"
 	authA.UserDisplayName = "Share A"
-	authB := authContext(types.DefaultTenantID, "agent-b")
+	authB := authContext("global", "agent-b")
 	authB.UserID = "usr_share_b"
 	authB.UserDisplayName = "Share B"
-	authC := authContext(types.DefaultTenantID, "agent-c")
+	authC := authContext("global", "agent-c")
 	authC.UserID = "usr_share_c"
 	authC.UserDisplayName = "Share C"
 	repo.Users = append(repo.Users,
-		types.User{ID: authA.UserID, TenantID: types.DefaultTenantID, Email: "a-share@example.com", DisplayName: authA.UserDisplayName, Role: "member"},
-		types.User{ID: authB.UserID, TenantID: types.DefaultTenantID, Email: "b-share@example.com", DisplayName: authB.UserDisplayName, Role: "member"},
-		types.User{ID: authC.UserID, TenantID: types.DefaultTenantID, Email: "c-share@example.com", DisplayName: authC.UserDisplayName, Role: "member"},
+		types.User{ID: authA.UserID, Email: "a-share@example.com", DisplayName: authA.UserDisplayName},
+		types.User{ID: authB.UserID, Email: "b-share@example.com", DisplayName: authB.UserDisplayName},
+		types.User{ID: authC.UserID, Email: "c-share@example.com", DisplayName: authC.UserDisplayName},
 	)
 	team, err := repo.CreateTeam(t.Context(), "shared-team", "Shared Team")
 	if err != nil {
@@ -1838,19 +1825,19 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}
 	svc := service.New(repo, store)
-	ownerAuth := authContext(types.DefaultTenantID, "public-owner")
+	ownerAuth := authContext("global", "public-owner")
 	ownerAuth.UserID = "usr_http_public_owner"
 	ownerAuth.UserDisplayName = "HTTP Public Owner"
-	memberAuth := authContext(types.DefaultTenantID, "public-member")
+	memberAuth := authContext("global", "public-member")
 	memberAuth.UserID = "usr_http_public_member"
 	memberAuth.UserDisplayName = "HTTP Public Member"
-	outsiderAuth := authContext(types.DefaultTenantID, "public-outsider")
+	outsiderAuth := authContext("global", "public-outsider")
 	outsiderAuth.UserID = "usr_http_public_outsider"
 	outsiderAuth.UserDisplayName = "HTTP Public Outsider"
 	repo.Users = append(repo.Users,
-		types.User{ID: ownerAuth.UserID, TenantID: types.DefaultTenantID, Email: "http-public-owner@example.com", DisplayName: ownerAuth.UserDisplayName, Role: "member"},
-		types.User{ID: memberAuth.UserID, TenantID: types.DefaultTenantID, Email: "http-public-member@example.com", DisplayName: memberAuth.UserDisplayName, Role: "member"},
-		types.User{ID: outsiderAuth.UserID, TenantID: types.DefaultTenantID, Email: "http-public-outsider@example.com", DisplayName: outsiderAuth.UserDisplayName, Role: "member"},
+		types.User{ID: ownerAuth.UserID, Email: "http-public-owner@example.com", DisplayName: ownerAuth.UserDisplayName},
+		types.User{ID: memberAuth.UserID, Email: "http-public-member@example.com", DisplayName: memberAuth.UserDisplayName},
+		types.User{ID: outsiderAuth.UserID, Email: "http-public-outsider@example.com", DisplayName: outsiderAuth.UserDisplayName},
 	)
 	team, err := repo.CreateTeam(t.Context(), "http-public-team", "HTTP Public Team")
 	if err != nil {
@@ -2014,11 +2001,10 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 
 func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
-	adminAuth := authContext(types.DefaultTenantID, "admin")
-	adminAuth.SubjectType = types.AuthSubjectAdmin
-	adminAuth.Role = "admin"
-	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, TenantID: types.DefaultTenantID, Email: "admin@example.com", DisplayName: "Admin", Role: "admin"})
+	svc := service.New(repo, &assets.FakeStore{})
+	adminAuth := authContext("global", "admin")
+	adminAuth.SubjectType = types.AuthSubjectUserSession
+	repo.Users = append(repo.Users, types.User{ID: adminAuth.UserID, Email: "admin@example.com", DisplayName: "Admin"})
 	thread, err := svc.CreateThread(t.Context(), adminAuth, "Scoped")
 	if err != nil {
 		t.Fatal(err)
@@ -2103,7 +2089,7 @@ func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo.Users = append(repo.Users, testUser(types.DefaultTenantID, "usr_onboarding", "onboarding@example.com", "Onboarding User", "member", passwordHash))
+	repo.Users = append(repo.Users, testUser("global", "usr_onboarding", "onboarding@example.com", "Onboarding User", "member", passwordHash))
 	server := NewServer(config.Config{
 		SessionCookieName: config.DefaultSessionCookieName,
 		AppPublicURL:      "https://agentbox.example",
@@ -2201,24 +2187,21 @@ func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
 	}
 }
 
-func authContext(tenantID string, actorName string) types.AuthContext {
+func authContext(_ string, actorName string) types.AuthContext {
 	return types.AuthContext{
-		TenantID:    tenantID,
 		UserID:      "usr_" + actorName,
 		SubjectType: types.AuthSubjectAPIKey,
 		ActorName:   actorName,
 	}
 }
 
-func testUser(tenantID string, userID string, email string, displayName string, role string, passwordHash string) types.User {
+func testUser(_ string, userID string, email string, displayName string, _ string, passwordHash string) types.User {
 	now := "2026-07-07T00:00:00.000Z"
 	return types.User{
 		ID:           userID,
-		TenantID:     tenantID,
 		Email:        email,
 		DisplayName:  displayName,
 		PasswordHash: &passwordHash,
-		Role:         role,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

@@ -1065,11 +1065,7 @@ func printThread(w io.Writer, thread thread) {
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Assets:")
 			for _, asset := range message.Assets {
-				location := asset.StorageKey
-				if asset.PublicURL != nil {
-					location = *asset.PublicURL
-				}
-				fmt.Fprintf(w, "- %s %s %s\n", asset.ID, asset.FileName, location)
+				fmt.Fprintf(w, "- %s %s %s\n", asset.ID, asset.FileName, asset.StorageKey)
 			}
 		}
 		fmt.Fprintln(w)

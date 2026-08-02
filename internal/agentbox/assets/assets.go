@@ -214,7 +214,6 @@ func (s *R2Store) UploadAssetBytes(ctx context.Context, params UploadBytesParams
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  int64(len(params.Bytes)),
-		PublicURL:  nil,
 	}, nil
 }
 
@@ -259,7 +258,6 @@ func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params Pres
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  params.SizeBytes,
-		PublicURL:  nil,
 		UploadURL:  out.URL,
 		ExpiresIn:  expires,
 		RequiredHeaders: map[string]string{
@@ -386,15 +384,6 @@ func MakeStorageKey(userID string, threadID string, messageHint string, fileName
 		messageHint,
 		uuid.NewString() + "-" + SanitizeFilename(fileName),
 	}, "/")
-}
-
-func PublicURLForKey(base string, key string) *string {
-	base = strings.TrimRight(base, "/")
-	if base == "" {
-		return nil
-	}
-	value := base + "/" + key
-	return &value
 }
 
 func NormalizeChatGPTFileInput(input ChatGPTFileInput) (ChatGPTFileInput, error) {

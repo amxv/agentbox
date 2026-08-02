@@ -16,7 +16,6 @@ import (
 
 type FakeStore struct {
 	MaxFileSizeBytes int64
-	PublicBaseURL    string
 	Uploads          []types.NewAsset
 	Buckets          map[string]map[string]backup.ObjectMetadata
 	CopyCalls        []backup.CopyObjectRequest
@@ -45,7 +44,6 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 		FileName:   fileName,
 		MimeType:   InferMimeType(fileName, params.MimeType),
 		SizeBytes:  int64(len(params.Bytes)),
-		PublicURL:  nil,
 	}
 	f.Uploads = append(f.Uploads, asset)
 	return asset, nil
@@ -142,7 +140,6 @@ func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params Pres
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  params.SizeBytes,
-		PublicURL:  nil,
 		UploadURL:  "https://r2-upload.test/" + storageKey,
 		ExpiresIn:  900,
 		RequiredHeaders: map[string]string{

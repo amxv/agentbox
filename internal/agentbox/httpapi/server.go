@@ -1448,21 +1448,6 @@ func authSecretFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("key"))
 }
 
-func provisionTenantResponse(result service.ProvisionTenantResult) map[string]any {
-	response := map[string]any{
-		"tenant": result.Tenant,
-		"user":   result.User,
-	}
-	if result.SetupToken != "" {
-		response["setup_token"] = result.SetupToken
-	}
-	if result.APIKey != nil {
-		response["api_key"] = apiKeyResponse(*result.APIKey)
-		response["key"] = apiKeyResponse(*result.APIKey)
-	}
-	return response
-}
-
 func apiKeyResponse(key types.APIKey) map[string]any {
 	return map[string]any{
 		"id":         key.ID,

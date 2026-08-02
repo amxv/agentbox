@@ -9,7 +9,7 @@ import (
 	"agentbox/internal/agentbox/backup"
 )
 
-func TestFilenameMimeStorageAndPublicURLHelpers(t *testing.T) {
+func TestFilenameMimeAndStorageHelpers(t *testing.T) {
 	if got := SanitizeFilename(" report one!.txt "); got != "report-one-.txt" {
 		t.Fatalf("SanitizeFilename = %q", got)
 	}
@@ -20,13 +20,9 @@ func TestFilenameMimeStorageAndPublicURLHelpers(t *testing.T) {
 	if mimeType == nil || *mimeType != "text/plain; charset=utf-8" {
 		t.Fatalf("mime type = %#v", mimeType)
 	}
-	key := MakeStorageKey("ten_1", "thr_1", "message", "report.txt")
-	if !strings.HasPrefix(key, "agentbox/ten_1/thr_1/message/") || !strings.HasSuffix(key, "-report.txt") {
+	key := MakeStorageKey("usr_1", "thr_1", "message", "report.txt")
+	if !strings.HasPrefix(key, "agentbox/usr_1/thr_1/message/") || !strings.HasSuffix(key, "-report.txt") {
 		t.Fatalf("storage key = %q", key)
-	}
-	publicURL := PublicURLForKey("https://cdn.example/", key)
-	if publicURL == nil || *publicURL != "https://cdn.example/"+key {
-		t.Fatalf("public URL = %#v", publicURL)
 	}
 }
 
@@ -44,7 +40,7 @@ func TestNormalizeChatGPTFileInput(t *testing.T) {
 }
 
 func TestFakeStoreUploadAndSignedURL(t *testing.T) {
-	store := &FakeStore{MaxFileSizeBytes: 10, PublicBaseURL: "https://cdn.example"}
+	store := &FakeStore{MaxFileSizeBytes: 10}
 	mimeType := "text/plain"
 	asset, err := store.UploadAssetBytes(context.Background(), UploadBytesParams{
 		UserID:   "usr_1",
@@ -56,7 +52,7 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if asset.FileName != "report-one.txt" || asset.SizeBytes != 5 || asset.PublicURL != nil {
+	if asset.FileName != "report-one.txt" || asset.SizeBytes != 5 {
 		t.Fatalf("unexpected asset: %#v", asset)
 	}
 	if !strings.HasPrefix(asset.StorageKey, "agentbox/usr_1/thr_1/message/") {

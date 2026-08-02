@@ -19,8 +19,6 @@ var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
 var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
 var ErrThreadVisibilityConflict = errors.New("the same team cannot be added and removed in one visibility change")
 
-const DefaultTenantID = "ten_default"
-
 type Actor struct {
 	Name    string `json:"name"`
 	KeyName string `json:"keyName"`
@@ -31,12 +29,9 @@ type AuthSubjectType string
 const (
 	AuthSubjectUserSession AuthSubjectType = "user_session"
 	AuthSubjectAPIKey      AuthSubjectType = "api_key"
-	AuthSubjectAdmin       AuthSubjectType = "admin"
 )
 
 type AuthContext struct {
-	TenantID        string          `json:"-"`
-	TenantSlug      string          `json:"-"`
 	UserID          string          `json:"user_id,omitempty"`
 	UserDisplayName string          `json:"user_display_name,omitempty"`
 	SubjectType     AuthSubjectType `json:"subject_type"`
@@ -45,25 +40,14 @@ type AuthContext struct {
 	KeyID           string          `json:"key_id,omitempty"`
 	SessionID       string          `json:"session_id,omitempty"`
 	Scopes          []string        `json:"scopes,omitempty"`
-	Role            string          `json:"role,omitempty"`
 	IsOwner         bool            `json:"is_owner,omitempty"`
-}
-
-type Tenant struct {
-	ID        string `json:"id"`
-	Slug      string `json:"slug"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
 }
 
 type User struct {
 	ID           string  `json:"id"`
-	TenantID     string  `json:"-"`
 	Email        string  `json:"email"`
 	DisplayName  string  `json:"display_name"`
 	PasswordHash *string `json:"-"`
-	Role         string  `json:"role"`
 	IsOwner      bool    `json:"is_owner"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
@@ -147,7 +131,6 @@ type OnboardingState struct {
 
 type Thread struct {
 	ID                       string                  `json:"id"`
-	TenantID                 string                  `json:"-"`
 	OwnerUserID              string                  `json:"owner_user_id"`
 	Title                    string                  `json:"title"`
 	CreatedAt                string                  `json:"created_at"`
@@ -278,14 +261,12 @@ type PublicThreadView struct {
 
 type Asset struct {
 	ID                       string  `json:"id"`
-	TenantID                 string  `json:"-"`
 	MessageID                string  `json:"message_id"`
 	StorageKey               string  `json:"-"`
 	FileName                 string  `json:"file_name"`
 	Filename                 string  `json:"filename"`
 	MimeType                 *string `json:"mime_type"`
 	SizeBytes                int64   `json:"size_bytes"`
-	PublicURL                *string `json:"public_url,omitempty"`
 	DownloadURL              *string `json:"download_url,omitempty"`
 	CreatedAt                string  `json:"created_at"`
 	CreatedBy                string  `json:"created_by"`
@@ -321,7 +302,6 @@ type AttachmentPurgeResult struct {
 
 type Message struct {
 	ID                       string  `json:"id"`
-	TenantID                 string  `json:"-"`
 	ThreadID                 string  `json:"thread_id"`
 	Author                   string  `json:"author"`
 	Body                     string  `json:"body"`
@@ -380,18 +360,15 @@ type NewAsset struct {
 	FileName   string
 	MimeType   *string
 	SizeBytes  int64
-	PublicURL  *string
 }
 
 type PendingUpload struct {
 	ID                       string  `json:"id"`
-	TenantID                 string  `json:"-"`
 	ThreadID                 string  `json:"thread_id"`
 	StorageKey               string  `json:"storage_key"`
 	FileName                 string  `json:"file_name"`
 	MimeType                 *string `json:"mime_type"`
 	SizeBytes                int64   `json:"size_bytes"`
-	PublicURL                *string `json:"public_url,omitempty"`
 	CreatedAt                string  `json:"created_at"`
 	ExpiresAt                string  `json:"expires_at"`
 	CreatedBy                string  `json:"created_by"`
@@ -414,7 +391,6 @@ type PresignedUpload struct {
 	FileName        string            `json:"file_name"`
 	MimeType        *string           `json:"mime_type"`
 	SizeBytes       int64             `json:"size_bytes"`
-	PublicURL       *string           `json:"public_url,omitempty"`
 	UploadURL       string            `json:"upload_url"`
 	ExpiresIn       int               `json:"expires_in"`
 	RequiredHeaders map[string]string `json:"required_headers"`
@@ -426,7 +402,6 @@ type UploadedAssetReference struct {
 
 type SearchThreadResult struct {
 	ID                       string                  `json:"id"`
-	TenantID                 string                  `json:"-"`
 	OwnerUserID              string                  `json:"owner_user_id"`
 	Title                    string                  `json:"title"`
 	CreatedAt                string                  `json:"created_at"`

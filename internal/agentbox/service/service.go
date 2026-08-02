@@ -63,11 +63,9 @@ type Repository interface {
 	RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
-	UpsertTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error)
-	GetTenant(ctx context.Context, idOrSlug string) (*types.Tenant, error)
 	BootstrapOwner(ctx context.Context, email string, displayName string, passwordHash string) (types.User, error)
-	UpsertProvisionedUser(ctx context.Context, tenantID string, email string, displayName string, passwordHash *string, role string) (types.User, error)
-	FindUserByEmail(ctx context.Context, tenantID string, email string) (*types.User, error)
+	CreateUser(ctx context.Context, email string, displayName string, passwordHash *string) (types.User, error)
+	FindUserByEmail(ctx context.Context, email string) (*types.User, error)
 	CreateUserSession(ctx context.Context, session types.UserSession) (types.UserSession, error)
 	FindUserSessionBySecretHash(ctx context.Context, secretHash string) (*types.UserSession, *types.User, error)
 	MarkUserSessionUsed(ctx context.Context, sessionID string) error
@@ -609,7 +607,6 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 			FileName:                 presigned.FileName,
 			MimeType:                 presigned.MimeType,
 			SizeBytes:                presigned.SizeBytes,
-			PublicURL:                presigned.PublicURL,
 			ExpiresAt:                expiresAt,
 			CreatedBy:                auth.ActorName,
 			CreatedByUserID:          optionalString(auth.UserID),
@@ -669,7 +666,6 @@ func (s *Service) pendingUploadsToAssets(ctx context.Context, auth types.AuthCon
 			FileName:   upload.FileName,
 			MimeType:   upload.MimeType,
 			SizeBytes:  upload.SizeBytes,
-			PublicURL:  upload.PublicURL,
 		})
 	}
 	return assets, nil
@@ -821,24 +817,6 @@ func (s *Service) RevokeAPIKey(ctx context.Context, auth types.AuthContext, name
 	return nil
 }
 
-type ProvisionTenantParams struct {
-	TenantSlug string
-	TenantName string
-	UserEmail  string
-	UserName   string
-	Password   string
-	CreateKey  bool
-	KeyName    string
-	UserRole   string
-}
-
-type ProvisionTenantResult struct {
-	Tenant     types.Tenant  `json:"tenant"`
-	User       types.User    `json:"user,omitempty"`
-	APIKey     *types.APIKey `json:"api_key,omitempty"`
-	SetupToken string        `json:"setup_token,omitempty"`
-}
-
 type CLILoginAuthorizeResult struct {
 	Code        string `json:"code"`
 	RedirectURI string `json:"redirect_uri"`
@@ -876,18 +854,6 @@ type OnboardingConnectionResult struct {
 	ProfileCommand string                `json:"profile_command,omitempty"`
 	SetupPrompt    string                `json:"setup_prompt,omitempty"`
 	Instructions   []string              `json:"instructions"`
-}
-
-type ProvisionUserParams struct {
-	TenantIDOrSlug string
-	Email          string
-	DisplayName    string
-	Password       string
-	Role           string
-}
-
-func (s *Service) ProvisionTenant(ctx context.Context, params ProvisionTenantParams) (ProvisionTenantResult, error) {
-	return ProvisionTenantResult{}, CodedError{Code: "LEGACY_TENANT_PROVISIONING_DISABLED", Message: "Tenant provisioning is disabled. Create users only through owner invitations."}
 }
 
 func (s *Service) IssueOwnerSetupToken(ctx context.Context, ttl time.Duration) (OwnerSetupTokenResult, error) {
@@ -1035,13 +1001,7 @@ func (s *Service) RegisterWithSignupInvitation(ctx context.Context, token string
 	if err != nil {
 		return types.AuthContext{}, "", types.User{}, err
 	}
-	authContext := authContextForUserSession(session, user)
-	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
-		return types.AuthContext{}, "", types.User{}, err
-	} else if tenant != nil {
-		authContext.TenantSlug = tenant.Slug
-	}
-	return authContext, sessionSecret, user, nil
+	return authContextForUserSession(session, user), sessionSecret, user, nil
 }
 
 func (s *Service) ListUsers(ctx context.Context, authContext types.AuthContext) ([]types.User, error) {
@@ -1360,64 +1320,6 @@ func (s *Service) RemoveTeamMember(ctx context.Context, authContext types.AuthCo
 	return err
 }
 
-func (s *Service) ProvisionUser(ctx context.Context, params ProvisionUserParams) (types.User, string, error) {
-	return types.User{}, "", CodedError{Code: "LEGACY_TENANT_PROVISIONING_DISABLED", Message: "Tenant provisioning is disabled. Create users only through owner invitations."}
-}
-
-func (s *Service) ProvisionTenantAPIKey(ctx context.Context, tenantIDOrSlug string, name string) (types.APIKey, error) {
-	_ = ctx
-	_ = tenantIDOrSlug
-	_ = name
-	return types.APIKey{}, CodedError{Code: "LEGACY_TENANT_KEY_DISABLED", Message: "Tenant-wide credentials are disabled. Create a credential from an authenticated user account."}
-}
-
-func (s *Service) provisionUser(ctx context.Context, tenantID string, params ProvisionUserParams) (types.User, string, error) {
-	email := strings.TrimSpace(params.Email)
-	if email == "" {
-		return types.User{}, "", CodedError{Code: "INVALID_ARGUMENT", Message: "user_email is required."}
-	}
-	displayName := strings.TrimSpace(params.DisplayName)
-	if displayName == "" {
-		displayName = email
-	}
-	role := strings.TrimSpace(params.Role)
-	if role == "" {
-		role = "admin"
-	}
-	if role != "admin" && role != "member" {
-		return types.User{}, "", CodedError{Code: "INVALID_ARGUMENT", Message: "role must be admin or member."}
-	}
-	password := strings.TrimSpace(params.Password)
-	setupToken := ""
-	if password == "" {
-		existing, err := s.repo.FindUserByEmail(ctx, tenantID, email)
-		if err != nil {
-			return types.User{}, "", err
-		}
-		if existing == nil || existing.PasswordHash == nil {
-			token, err := generateSetupToken()
-			if err != nil {
-				return types.User{}, "", err
-			}
-			password = token
-			setupToken = token
-		}
-	}
-	var passwordHash *string
-	if password != "" {
-		hashed, err := auth.HashPassword(password)
-		if err != nil {
-			return types.User{}, "", err
-		}
-		passwordHash = &hashed
-	}
-	user, err := s.repo.UpsertProvisionedUser(ctx, tenantID, email, displayName, passwordHash, role)
-	if err != nil {
-		return types.User{}, "", err
-	}
-	return user, setupToken, nil
-}
-
 func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types.AuthContext, error) {
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
@@ -1435,12 +1337,7 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 			return nil, err
 		}
 	}
-	tenantID := user.TenantID
-	if tenantID == "" {
-		tenantID = types.DefaultTenantID
-	}
-	authContext := &types.AuthContext{
-		TenantID:        tenantID,
+	return &types.AuthContext{
 		UserID:          user.ID,
 		UserDisplayName: user.DisplayName,
 		SubjectType:     types.AuthSubjectAPIKey,
@@ -1448,13 +1345,7 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, secret string) (*types
 		ActorName:       key.Name,
 		KeyID:           key.ID,
 		Scopes:          append([]string(nil), key.Scopes...),
-	}
-	if tenant, err := s.repo.GetTenant(ctx, tenantID); err != nil {
-		return nil, err
-	} else if tenant != nil {
-		authContext.TenantSlug = tenant.Slug
-	}
-	return authContext, nil
+	}, nil
 }
 
 func (s *Service) Login(ctx context.Context, _ string, email string, password string) (types.AuthContext, string, error) {
@@ -1462,7 +1353,7 @@ func (s *Service) Login(ctx context.Context, _ string, email string, password st
 	if email == "" || password == "" {
 		return types.AuthContext{}, "", ErrInvalidLogin
 	}
-	user, err := s.repo.FindUserByEmail(ctx, "", email)
+	user, err := s.repo.FindUserByEmail(ctx, email)
 	if err != nil {
 		return types.AuthContext{}, "", err
 	}
@@ -1486,13 +1377,7 @@ func (s *Service) createSessionForUser(ctx context.Context, user types.User) (ty
 	if err != nil {
 		return types.AuthContext{}, "", err
 	}
-	authContext := authContextForUserSession(session, user)
-	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
-		return types.AuthContext{}, "", err
-	} else if tenant != nil {
-		authContext.TenantSlug = tenant.Slug
-	}
-	return authContext, secret, nil
+	return authContextForUserSession(session, user), secret, nil
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, secret string) (*types.AuthContext, error) {
@@ -1513,11 +1398,6 @@ func (s *Service) AuthenticateSession(ctx context.Context, secret string) (*type
 		}
 	}
 	authContext := authContextForUserSession(*session, *user)
-	if tenant, err := s.repo.GetTenant(ctx, user.TenantID); err != nil {
-		return nil, err
-	} else if tenant != nil {
-		authContext.TenantSlug = tenant.Slug
-	}
 	return &authContext, nil
 }
 
@@ -1585,26 +1465,16 @@ func (s *Service) ExchangeCLILogin(ctx context.Context, code string, state strin
 	if loginCode == nil || user == nil {
 		return CLILoginExchangeResult{}, CodedError{Code: "PERMISSION_DENIED", Message: "Invalid or expired CLI login code."}
 	}
-	tenant, err := s.repo.GetTenant(ctx, user.TenantID)
-	if err != nil {
-		return CLILoginExchangeResult{}, err
-	}
-	if tenant == nil {
-		return CLILoginExchangeResult{}, CodedError{Code: "TENANT_NOT_FOUND", Message: "Tenant not found."}
-	}
 	keyName = strings.TrimSpace(keyName)
 	if keyName == "" {
 		keyName = defaultCLIKeyName()
 	}
 	key, err := s.CreateAPIKeyWithPurposeAndScopes(ctx, types.AuthContext{
-		TenantID:        tenant.ID,
-		TenantSlug:      tenant.Slug,
 		UserID:          user.ID,
 		UserDisplayName: user.DisplayName,
 		SubjectType:     types.AuthSubjectUserSession,
 		ActorID:         loginCode.ID,
 		ActorName:       user.DisplayName,
-		Role:            user.Role,
 		IsOwner:         user.IsOwner,
 	}, keyName, "local", cliAPIKeyScopes())
 	if err != nil {
@@ -1780,14 +1650,12 @@ func validateCLIRedirectURI(value string) error {
 
 func authContextForUserSession(session types.UserSession, user types.User) types.AuthContext {
 	return types.AuthContext{
-		TenantID:        user.TenantID,
 		UserID:          user.ID,
 		UserDisplayName: user.DisplayName,
 		SubjectType:     types.AuthSubjectUserSession,
 		ActorID:         session.ID,
 		ActorName:       "Web dashboard",
 		SessionID:       session.ID,
-		Role:            user.Role,
 		IsOwner:         user.IsOwner,
 	}
 }
@@ -1802,23 +1670,6 @@ func tokenPrefix(value string) string {
 		return value
 	}
 	return value[:12]
-}
-
-func normalizeTenantSlug(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "tenant_slug is required."}
-	}
-	if len(value) > 80 {
-		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "tenant_slug must be at most 80 characters."}
-	}
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "tenant_slug may contain only lowercase letters, numbers, hyphens, and underscores."}
-	}
-	return value, nil
 }
 
 func normalizeTeamSlug(value string) (string, error) {
@@ -1861,13 +1712,6 @@ func uniqueTrimmedStrings(values []string) []string {
 		result = append(result, value)
 	}
 	return result
-}
-
-func tenantIDForSlug(slug string) string {
-	if slug == "default" {
-		return types.DefaultTenantID
-	}
-	return "ten_" + slug
 }
 
 func requireAuthContext(auth types.AuthContext) error {

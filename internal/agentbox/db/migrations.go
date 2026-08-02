@@ -19,6 +19,14 @@ type appliedMigration struct {
 // Migrate applies every checked-in SQL migration exactly once. Migration files
 // are immutable after application; checksum drift is treated as an error.
 func (r *Repository) Migrate(ctx context.Context) error {
+	return r.migrateThrough(ctx, "")
+}
+
+// migrateThrough applies migrations up to and including maxVersion. An empty
+// maxVersion applies the full checked-in set. The bounded form exists so the
+// legacy-fixture test can prove the explicit owner-setup boundary immediately
+// before the irreversible tenant-removal migration.
+func (r *Repository) migrateThrough(ctx context.Context, maxVersion string) error {
 	migrations, err := migrationfiles.Load()
 	if err != nil {
 		return err
@@ -56,6 +64,9 @@ create table if not exists schema_migrations (
 	}
 
 	for _, migration := range migrations {
+		if maxVersion != "" && migration.Version > maxVersion {
+			break
+		}
 		if existing, ok := applied[migration.Version]; ok {
 			if existing.Name != migration.Name || existing.Checksum != migration.Checksum {
 				return fmt.Errorf(

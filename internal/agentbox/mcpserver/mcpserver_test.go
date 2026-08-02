@@ -122,7 +122,7 @@ func TestStreamableHTTPCallTool(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
 	auth := testAuth()
-	repo.Users = append(repo.Users, types.User{ID: auth.UserID, TenantID: types.DefaultTenantID, Email: "mcp@example.com", DisplayName: auth.UserDisplayName, Role: "member"})
+	repo.Users = append(repo.Users, types.User{ID: auth.UserID, Email: "mcp@example.com", DisplayName: auth.UserDisplayName})
 	handler := NewHTTPHandler(auth, svc, "https://agentbox.example")
 	httpServer := httptest.NewServer(handler)
 	defer httpServer.Close()
@@ -307,8 +307,8 @@ func TestMCPToolsUseUserAuthContext(t *testing.T) {
 	ctx := context.Background()
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
-	authA := types.AuthContext{TenantID: types.DefaultTenantID, UserID: "usr_a", UserDisplayName: "User A", SubjectType: types.AuthSubjectAPIKey, ActorName: "agent-a", KeyID: "key_a"}
-	authB := types.AuthContext{TenantID: types.DefaultTenantID, UserID: "usr_b", UserDisplayName: "User B", SubjectType: types.AuthSubjectAPIKey, ActorName: "agent-b", KeyID: "key_b"}
+	authA := types.AuthContext{UserID: "usr_a", UserDisplayName: "User A", SubjectType: types.AuthSubjectAPIKey, ActorName: "agent-a", KeyID: "key_a"}
+	authB := types.AuthContext{UserID: "usr_b", UserDisplayName: "User B", SubjectType: types.AuthSubjectAPIKey, ActorName: "agent-b", KeyID: "key_b"}
 	threadA, err := svc.CreateThread(ctx, authA, "User A thread")
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +380,6 @@ func TestMCPToolsUseUserAuthContext(t *testing.T) {
 
 func testAuth() types.AuthContext {
 	return types.AuthContext{
-		TenantID:        types.DefaultTenantID,
 		UserID:          "usr_test",
 		UserDisplayName: "Test User",
 		SubjectType:     types.AuthSubjectAPIKey,
