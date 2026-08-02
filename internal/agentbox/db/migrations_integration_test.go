@@ -1334,6 +1334,39 @@ where lower(u.email) = lower('existing@example.com')
 	if _, err := repository.CreateAPIKey(ctx, member.ID, "local", "local", hashSecret(memberKeySecret), "agb_member", []string{"threads:read"}); err != nil {
 		t.Fatal(err)
 	}
+	oldKey, err := repository.CreateAPIKey(ctx, member.ID, "old", "custom", hashSecret("agb_member_old"), "agb_old", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err := repository.RevokeAPIKeyByID(ctx, oldKey.ID); err != nil || !revoked {
+		t.Fatalf("pre-revoke old credential revoked=%t err=%v", revoked, err)
+	}
+	if revoked, err := repository.RevokeAPIKeyByID(ctx, oldKey.ID); err != nil || !revoked {
+		t.Fatalf("idempotent old credential revoke=%t err=%v", revoked, err)
+	}
+	allKeys, err := repository.ListAllAPIKeys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allKeys) != 2 || allKeys[0].UserID != member.ID || allKeys[1].UserID != member.ID || allKeys[0].TokenHash == "" || allKeys[0].Key != "" {
+		t.Fatalf("owner credential metadata fixture=%#v", allKeys)
+	}
+
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
+	memberPrivateThread, err := repository.CreateThread(ctx, member.ID, "disabled member private", memberAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberSharedThread, err := repository.CreateThread(ctx, member.ID, "disabled member shared", memberAuth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SetThreadVisibility(ctx, member.ID, memberSharedThread.ID, []string{engineering.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, owner.ID, memberSharedThread.ID); err != nil || access == nil {
+		t.Fatalf("qualified owner lacked shared thread before disable: access=%#v err=%v", access, err)
+	}
 	cliCodeHash := "member-cli-code"
 	cliStateHash := "member-cli-state"
 	if _, err := repository.CreateCLILoginCode(ctx, types.CLILoginCode{
@@ -1355,12 +1388,39 @@ where lower(u.email) = lower('existing@example.com')
 	if foundKey, foundUser, err := repository.FindAPIKeyBySecret(ctx, memberKeySecret); err != nil || foundKey != nil || foundUser != nil {
 		t.Fatalf("disabled key resolved: key=%#v user=%#v err=%v", foundKey, foundUser, err)
 	}
+	if teams, err := repository.ListUserTeams(ctx, member.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("disabled memberships=%#v err=%v", teams, err)
+	}
+	if _, err := repository.AddTeamMember(ctx, engineering.ID, member.ID); !errors.Is(err, types.ErrUserDisabled) {
+		t.Fatalf("disabled user re-added to team: %v", err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, owner.ID, memberSharedThread.ID); err != nil || access == nil {
+		t.Fatalf("disabled owner's shared thread unavailable to qualified member: access=%#v err=%v", access, err)
+	}
+	if access, err := repository.ResolveThreadAccess(ctx, owner.ID, memberPrivateThread.ID); err != nil || access != nil {
+		t.Fatalf("disabled owner's private thread leaked: access=%#v err=%v", access, err)
+	}
+	allKeys, err = repository.ListAllAPIKeys(ctx)
+	if err != nil || len(allKeys) != 2 {
+		t.Fatalf("disabled credential metadata=%#v err=%v", allKeys, err)
+	}
+	for _, key := range allKeys {
+		if key.RevokedAt == nil {
+			t.Fatalf("credential remained active after disable: %#v", key)
+		}
+	}
 	enabled, err := repository.SetUserDisabled(ctx, member.ID, false)
 	if err != nil || enabled.DisabledAt != nil {
 		t.Fatalf("enable member=%#v err=%v", enabled, err)
 	}
 	if code, user, err := repository.ConsumeCLILoginCode(ctx, cliCodeHash, cliStateHash, "http://127.0.0.1:8080/callback"); err != nil || code != nil || user != nil {
 		t.Fatalf("disabled user's old CLI login code became usable after enablement: code=%#v user=%#v err=%v", code, user, err)
+	}
+	if teams, err := repository.ListUserTeams(ctx, member.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("enable restored memberships=%#v err=%v", teams, err)
+	}
+	if foundKey, foundUser, err := repository.FindAPIKeyBySecret(ctx, memberKeySecret); err != nil || foundKey != nil || foundUser != nil {
+		t.Fatalf("enable restored old credential: key=%#v user=%#v err=%v", foundKey, foundUser, err)
 	}
 	if _, err := repository.SetUserDisabled(ctx, owner.ID, true); !errors.Is(err, types.ErrOwnerCannotBeDisabled) {
 		t.Fatalf("owner disable error=%v", err)

@@ -1475,8 +1475,41 @@ order by name asc
 	return keys, rows.Err()
 }
 
+func (r *Repository) ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error) {
+	rows, err := r.pool.Query(ctx, `
+select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+from api_keys
+order by user_id, lower(name), created_at, id
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := []types.APIKey{}
+	for rows.Next() {
+		key, err := scanAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
 func (r *Repository) RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error) {
 	tag, err := r.pool.Exec(ctx, `update api_keys set revoked_at = now(), updated_at = now() where user_id = $1 and lower(name) = lower($2) and revoked_at is null`, userID, name)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+update api_keys
+set revoked_at = coalesce(revoked_at, now()), updated_at = now()
+where id = $1
+`, strings.TrimSpace(keyID))
 	if err != nil {
 		return false, err
 	}
@@ -2106,10 +2139,14 @@ func requireTeamAndUserTx(ctx context.Context, tx pgx.Tx, teamID string, userID 
 		return err
 	}
 	var lockedUserID string
-	if err := tx.QueryRow(ctx, `select id from users where id = $1 for key share`, strings.TrimSpace(userID)).Scan(&lockedUserID); errors.Is(err, pgx.ErrNoRows) {
+	var disabledAt *time.Time
+	if err := tx.QueryRow(ctx, `select id, disabled_at from users where id = $1 for key share`, strings.TrimSpace(userID)).Scan(&lockedUserID, &disabledAt); errors.Is(err, pgx.ErrNoRows) {
 		return types.ErrUserNotFound
 	} else if err != nil {
 		return err
+	}
+	if disabledAt != nil {
+		return types.ErrUserDisabled
 	}
 	return nil
 }
@@ -2176,6 +2213,9 @@ returning id, tenant_id, email, display_name, password_hash, role, is_owner, cre
 			return types.User{}, err
 		}
 		if _, err := tx.Exec(ctx, `update cli_login_codes set consumed_at = coalesce(consumed_at, now()) where user_id = $1`, user.ID); err != nil {
+			return types.User{}, err
+		}
+		if _, err := tx.Exec(ctx, `delete from team_memberships where user_id = $1`, user.ID); err != nil {
 			return types.User{}, err
 		}
 	} else {

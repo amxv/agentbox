@@ -50,7 +50,9 @@ type Repository interface {
 	GetOnboardingState(ctx context.Context, userID string) (types.OnboardingState, error)
 	DismissOnboarding(ctx context.Context, userID string) (types.OnboardingState, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
+	ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error)
 	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
+	RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
 	UpsertTenant(ctx context.Context, tenant types.Tenant) (types.Tenant, error)
@@ -1012,6 +1014,31 @@ func (s *Service) ListUsers(ctx context.Context, authContext types.AuthContext) 
 	return s.repo.ListUsers(ctx)
 }
 
+func (s *Service) ListOwnerAPIKeys(ctx context.Context, authContext types.AuthContext) ([]types.APIKey, error) {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return nil, err
+	}
+	return s.repo.ListAllAPIKeys(ctx)
+}
+
+func (s *Service) RevokeOwnerAPIKey(ctx context.Context, authContext types.AuthContext, keyID string) error {
+	if err := requireOwnerBrowser(authContext); err != nil {
+		return err
+	}
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "credential_id is required."}
+	}
+	revoked, err := s.repo.RevokeAPIKeyByID(ctx, keyID)
+	if err != nil {
+		return err
+	}
+	if !revoked {
+		return CodedError{Code: "CREDENTIAL_NOT_FOUND", Message: "Credential not found.", Err: ErrAPIKeyNotFound}
+	}
+	return nil
+}
+
 func (s *Service) SetUserDisabled(ctx context.Context, authContext types.AuthContext, userID string, disabled bool) (types.User, error) {
 	if err := requireOwnerBrowser(authContext); err != nil {
 		return types.User{}, err
@@ -1118,6 +1145,9 @@ func (s *Service) AddTeamMember(ctx context.Context, authContext types.AuthConte
 	}
 	if errors.Is(err, types.ErrUserNotFound) {
 		return types.TeamMembership{}, CodedError{Code: "USER_NOT_FOUND", Message: "User not found.", Err: err}
+	}
+	if errors.Is(err, types.ErrUserDisabled) {
+		return types.TeamMembership{}, CodedError{Code: "USER_DISABLED", Message: "Disabled users cannot be added to teams.", Err: err}
 	}
 	if err != nil {
 		return types.TeamMembership{}, err

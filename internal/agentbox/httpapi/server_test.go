@@ -1007,6 +1007,81 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 		t.Fatalf("owner key own-team list status=%d body=%s", ownerKeyOwnTeamsResponse.Code, ownerKeyOwnTeamsResponse.Body.String())
 	}
 
+	createMemberCredentialRequest := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(`{"name":"member-chatgpt","purpose":"chatgpt"}`))
+	createMemberCredentialRequest.AddCookie(memberCookies[0])
+	createMemberCredentialResponse := httptest.NewRecorder()
+	server.ServeHTTP(createMemberCredentialResponse, createMemberCredentialRequest)
+	if createMemberCredentialResponse.Code != http.StatusCreated {
+		t.Fatalf("create member credential status=%d body=%s", createMemberCredentialResponse.Code, createMemberCredentialResponse.Body.String())
+	}
+	var memberCredentialPayload struct {
+		Key struct {
+			ID     string `json:"id"`
+			Secret string `json:"key"`
+		} `json:"key"`
+	}
+	if err := json.Unmarshal(createMemberCredentialResponse.Body.Bytes(), &memberCredentialPayload); err != nil {
+		t.Fatal(err)
+	}
+	if memberCredentialPayload.Key.ID == "" || memberCredentialPayload.Key.Secret == "" {
+		t.Fatalf("member credential payload=%#v", memberCredentialPayload)
+	}
+
+	ownerCredentialsRequest := httptest.NewRequest(http.MethodGet, "/api/owner/credentials", nil)
+	ownerCredentialsRequest.AddCookie(ownerCookie)
+	ownerCredentialsResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerCredentialsResponse, ownerCredentialsRequest)
+	if ownerCredentialsResponse.Code != http.StatusOK || !strings.Contains(ownerCredentialsResponse.Body.String(), memberCredentialPayload.Key.ID) || !strings.Contains(ownerCredentialsResponse.Body.String(), `"purpose":"chatgpt"`) || !strings.Contains(ownerCredentialsResponse.Body.String(), `"token_prefix":`) || strings.Contains(ownerCredentialsResponse.Body.String(), memberCredentialPayload.Key.Secret) || strings.Contains(ownerCredentialsResponse.Body.String(), "token_hash") {
+		t.Fatalf("owner credential metadata status=%d body=%s", ownerCredentialsResponse.Code, ownerCredentialsResponse.Body.String())
+	}
+	memberCredentialsRequest := httptest.NewRequest(http.MethodGet, "/api/owner/credentials", nil)
+	memberCredentialsRequest.AddCookie(memberCookies[0])
+	memberCredentialsResponse := httptest.NewRecorder()
+	server.ServeHTTP(memberCredentialsResponse, memberCredentialsRequest)
+	if memberCredentialsResponse.Code != http.StatusForbidden || !strings.Contains(memberCredentialsResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("member listed owner credentials status=%d body=%s", memberCredentialsResponse.Code, memberCredentialsResponse.Body.String())
+	}
+	ownerKeyCredentialsRequest := httptest.NewRequest(http.MethodGet, "/api/owner/credentials", nil)
+	ownerKeyCredentialsRequest.Header.Set("authorization", "Bearer "+ownerKeyPayload.Key.Secret)
+	ownerKeyCredentialsResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerKeyCredentialsResponse, ownerKeyCredentialsRequest)
+	if ownerKeyCredentialsResponse.Code != http.StatusForbidden || !strings.Contains(ownerKeyCredentialsResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner key listed owner credentials status=%d body=%s", ownerKeyCredentialsResponse.Code, ownerKeyCredentialsResponse.Body.String())
+	}
+	deploymentCredentialsRequest := httptest.NewRequest(http.MethodGet, "/api/owner/credentials", nil)
+	deploymentCredentialsRequest.Header.Set("x-agentbox-admin-key", "deployment-secret")
+	deploymentCredentialsResponse := httptest.NewRecorder()
+	server.ServeHTTP(deploymentCredentialsResponse, deploymentCredentialsRequest)
+	if deploymentCredentialsResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("deployment secret listed owner credentials status=%d body=%s", deploymentCredentialsResponse.Code, deploymentCredentialsResponse.Body.String())
+	}
+	revokeMemberCredential := func() {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodDelete, "/api/owner/credentials/"+memberCredentialPayload.Key.ID, nil)
+		request.AddCookie(ownerCookie)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), memberCredentialPayload.Key.ID) {
+			t.Fatalf("owner revoke credential status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	revokeMemberCredential()
+	revokeMemberCredential()
+	revokedCredentialRequest := httptest.NewRequest(http.MethodGet, "/api/threads", nil)
+	revokedCredentialRequest.Header.Set("authorization", "Bearer "+memberCredentialPayload.Key.Secret)
+	revokedCredentialResponse := httptest.NewRecorder()
+	server.ServeHTTP(revokedCredentialResponse, revokedCredentialRequest)
+	if revokedCredentialResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("owner-revoked credential authenticated status=%d body=%s", revokedCredentialResponse.Code, revokedCredentialResponse.Body.String())
+	}
+	ownerCredentialsAfterRevokeRequest := httptest.NewRequest(http.MethodGet, "/api/owner/credentials", nil)
+	ownerCredentialsAfterRevokeRequest.AddCookie(ownerCookie)
+	ownerCredentialsAfterRevokeResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerCredentialsAfterRevokeResponse, ownerCredentialsAfterRevokeRequest)
+	if ownerCredentialsAfterRevokeResponse.Code != http.StatusOK || !strings.Contains(ownerCredentialsAfterRevokeResponse.Body.String(), `"revoked_at":`) {
+		t.Fatalf("revoked metadata status=%d body=%s", ownerCredentialsAfterRevokeResponse.Code, ownerCredentialsAfterRevokeResponse.Body.String())
+	}
+
 	listUsersRequest := httptest.NewRequest(http.MethodGet, "/api/owner/users", nil)
 	listUsersRequest.AddCookie(ownerCookie)
 	listUsersResponse := httptest.NewRecorder()
@@ -1022,6 +1097,9 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 	if disableResponse.Code != http.StatusOK || !strings.Contains(disableResponse.Body.String(), `"disabled_at":`) {
 		t.Fatalf("disable status=%d body=%s", disableResponse.Code, disableResponse.Body.String())
 	}
+	if memberTeams, err := repo.ListUserTeams(t.Context(), memberID); err != nil || len(memberTeams) != 0 {
+		t.Fatalf("disable retained team memberships=%#v err=%v", memberTeams, err)
+	}
 	memberMeRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	memberMeRequest.AddCookie(memberCookies[0])
 	memberMeResponse := httptest.NewRecorder()
@@ -1036,6 +1114,9 @@ func TestOwnerInvitationAndUserLifecycleHTTPAuthorization(t *testing.T) {
 	server.ServeHTTP(enableResponse, enableRequest)
 	if enableResponse.Code != http.StatusOK || strings.Contains(enableResponse.Body.String(), `"disabled_at":`) {
 		t.Fatalf("enable status=%d body=%s", enableResponse.Code, enableResponse.Body.String())
+	}
+	if memberTeams, err := repo.ListUserTeams(t.Context(), memberID); err != nil || len(memberTeams) != 0 {
+		t.Fatalf("enable restored team memberships=%#v err=%v", memberTeams, err)
 	}
 
 	unusedRequest := httptest.NewRequest(http.MethodPost, "/api/owner/invitations", nil)

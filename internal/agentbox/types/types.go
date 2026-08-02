@@ -7,6 +7,7 @@ var ErrOwnerSetupTokenInvalid = errors.New("owner setup token is invalid or expi
 var ErrSignupInvitationInvalid = errors.New("signup invitation is invalid or expired")
 var ErrEmailAlreadyRegistered = errors.New("email is already registered")
 var ErrUserNotFound = errors.New("user not found")
+var ErrUserDisabled = errors.New("user is disabled")
 var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
 var ErrThreadNotFound = errors.New("Thread not found.")
 var ErrTeamNotFound = errors.New("team not found")

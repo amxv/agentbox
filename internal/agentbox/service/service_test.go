@@ -567,6 +567,112 @@ func TestUnifiedThreadFiltersAndVisibilitySummaries(t *testing.T) {
 	}
 }
 
+func TestOwnerCredentialAdministrationAndDisablementPreserveSharedContent(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+	owner := types.User{ID: "usr_phase11_owner", TenantID: types.DefaultTenantID, Email: "owner-phase11@example.com", DisplayName: "Owner", Role: "admin", IsOwner: true}
+	member := types.User{ID: "usr_phase11_member", TenantID: types.DefaultTenantID, Email: "member-phase11@example.com", DisplayName: "Member", Role: "member"}
+	teammate := types.User{ID: "usr_phase11_teammate", TenantID: types.DefaultTenantID, Email: "teammate-phase11@example.com", DisplayName: "Teammate", Role: "member"}
+	repo.Users = append(repo.Users, owner, member, teammate)
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_phase11_owner", ActorName: "Web dashboard", IsOwner: true}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_phase11_member", ActorName: "Web dashboard"}
+	teammateAuth := types.AuthContext{UserID: teammate.ID, UserDisplayName: teammate.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_phase11_teammate", ActorName: "Web dashboard"}
+
+	team, err := repo.CreateTeam(context.Background(), "phase11-team", "Phase 11 Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{member.ID, teammate.ID} {
+		if _, err := repo.AddTeamMember(context.Background(), team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	privateThread, err := svc.CreateThread(context.Background(), memberAuth, "Disabled owner private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedThread, err := svc.CreateThread(context.Background(), memberAuth, "Disabled owner shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(context.Background(), member.ID, sharedThread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if thread, err := svc.GetThread(context.Background(), teammateAuth, sharedThread.ID); err != nil || thread == nil {
+		t.Fatalf("shared thread unavailable before disable: thread=%#v err=%v", thread, err)
+	}
+
+	active, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), memberAuth, "ChatGPT", "chatgpt", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), memberAuth, "Old CLI", "local", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := repo.RevokeAPIKey(context.Background(), member.ID, revoked.Name); err != nil || !removed {
+		t.Fatalf("pre-revoke credential removed=%t err=%v", removed, err)
+	}
+	credentials, err := svc.ListOwnerAPIKeys(context.Background(), ownerAuth)
+	if err != nil || len(credentials) != 2 || credentials[0].TokenHash == "" || credentials[0].Key != "" {
+		t.Fatalf("owner credential metadata=%#v err=%v", credentials, err)
+	}
+	ownerKeyAuth := ownerAuth
+	ownerKeyAuth.SubjectType = types.AuthSubjectAPIKey
+	ownerKeyAuth.SessionID = ""
+	ownerKeyAuth.KeyID = "key_owner_phase11"
+	if _, err := svc.ListOwnerAPIKeys(context.Background(), ownerKeyAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("owner API key listed credentials: %v", err)
+	}
+	if _, err := svc.ListOwnerAPIKeys(context.Background(), memberAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("ordinary browser listed credentials: %v", err)
+	}
+	if err := svc.RevokeOwnerAPIKey(context.Background(), ownerAuth, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RevokeOwnerAPIKey(context.Background(), ownerAuth, active.ID); err != nil {
+		t.Fatalf("idempotent owner revoke failed: %v", err)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(context.Background(), active.Key); err != nil || authenticated != nil {
+		t.Fatalf("owner-revoked credential authenticated: auth=%#v err=%v", authenticated, err)
+	}
+
+	disabled, err := svc.SetUserDisabled(context.Background(), ownerAuth, member.ID, true)
+	if err != nil || disabled.DisabledAt == nil {
+		t.Fatalf("disable user=%#v err=%v", disabled, err)
+	}
+	if teams, err := repo.ListUserTeams(context.Background(), member.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("disabled user memberships=%#v err=%v", teams, err)
+	}
+	if _, err := svc.AddTeamMember(context.Background(), ownerAuth, team.ID, member.ID); !hasCodedError(err, "USER_DISABLED") {
+		t.Fatalf("disabled user was re-added to team: %v", err)
+	}
+	allCredentials, err := svc.ListOwnerAPIKeys(context.Background(), ownerAuth)
+	if err != nil || len(allCredentials) != 2 {
+		t.Fatalf("credentials after disable=%#v err=%v", allCredentials, err)
+	}
+	for _, credential := range allCredentials {
+		if credential.RevokedAt == nil {
+			t.Fatalf("credential remained active after disable: %#v", credential)
+		}
+	}
+	if thread, err := svc.GetThread(context.Background(), teammateAuth, sharedThread.ID); err != nil || thread == nil {
+		t.Fatalf("qualified teammate lost disabled owner's shared thread: thread=%#v err=%v", thread, err)
+	}
+	if _, err := svc.GetThread(context.Background(), teammateAuth, privateThread.ID); !errors.Is(err, ErrThreadNotFound) {
+		t.Fatalf("disabled owner's private thread leaked: %v", err)
+	}
+	if _, err := svc.SetUserDisabled(context.Background(), ownerAuth, member.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if teams, err := repo.ListUserTeams(context.Background(), member.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("enable restored memberships=%#v err=%v", teams, err)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(context.Background(), active.Key); err != nil || authenticated != nil {
+		t.Fatalf("enable restored revoked credential: auth=%#v err=%v", authenticated, err)
+	}
+}
+
 func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := New(repo, &assets.FakeStore{})

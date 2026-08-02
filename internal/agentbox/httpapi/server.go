@@ -59,6 +59,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/owner/invitations/", s.ownerInvitation)
 	s.mux.HandleFunc("/api/owner/users", s.ownerUsers)
 	s.mux.HandleFunc("/api/owner/users/", s.ownerUserAction)
+	s.mux.HandleFunc("/api/owner/credentials", s.ownerCredentials)
+	s.mux.HandleFunc("/api/owner/credentials/", s.ownerCredential)
 	s.mux.HandleFunc("/api/owner/teams", s.ownerTeams)
 	s.mux.HandleFunc("/api/owner/teams/", s.ownerTeam)
 	s.mux.HandleFunc("/api/keys", s.keys)
@@ -156,6 +158,42 @@ func (s *Server) ownerUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+func (s *Server) ownerCredentials(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	credentials, err := s.service.ListOwnerAPIKeys(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credentials": credentials})
+}
+
+func (s *Server) ownerCredential(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodDelete) {
+		return
+	}
+	credentialID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/credentials/"), "/")
+	if credentialID == "" || strings.Contains(credentialID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if err := s.service.RevokeOwnerAPIKey(r.Context(), *authContext, credentialID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": credentialID})
 }
 
 func (s *Server) ownerTeams(w http.ResponseWriter, r *http.Request) {

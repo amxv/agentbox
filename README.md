@@ -156,7 +156,7 @@ AGENTBOX_MAX_FILE_SIZE_BYTES
 R2_PUBLIC_BASE_URL
 ```
 
-Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
+Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. The permanent-owner browser can inspect deployment-wide credential metadata and force-revoke any credential from `/owner/users`, but secrets are never recoverable. Disabling a user revokes sessions, credentials, and pending CLI codes and removes every team membership in one transaction without deleting that user's threads, messages, assets, shares, or attribution snapshots. Enabling the account does not restore any of those access paths. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
 
 ```bash
 agentbox owner setup-token \

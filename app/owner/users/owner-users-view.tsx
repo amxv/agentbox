@@ -29,6 +29,19 @@ type TeamWithMembers = Team & {
   members: User[];
 };
 
+type Credential = {
+  id: string;
+  user_id: string;
+  name: string;
+  purpose: string;
+  key_masked: string;
+  token_prefix: string;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string;
+  revoked_at?: string;
+};
+
 type Invitation = {
   id: string;
   created_by_user_id: string;
@@ -65,6 +78,7 @@ export function OwnerUsersView() {
   const router = useRouter();
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<TeamWithMembers[]>([]);
+  const [credentials, setCredentials] = useState<Credential[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [created, setCreated] = useState<CreatedInvitation | null>(null);
   const [expiryMinutes, setExpiryMinutes] = useState(7 * 24 * 60);
@@ -95,27 +109,40 @@ export function OwnerUsersView() {
     return result;
   }, [teams]);
 
+  const credentialsByUser = useMemo(() => {
+    const result = new Map<string, Credential[]>();
+    for (const credential of credentials) {
+      const userCredentials = result.get(credential.user_id) ?? [];
+      userCredentials.push(credential);
+      result.set(credential.user_id, userCredentials);
+    }
+    return result;
+  }, [credentials]);
+
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [usersResponse, invitationsResponse, teamsResponse] = await Promise.all([
+      const [usersResponse, invitationsResponse, teamsResponse, credentialsResponse] = await Promise.all([
         fetch("/api/owner/users", { cache: "no-store" }),
         fetch("/api/owner/invitations", { cache: "no-store" }),
-        fetch("/api/owner/teams", { cache: "no-store" })
+        fetch("/api/owner/teams", { cache: "no-store" }),
+        fetch("/api/owner/credentials", { cache: "no-store" })
       ]);
-      if ([usersResponse, invitationsResponse, teamsResponse].some((response) => response.status === 401 || response.status === 403)) {
+      if ([usersResponse, invitationsResponse, teamsResponse, credentialsResponse].some((response) => response.status === 401 || response.status === 403)) {
         router.replace("/login?next=/owner/users");
         return;
       }
-      const [usersData, invitationsData, teamsData] = await Promise.all([
+      const [usersData, invitationsData, teamsData, credentialsData] = await Promise.all([
         responseJSON(usersResponse),
         responseJSON(invitationsResponse),
-        responseJSON(teamsResponse)
+        responseJSON(teamsResponse),
+        responseJSON(credentialsResponse)
       ]);
       const nextTeams = (teamsData.teams ?? []) as TeamWithMembers[];
       setUsers(usersData.users ?? []);
       setInvitations(invitationsData.invitations ?? []);
       setTeams(nextTeams);
+      setCredentials(credentialsData.credentials ?? []);
       setTeamNameDrafts(Object.fromEntries(nextTeams.map((team) => [team.id, team.name])));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -176,6 +203,19 @@ export function OwnerUsersView() {
     try {
       const action = disabled ? "disable" : "enable";
       await responseJSON(await fetch(`/api/owner/users/${encodeURIComponent(user.id)}/${action}`, { method: "POST" }));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function revokeCredential(credential: Credential) {
+    setBusy(`credential:${credential.id}`);
+    setError(null);
+    try {
+      await responseJSON(await fetch(`/api/owner/credentials/${encodeURIComponent(credential.id)}`, { method: "DELETE" }));
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -275,7 +315,7 @@ export function OwnerUsersView() {
       <main className={styles.main}>
         <section className={styles.hero}>
           <div><p className={styles.eyebrow}>Deployment administration</p><h1>Users, teams, invitations.</h1><p>Manage deployment-wide identity without collapsing actor attribution. Teams overlap freely, while every thread remains private until it is explicitly shared.</p></div>
-          <div className={styles.metrics}><div><span>Users</span><b>{users.length}</b></div><div><span>Teams</span><b>{teams.length}</b></div><div><span>Active invitations</span><b>{activeInvitations}</b></div></div>
+          <div className={styles.metrics}><div><span>Users</span><b>{users.length}</b></div><div><span>Teams</span><b>{teams.length}</b></div><div><span>Active credentials</span><b>{credentials.filter((credential) => !credential.revoked_at).length}</b></div><div><span>Active invitations</span><b>{activeInvitations}</b></div></div>
         </section>
 
         {error && <div className={styles.error}><strong>Owner action failed.</strong><span>{error}</span></div>}
@@ -309,7 +349,7 @@ export function OwnerUsersView() {
             {!loading && teams.length === 0 && <p className={styles.empty}>No teams yet. Users can remain teamless indefinitely.</p>}
             {teams.map((team) => {
               const memberIDs = new Set(team.members.map((member) => member.id));
-              const availableUsers = users.filter((user) => !memberIDs.has(user.id));
+              const availableUsers = users.filter((user) => !user.disabled_at && !memberIDs.has(user.id));
               const selectedUserID = memberDrafts[team.id] || availableUsers[0]?.id || "";
               return <article className={styles.teamCard} key={team.id}>
                 <div className={styles.teamCardTop}><div><code>{team.slug}</code><span>{team.id}</span></div><strong>{team.members.length} {team.members.length === 1 ? "member" : "members"}</strong></div>
@@ -334,10 +374,19 @@ export function OwnerUsersView() {
               {loading && <p className={styles.empty}>Loading users…</p>}
               {!loading && users.map((user) => {
                 const userTeams = teamsByUser.get(user.id) ?? [];
+                const userCredentials = credentialsByUser.get(user.id) ?? [];
                 return <article className={styles.userRow} key={user.id}>
                   <div className={styles.avatar}>{user.display_name.slice(0, 1).toUpperCase()}</div>
                   <div className={styles.identity}><div><strong>{user.display_name}</strong>{user.is_owner && <span className={styles.ownerBadge}>Owner</span>}{user.disabled_at && <span className={styles.disabledBadge}>Disabled</span>}</div><span>{user.email}</span><div className={styles.tags}>{userTeams.length === 0 ? <em className={styles.noTeam}>No teams</em> : userTeams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}</div><code>{user.id}</code></div>
                   <div className={styles.rowAction}>{user.is_owner ? <span>Protected</span> : <button type="button" disabled={busy === `user:${user.id}`} onClick={()=>setDisabled(user, !user.disabled_at)}>{busy === `user:${user.id}` ? "Saving…" : user.disabled_at ? "Enable" : "Disable"}</button>}</div>
+                  <div className={styles.credentialList}>
+                    <div className={styles.credentialHeading}><span>Credentials</span><small>{userCredentials.filter((credential) => !credential.revoked_at).length} active</small></div>
+                    {userCredentials.length === 0 && <p>No credentials created.</p>}
+                    {userCredentials.map((credential) => <div className={styles.credentialRow} key={credential.id}>
+                      <div><div><strong>{credential.name}</strong><em>{credential.purpose}</em>{credential.revoked_at && <em className={styles.revokedBadge}>Revoked</em>}</div><code>{credential.key_masked || `${credential.token_prefix}…`}</code><span>Created {new Date(credential.created_at).toLocaleString()} · {credential.last_used_at ? `Last used ${new Date(credential.last_used_at).toLocaleString()}` : "Never used"}</span></div>
+                      {!credential.revoked_at && <button className={styles.ghost} type="button" disabled={busy === `credential:${credential.id}`} onClick={()=>revokeCredential(credential)}>{busy === `credential:${credential.id}` ? "Revoking…" : "Revoke"}</button>}
+                    </div>)}
+                  </div>
                 </article>;
               })}
             </div>

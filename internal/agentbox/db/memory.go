@@ -1007,6 +1007,23 @@ func (m *MemoryRepository) ListAPIKeys(_ context.Context, userID string) ([]type
 	return keys, nil
 }
 
+func (m *MemoryRepository) ListAllAPIKeys(context.Context) ([]types.APIKey, error) {
+	keys := append([]types.APIKey(nil), m.APIKeys...)
+	sort.SliceStable(keys, func(i, j int) bool {
+		if keys[i].UserID != keys[j].UserID {
+			return keys[i].UserID < keys[j].UserID
+		}
+		if !strings.EqualFold(keys[i].Name, keys[j].Name) {
+			return strings.ToLower(keys[i].Name) < strings.ToLower(keys[j].Name)
+		}
+		if keys[i].CreatedAt != keys[j].CreatedAt {
+			return keys[i].CreatedAt < keys[j].CreatedAt
+		}
+		return keys[i].ID < keys[j].ID
+	})
+	return keys, nil
+}
+
 func (m *MemoryRepository) RevokeAPIKey(_ context.Context, userID string, name string) (bool, error) {
 	now := isoMillis(time.Now())
 	for i, key := range m.APIKeys {
@@ -1015,6 +1032,21 @@ func (m *MemoryRepository) RevokeAPIKey(_ context.Context, userID string, name s
 			m.APIKeys[i].UpdatedAt = now
 			return true, nil
 		}
+	}
+	return false, nil
+}
+
+func (m *MemoryRepository) RevokeAPIKeyByID(_ context.Context, keyID string) (bool, error) {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.APIKeys {
+		if m.APIKeys[index].ID != strings.TrimSpace(keyID) {
+			continue
+		}
+		if m.APIKeys[index].RevokedAt == nil {
+			m.APIKeys[index].RevokedAt = &now
+		}
+		m.APIKeys[index].UpdatedAt = now
+		return true, nil
 	}
 	return false, nil
 }
@@ -1521,6 +1553,9 @@ func (m *MemoryRepository) AddTeamMember(_ context.Context, teamID string, userI
 	userFound := false
 	for _, user := range m.Users {
 		if user.ID == userID {
+			if user.DisabledAt != nil {
+				return types.TeamMembership{}, types.ErrUserDisabled
+			}
 			userFound = true
 			break
 		}
@@ -1614,6 +1649,13 @@ func (m *MemoryRepository) SetUserDisabled(_ context.Context, userID string, dis
 					m.CLICodes[codeIndex].ConsumedAt = &now
 				}
 			}
+			memberships := m.TeamMemberships[:0]
+			for _, membership := range m.TeamMemberships {
+				if membership.UserID != user.ID {
+					memberships = append(memberships, membership)
+				}
+			}
+			m.TeamMemberships = memberships
 		} else {
 			user.DisabledAt = nil
 		}

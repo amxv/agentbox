@@ -97,7 +97,7 @@
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -532,6 +532,7 @@
 .invitationRow {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 15px;
   padding: 18px 24px;
   border-bottom: 1px solid var(--border);
@@ -599,6 +600,92 @@
 .rowAction span {
   opacity: .45;
   font-size: 11px;
+}
+
+.credentialList {
+  display: grid;
+  width: calc(100% - 53px);
+  gap: 8px;
+  margin-left: 53px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.credentialHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: color-mix(in srgb, var(--foreground) 58%, transparent);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.credentialHeading small {
+  font-size: 9px;
+}
+
+.credentialList > p {
+  margin: 0;
+  opacity: .42;
+  font-size: 11px;
+}
+
+.credentialRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--background);
+}
+
+.credentialRow > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.credentialRow > div > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.credentialRow strong {
+  font-size: 12px;
+}
+
+.credentialRow em,
+.revokedBadge {
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  opacity: .62;
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.credentialRow code {
+  overflow: hidden;
+  opacity: .72;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.credentialRow span {
+  opacity: .46;
+  font-size: 10px;
+}
+
+.revokedBadge {
+  color: #c04d4d;
 }
 
 .invitationRow {
@@ -742,5 +829,19 @@
   .rowAction {
     width: 100%;
     padding-left: 53px;
+  }
+
+  .credentialList {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .credentialRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .credentialRow button {
+    width: 100%;
   }
 }
