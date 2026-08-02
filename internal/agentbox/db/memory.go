@@ -468,17 +468,25 @@ func (m *MemoryRepository) threadVisibility(thread types.Thread) types.ThreadVis
 }
 
 func (m *MemoryRepository) ListThreads(_ context.Context, userID string, limit int) ([]types.Thread, error) {
+	return m.ListThreadsFiltered(context.Background(), userID, types.ThreadListParams{Limit: limit, Filter: types.ThreadFilterAll})
+}
+
+func (m *MemoryRepository) ListThreadsFiltered(_ context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error) {
 	threads := []types.Thread{}
 	for _, thread := range m.Threads {
-		if m.normalThreadAccess(thread, userID) != nil {
+		if m.normalThreadAccess(thread, userID) == nil {
+			continue
+		}
+		thread.VisibilitySummary = m.threadVisibilitySummary(thread, userID)
+		if matchesThreadFilter(thread.VisibilitySummary, params.Filter, params.TeamRef) {
 			threads = append(threads, thread)
 		}
 	}
 	sort.Slice(threads, func(i, j int) bool {
 		return threads[i].UpdatedAt > threads[j].UpdatedAt
 	})
-	if limit < len(threads) {
-		threads = threads[:limit]
+	if params.Limit < len(threads) {
+		threads = threads[:params.Limit]
 	}
 	return threads, nil
 }
@@ -492,6 +500,10 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 	})
 	for _, thread := range threads {
 		if m.normalThreadAccess(thread, userID) == nil {
+			continue
+		}
+		visibilitySummary := m.threadVisibilitySummary(thread, userID)
+		if !matchesThreadFilter(visibilitySummary, params.Filter, params.TeamRef) {
 			continue
 		}
 		if params.CreatedBy != nil && *params.CreatedBy != "" && thread.CreatedBy != *params.CreatedBy {
@@ -532,6 +544,7 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 			MessageCount:       messageCount,
 			LastMessagePreview: previewText(lastBody, 180),
 			MatchedSnippets:    matchedSnippets(params.Query, thread.Title, matchedBody),
+			VisibilitySummary:  visibilitySummary,
 		})
 		if len(results) >= params.Limit {
 			break
@@ -554,6 +567,7 @@ func (m *MemoryRepository) CreateThread(_ context.Context, userID string, title 
 		CreatedByKeyID:           optionalString(auth.KeyID),
 		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
 		CreatedByActorName:       optionalString(auth.ActorName),
+		VisibilitySummary:        newPrivateThreadVisibilitySummary(),
 	}
 	m.Threads = append(m.Threads, thread)
 	return thread, nil
@@ -573,6 +587,7 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, userID str
 		CreatedByKeyID:           optionalString(auth.KeyID),
 		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
 		CreatedByActorName:       optionalString(auth.ActorName),
+		VisibilitySummary:        newPrivateThreadVisibilitySummary(),
 	}
 	message := types.Message{
 		ID:                       "msg_" + uuid.NewString(),
@@ -618,9 +633,65 @@ func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID 
 		sort.Slice(messages, func(i, j int) bool {
 			return messages[i].CreatedAt < messages[j].CreatedAt
 		})
+		thread.VisibilitySummary = m.threadVisibilitySummary(thread, userID)
 		return &types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: m.threadVisibility(thread)}, nil
 	}
 	return nil, nil
+}
+
+func (m *MemoryRepository) threadVisibilitySummary(thread types.Thread, userID string) types.ThreadVisibilitySummary {
+	visibility := m.threadVisibility(thread)
+	sharedTeams := make([]types.ThreadTeamSummary, 0, len(visibility.SharedTeams))
+	matchedTeams := []types.ThreadTeamSummary{}
+	membershipIDs := map[string]struct{}{}
+	for _, membership := range m.TeamMemberships {
+		if membership.UserID == userID {
+			membershipIDs[membership.TeamID] = struct{}{}
+		}
+	}
+	for _, team := range visibility.SharedTeams {
+		summary := types.ThreadTeamSummary{ID: team.ID, Slug: team.Slug, Name: team.Name}
+		sharedTeams = append(sharedTeams, summary)
+		if _, matched := membershipIDs[team.ID]; matched {
+			matchedTeams = append(matchedTeams, summary)
+		}
+	}
+	isPublic := false
+	for _, link := range m.ThreadPublicLinks {
+		if link.ThreadID == thread.ID && link.RevokedAt == nil {
+			isPublic = true
+			break
+		}
+	}
+	ownedByMe := thread.OwnerUserID == userID
+	return types.ThreadVisibilitySummary{
+		OwnedByMe:    ownedByMe,
+		Private:      ownedByMe && len(sharedTeams) == 0 && !isPublic,
+		SharedWithMe: !ownedByMe && len(matchedTeams) > 0,
+		SharedTeams:  sharedTeams,
+		MatchedTeams: matchedTeams,
+		Public:       isPublic,
+	}
+}
+
+func matchesThreadFilter(summary types.ThreadVisibilitySummary, filter string, teamRef string) bool {
+	switch filter {
+	case "", types.ThreadFilterAll:
+		return true
+	case types.ThreadFilterPrivate:
+		return summary.Private
+	case types.ThreadFilterShared:
+		return summary.SharedWithMe
+	case types.ThreadFilterPublic:
+		return summary.Public
+	case types.ThreadFilterTeam:
+		for _, team := range summary.MatchedTeams {
+			if team.ID == teamRef || strings.EqualFold(team.Slug, teamRef) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *MemoryRepository) GetAsset(_ context.Context, userID string, assetID string) (*types.Asset, error) {

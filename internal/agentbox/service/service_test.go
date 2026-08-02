@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -415,6 +417,126 @@ func TestServiceThreadAndMessageFlow(t *testing.T) {
 	}
 	if firstMessage.ThreadID != threadWithMessage.ID || firstMessage.Body != "first body" {
 		t.Fatalf("threadWithMessage=%#v firstMessage=%#v", threadWithMessage, firstMessage)
+	}
+}
+
+func TestUnifiedThreadFiltersAndVisibilitySummaries(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+	owner := types.AuthContext{UserID: "usr_filter_owner", UserDisplayName: "Filter Owner", ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
+	member := types.AuthContext{UserID: "usr_filter_member", UserDisplayName: "Filter Member", ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
+	outsider := types.AuthContext{UserID: "usr_filter_outsider", UserDisplayName: "Filter Outsider", ActorName: "Web dashboard", SubjectType: types.AuthSubjectUserSession}
+	for _, authContext := range []types.AuthContext{owner, member, outsider} {
+		repo.Users = append(repo.Users, types.User{ID: authContext.UserID, TenantID: types.DefaultTenantID, Email: authContext.UserID + "@example.com", DisplayName: authContext.UserDisplayName, Role: "member"})
+	}
+	engineering, err := repo.CreateTeam(context.Background(), "engineering", "Engineering")
+	if err != nil {
+		t.Fatal(err)
+	}
+	research, err := repo.CreateTeam(context.Background(), "research", "Research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.UserID, member.UserID} {
+		for _, teamID := range []string{engineering.ID, research.ID} {
+			if _, err := repo.AddTeamMember(context.Background(), teamID, userID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	privateThread, err := svc.CreateThread(context.Background(), member, "filter marker private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamThread, err := svc.CreateThread(context.Background(), owner, "filter marker team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(context.Background(), owner.UserID, teamThread.ID, []string{engineering.ID}); err != nil {
+		t.Fatal(err)
+	}
+	multiThread, err := svc.CreateThread(context.Background(), owner, "filter marker multi public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetThreadVisibility(context.Background(), owner.UserID, multiThread.ID, []string{engineering.ID, research.ID}); err != nil {
+		t.Fatal(err)
+	}
+	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: multiThread.ID, Token: "agpub_filter_multi", TokenHash: "filter-multi-hash", TokenPrefix: "agpub_filter", CreatedAt: multiThread.CreatedAt, UpdatedAt: multiThread.UpdatedAt})
+	memberPublicThread, err := svc.CreateThread(context.Background(), member, "filter marker owned public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: memberPublicThread.ID, Token: "agpub_filter_owned", TokenHash: "filter-owned-hash", TokenPrefix: "agpub_filter", CreatedAt: memberPublicThread.CreatedAt, UpdatedAt: memberPublicThread.UpdatedAt})
+	outsiderPublicThread, err := svc.CreateThread(context.Background(), outsider, "filter marker inaccessible public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.ThreadPublicLinks = append(repo.ThreadPublicLinks, types.ThreadPublicLink{ThreadID: outsiderPublicThread.ID, Token: "agpub_filter_outsider", TokenHash: "filter-outsider-hash", TokenPrefix: "agpub_filter", CreatedAt: outsiderPublicThread.CreatedAt, UpdatedAt: outsiderPublicThread.UpdatedAt})
+
+	assertIDs := func(t *testing.T, got []types.Thread, want ...string) {
+		t.Helper()
+		gotIDs := make([]string, 0, len(got))
+		for _, thread := range got {
+			gotIDs = append(gotIDs, thread.ID)
+		}
+		sort.Strings(gotIDs)
+		sort.Strings(want)
+		if !reflect.DeepEqual(gotIDs, want) {
+			t.Fatalf("thread IDs = %v, want %v", gotIDs, want)
+		}
+	}
+	list := func(filter string, teamRef string) []types.Thread {
+		threads, err := svc.ListThreadsFiltered(context.Background(), member, types.ThreadListParams{Limit: 50, Filter: filter, TeamRef: teamRef})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return threads
+	}
+
+	all := list(types.ThreadFilterAll, "")
+	assertIDs(t, all, privateThread.ID, teamThread.ID, multiThread.ID, memberPublicThread.ID)
+	assertIDs(t, list(types.ThreadFilterPrivate, ""), privateThread.ID)
+	assertIDs(t, list(types.ThreadFilterShared, ""), teamThread.ID, multiThread.ID)
+	assertIDs(t, list(types.ThreadFilterTeam, engineering.Slug), teamThread.ID, multiThread.ID)
+	assertIDs(t, list(types.ThreadFilterTeam, research.ID), multiThread.ID)
+	assertIDs(t, list(types.ThreadFilterPublic, ""), multiThread.ID, memberPublicThread.ID)
+
+	byID := map[string]types.Thread{}
+	for _, thread := range all {
+		byID[thread.ID] = thread
+	}
+	if summary := byID[privateThread.ID].VisibilitySummary; !summary.OwnedByMe || !summary.Private || summary.Public || len(summary.SharedTeams) != 0 {
+		t.Fatalf("private summary = %#v", summary)
+	}
+	if summary := byID[multiThread.ID].VisibilitySummary; summary.OwnedByMe || !summary.SharedWithMe || !summary.Public || len(summary.SharedTeams) != 2 || len(summary.MatchedTeams) != 2 {
+		t.Fatalf("multi-team summary = %#v", summary)
+	}
+
+	search, err := svc.SearchThreads(context.Background(), member, types.SearchThreadParams{Query: "filter marker", Limit: 50, Filter: types.ThreadFilterTeam, TeamRef: engineering.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(search) != 2 || !search[0].VisibilitySummary.SharedWithMe || !search[1].VisibilitySummary.SharedWithMe {
+		t.Fatalf("filtered search = %#v", search)
+	}
+	seen := map[string]bool{}
+	for _, result := range search {
+		if seen[result.ID] {
+			t.Fatalf("duplicate multi-team result: %#v", search)
+		}
+		seen[result.ID] = true
+	}
+
+	for _, params := range []types.ThreadListParams{
+		{Filter: "missing"},
+		{Filter: types.ThreadFilterTeam},
+		{Filter: types.ThreadFilterPrivate, TeamRef: engineering.ID},
+	} {
+		if _, err := svc.ListThreadsFiltered(context.Background(), member, params); err == nil {
+			t.Fatalf("invalid filter unexpectedly succeeded: %#v", params)
+		}
 	}
 }
 

@@ -540,16 +540,78 @@ func TestTeamSharedThreadAccessIsImmediateCompleteAndIndexed(t *testing.T) {
 	}
 
 	threads, err := repository.ListThreads(ctx, member.ID, 50)
-	if err != nil || len(threads) != 1 || threads[0].ID != thread.ID {
+	if err != nil || len(threads) != 1 || threads[0].ID != thread.ID || !threads[0].VisibilitySummary.SharedWithMe || len(threads[0].VisibilitySummary.SharedTeams) != 2 || len(threads[0].VisibilitySummary.MatchedTeams) != 1 {
 		t.Fatalf("team list=%#v err=%v", threads, err)
 	}
-	search, err := repository.SearchThreads(ctx, member.ID, types.SearchThreadParams{Query: "indexed marker", Limit: 20})
-	if err != nil || len(search) != 1 || search[0].ID != thread.ID {
+	sharedThreads, err := repository.ListThreadsFiltered(ctx, member.ID, types.ThreadListParams{Limit: 50, Filter: types.ThreadFilterShared})
+	if err != nil || len(sharedThreads) != 1 || sharedThreads[0].ID != thread.ID {
+		t.Fatalf("shared filter=%#v err=%v", sharedThreads, err)
+	}
+	teamAThreads, err := repository.ListThreadsFiltered(ctx, member.ID, types.ThreadListParams{Limit: 50, Filter: types.ThreadFilterTeam, TeamRef: teamA.Slug})
+	if err != nil || len(teamAThreads) != 1 || teamAThreads[0].ID != thread.ID {
+		t.Fatalf("team A filter=%#v err=%v", teamAThreads, err)
+	}
+	teamBThreads, err := repository.ListThreadsFiltered(ctx, member.ID, types.ThreadListParams{Limit: 50, Filter: types.ThreadFilterTeam, TeamRef: teamB.ID})
+	if err != nil || len(teamBThreads) != 0 {
+		t.Fatalf("team B filter leaked non-membership=%#v err=%v", teamBThreads, err)
+	}
+	privateThreads, err := repository.ListThreadsFiltered(ctx, member.ID, types.ThreadListParams{Limit: 50, Filter: types.ThreadFilterPrivate})
+	if err != nil || len(privateThreads) != 0 {
+		t.Fatalf("private filter=%#v err=%v", privateThreads, err)
+	}
+	search, err := repository.SearchThreads(ctx, member.ID, types.SearchThreadParams{Query: "indexed marker", Limit: 20, Filter: types.ThreadFilterTeam, TeamRef: teamA.ID})
+	if err != nil || len(search) != 1 || search[0].ID != thread.ID || !search[0].VisibilitySummary.SharedWithMe {
 		t.Fatalf("team search=%#v err=%v", search, err)
 	}
 	detail, err := repository.GetThread(ctx, member.ID, thread.ID)
-	if err != nil || detail == nil || len(detail.Visibility.SharedTeams) != 2 {
+	if err != nil || detail == nil || len(detail.Visibility.SharedTeams) != 2 || !detail.VisibilitySummary.SharedWithMe {
 		t.Fatalf("team detail=%#v err=%v", detail, err)
+	}
+
+	publicToken := "agpub_filter_integration"
+	if _, err := repository.CreateThreadPublicLink(ctx, member.ID, thread.ID, publicToken, hashSecret(publicToken), "agpub_filter", false); err != nil {
+		t.Fatal(err)
+	}
+	publicThreads, err := repository.ListThreadsFiltered(ctx, member.ID, types.ThreadListParams{Limit: 50, Filter: types.ThreadFilterPublic})
+	if err != nil || len(publicThreads) != 1 || publicThreads[0].ID != thread.ID || !publicThreads[0].VisibilitySummary.Public {
+		t.Fatalf("public filter=%#v err=%v", publicThreads, err)
+	}
+
+	planTx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planTx.Rollback(ctx)
+	if _, err := planTx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	filterPlanRows, err := planTx.Query(ctx, `explain (costs off)
+select t.id
+from threads t
+where `+normalThreadAccessPredicate+`
+  and `+threadFilterPredicate("$2", "$3")+`
+order by t.updated_at desc, t.id
+limit $4
+`, member.ID, types.ThreadFilterTeam, teamA.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filterPlan := strings.Builder{}
+	for filterPlanRows.Next() {
+		var line string
+		if err := filterPlanRows.Scan(&line); err != nil {
+			filterPlanRows.Close()
+			t.Fatal(err)
+		}
+		filterPlan.WriteString(line)
+		filterPlan.WriteByte('\n')
+	}
+	filterPlanRows.Close()
+	if err := filterPlanRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(filterPlan.String(), "thread_team_shares_team_thread_idx") || !strings.Contains(filterPlan.String(), "team_memberships_user_team_idx") {
+		t.Fatalf("team filter plan did not use membership/share indexes:\n%s", filterPlan.String())
 	}
 
 	textType := "text/plain"

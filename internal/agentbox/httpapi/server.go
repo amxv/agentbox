@@ -540,6 +540,8 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit := numberQuery(r, "limit", 50)
+		filter := strings.TrimSpace(r.URL.Query().Get("filter"))
+		teamRef := strings.TrimSpace(r.URL.Query().Get("team"))
 		if query := strings.TrimSpace(r.URL.Query().Get("query")); query != "" {
 			createdBy := optionalQuery(r, "created_by")
 			updatedAfter := optionalQuery(r, "updated_after")
@@ -548,6 +550,8 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 				Limit:        limit,
 				CreatedBy:    createdBy,
 				UpdatedAfter: updatedAfter,
+				Filter:       filter,
+				TeamRef:      teamRef,
 			})
 			if err != nil {
 				writeServiceError(w, err)
@@ -556,7 +560,11 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
 			return
 		}
-		threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
+		threads, err := s.service.ListThreadsFiltered(r.Context(), *authContext, types.ThreadListParams{
+			Limit:   limit,
+			Filter:  filter,
+			TeamRef: teamRef,
+		})
 		if err != nil {
 			writeServiceError(w, err)
 			return

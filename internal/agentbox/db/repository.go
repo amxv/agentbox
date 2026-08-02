@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,6 +41,83 @@ const normalThreadAccessPredicate = `(
       and access_membership.user_id = $1
   )
 )`
+
+const threadVisibilitySummarySelect = `
+  (t.owner_user_id = $1) as owned_by_me,
+  coalesce((
+    select jsonb_agg(
+      jsonb_build_object('id', summary_team.id, 'slug', summary_team.slug, 'name', summary_team.name)
+      order by lower(summary_team.name), lower(summary_team.slug), summary_team.id
+    )
+    from thread_team_shares summary_share
+    join teams summary_team on summary_team.id = summary_share.team_id
+    where summary_share.thread_id = t.id
+  ), '[]'::jsonb) as shared_teams,
+  coalesce((
+    select jsonb_agg(
+      jsonb_build_object('id', matched_team.id, 'slug', matched_team.slug, 'name', matched_team.name)
+      order by lower(matched_team.name), lower(matched_team.slug), matched_team.id
+    )
+    from thread_team_shares matched_share
+    join teams matched_team on matched_team.id = matched_share.team_id
+    join team_memberships matched_membership
+      on matched_membership.team_id = matched_share.team_id
+     and matched_membership.user_id = $1
+    where matched_share.thread_id = t.id
+  ), '[]'::jsonb) as matched_teams,
+  exists (
+    select 1
+    from thread_public_links summary_public
+    where summary_public.thread_id = t.id
+      and summary_public.revoked_at is null
+  ) as is_public`
+
+func threadFilterPredicate(filterPlaceholder string, teamPlaceholder string) string {
+	return `(
+  ` + filterPlaceholder + ` = 'all'
+  or (
+    ` + filterPlaceholder + ` = 'private'
+    and t.owner_user_id = $1
+    and not exists (select 1 from thread_team_shares private_share where private_share.thread_id = t.id)
+    and not exists (
+      select 1 from thread_public_links private_public
+      where private_public.thread_id = t.id and private_public.revoked_at is null
+    )
+  )
+  or (
+    ` + filterPlaceholder + ` = 'shared'
+    and t.owner_user_id <> $1
+    and exists (
+      select 1
+      from thread_team_shares shared_filter
+      join team_memberships shared_membership
+        on shared_membership.team_id = shared_filter.team_id
+      where shared_filter.thread_id = t.id
+        and shared_membership.user_id = $1
+    )
+  )
+  or (
+    ` + filterPlaceholder + ` = 'team'
+    and exists (
+      select 1
+      from thread_team_shares team_filter
+      join teams filter_team on filter_team.id = team_filter.team_id
+      join team_memberships filter_membership
+        on filter_membership.team_id = team_filter.team_id
+      where team_filter.thread_id = t.id
+        and filter_membership.user_id = $1
+        and (filter_team.id = ` + teamPlaceholder + ` or lower(filter_team.slug) = lower(` + teamPlaceholder + `))
+    )
+  )
+  or (
+    ` + filterPlaceholder + ` = 'public'
+    and exists (
+      select 1 from thread_public_links public_filter
+      where public_filter.thread_id = t.id and public_filter.revoked_at is null
+    )
+  )
+)`
+}
 
 func Open(ctx context.Context, cfg config.Config) (*Repository, error) {
 	if cfg.DatabaseURL == "" {
@@ -730,14 +808,30 @@ order by a.created_at, a.id
 }
 
 func (r *Repository) ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error) {
+	return r.ListThreadsFiltered(ctx, userID, types.ThreadListParams{Limit: limit, Filter: types.ThreadFilterAll})
+}
+
+func (r *Repository) ListThreadsFiltered(ctx context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error) {
 	rows, err := r.pool.Query(ctx, `
-select id, tenant_id, owner_user_id, title, created_at, updated_at, created_by,
-       created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
+select
+  t.id,
+  t.tenant_id,
+  t.owner_user_id,
+  t.title,
+  t.created_at,
+  t.updated_at,
+  t.created_by,
+  t.created_by_user_id,
+  t.created_by_key_id,
+  t.created_by_user_display_name,
+  t.created_by_actor_name,
+`+threadVisibilitySummarySelect+`
 from threads t
 where `+normalThreadAccessPredicate+`
-order by updated_at desc
-limit $2
-`, userID, limit)
+  and `+threadFilterPredicate("$2", "$3")+`
+order by t.updated_at desc, t.id
+limit $4
+`, userID, params.Filter, params.TeamRef, params.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -745,7 +839,7 @@ limit $2
 
 	threads := []types.Thread{}
 	for rows.Next() {
-		thread, err := scanThread(rows)
+		thread, err := scanThreadWithVisibility(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -777,11 +871,11 @@ select
   t.created_at,
   t.updated_at,
   t.created_by,
-  count(m.id)::int as message_count,
+  (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
   coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc limit 1), '') as last_message_body,
-  coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $2 order by mm.created_at desc limit 1), '') as matched_message_body
+  coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $2 order by mm.created_at desc limit 1), '') as matched_message_body,
+`+threadVisibilitySummarySelect+`
 from threads t
-left join messages m on m.thread_id = t.id
 where `+normalThreadAccessPredicate+`
   and ($3::text is null or t.created_by = $3)
   and ($4::timestamptz is null or t.updated_at > $4)
@@ -789,10 +883,10 @@ where `+normalThreadAccessPredicate+`
     t.title ilike $2
     or exists (select 1 from messages sm where sm.thread_id = t.id and sm.body ilike $2)
   )
-group by t.id, t.tenant_id, t.owner_user_id, t.title, t.created_at, t.updated_at, t.created_by
+  and `+threadFilterPredicate("$5", "$6")+`
 order by t.updated_at desc
-limit $5
-`, userID, pattern, createdBy, updatedAfter, params.Limit)
+limit $7
+`, userID, pattern, createdBy, updatedAfter, params.Filter, params.TeamRef, params.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -804,8 +898,31 @@ limit $5
 		var updatedAt time.Time
 		var lastBody string
 		var matchedBody string
+		var ownedByMe bool
+		var sharedTeamsJSON []byte
+		var matchedTeamsJSON []byte
+		var isPublic bool
 		result := types.SearchThreadResult{}
-		if err := rows.Scan(&result.ID, &result.TenantID, &result.OwnerUserID, &result.Title, &createdAt, &updatedAt, &result.CreatedBy, &result.MessageCount, &lastBody, &matchedBody); err != nil {
+		if err := rows.Scan(
+			&result.ID,
+			&result.TenantID,
+			&result.OwnerUserID,
+			&result.Title,
+			&createdAt,
+			&updatedAt,
+			&result.CreatedBy,
+			&result.MessageCount,
+			&lastBody,
+			&matchedBody,
+			&ownedByMe,
+			&sharedTeamsJSON,
+			&matchedTeamsJSON,
+			&isPublic,
+		); err != nil {
+			return nil, err
+		}
+		result.VisibilitySummary, err = decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
+		if err != nil {
 			return nil, err
 		}
 		result.CreatedAt = isoMillis(createdAt)
@@ -819,7 +936,7 @@ limit $5
 
 func (r *Repository) CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error) {
 	id := "thr_" + uuid.NewString()
-	return scanThread(r.pool.QueryRow(ctx, `
+	thread, err := scanThread(r.pool.QueryRow(ctx, `
 insert into threads (
   id, tenant_id, owner_user_id, title, created_by, created_by_user_id, created_by_key_id,
   created_by_user_display_name, created_by_actor_name
@@ -828,6 +945,11 @@ values ($1, 'ten_default', $2, $3, $4, $5, $6, $7, $8)
 returning id, tenant_id, owner_user_id, title, created_at, updated_at, created_by,
           created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
 `, id, userID, title, auth.ActorName, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)))
+	if err != nil {
+		return types.Thread{}, err
+	}
+	thread.VisibilitySummary = newPrivateThreadVisibilitySummary()
+	return thread, nil
 }
 
 func (r *Repository) CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error) {
@@ -870,13 +992,25 @@ returning id, tenant_id, thread_id, author, body, body_content_type, created_at,
 	if err := tx.Commit(ctx); err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
+	thread.VisibilitySummary = newPrivateThreadVisibilitySummary()
 	return thread, message, nil
 }
 
 func (r *Repository) GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error) {
-	thread, err := scanThread(r.pool.QueryRow(ctx, `
-select t.id, t.tenant_id, t.owner_user_id, t.title, t.created_at, t.updated_at, t.created_by,
-       t.created_by_user_id, t.created_by_key_id, t.created_by_user_display_name, t.created_by_actor_name
+	thread, err := scanThreadWithVisibility(r.pool.QueryRow(ctx, `
+select
+  t.id,
+  t.tenant_id,
+  t.owner_user_id,
+  t.title,
+  t.created_at,
+  t.updated_at,
+  t.created_by,
+  t.created_by_user_id,
+  t.created_by_key_id,
+  t.created_by_user_display_name,
+  t.created_by_actor_name,
+`+threadVisibilitySummarySelect+`
 from threads t
 where `+normalThreadAccessPredicate+` and t.id = $2
 `, userID, threadID))
@@ -2203,7 +2337,37 @@ func scanThread(row threadScanner) (types.Thread, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	var thread types.Thread
-	err := row.Scan(
+	err := row.Scan(threadScanDest(&thread, &createdAt, &updatedAt)...)
+	thread.CreatedAt = isoMillis(createdAt)
+	thread.UpdatedAt = isoMillis(updatedAt)
+	return thread, err
+}
+
+func scanThreadWithVisibility(row threadScanner) (types.Thread, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	var thread types.Thread
+	var ownedByMe bool
+	var sharedTeamsJSON []byte
+	var matchedTeamsJSON []byte
+	var isPublic bool
+	dest := threadScanDest(&thread, &createdAt, &updatedAt)
+	dest = append(dest, &ownedByMe, &sharedTeamsJSON, &matchedTeamsJSON, &isPublic)
+	if err := row.Scan(dest...); err != nil {
+		return types.Thread{}, err
+	}
+	thread.CreatedAt = isoMillis(createdAt)
+	thread.UpdatedAt = isoMillis(updatedAt)
+	visibility, err := decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
+	if err != nil {
+		return types.Thread{}, err
+	}
+	thread.VisibilitySummary = visibility
+	return thread, nil
+}
+
+func threadScanDest(thread *types.Thread, createdAt *time.Time, updatedAt *time.Time) []any {
+	return []any{
 		&thread.ID,
 		&thread.TenantID,
 		&thread.OwnerUserID,
@@ -2215,10 +2379,39 @@ func scanThread(row threadScanner) (types.Thread, error) {
 		&thread.CreatedByKeyID,
 		&thread.CreatedByUserDisplayName,
 		&thread.CreatedByActorName,
-	)
-	thread.CreatedAt = isoMillis(createdAt)
-	thread.UpdatedAt = isoMillis(updatedAt)
-	return thread, err
+	}
+}
+
+func decodeThreadVisibilitySummary(ownedByMe bool, sharedTeamsJSON []byte, matchedTeamsJSON []byte, isPublic bool) (types.ThreadVisibilitySummary, error) {
+	sharedTeams := []types.ThreadTeamSummary{}
+	matchedTeams := []types.ThreadTeamSummary{}
+	if len(sharedTeamsJSON) > 0 {
+		if err := json.Unmarshal(sharedTeamsJSON, &sharedTeams); err != nil {
+			return types.ThreadVisibilitySummary{}, err
+		}
+	}
+	if len(matchedTeamsJSON) > 0 {
+		if err := json.Unmarshal(matchedTeamsJSON, &matchedTeams); err != nil {
+			return types.ThreadVisibilitySummary{}, err
+		}
+	}
+	return types.ThreadVisibilitySummary{
+		OwnedByMe:    ownedByMe,
+		Private:      ownedByMe && len(sharedTeams) == 0 && !isPublic,
+		SharedWithMe: !ownedByMe && len(matchedTeams) > 0,
+		SharedTeams:  sharedTeams,
+		MatchedTeams: matchedTeams,
+		Public:       isPublic,
+	}, nil
+}
+
+func newPrivateThreadVisibilitySummary() types.ThreadVisibilitySummary {
+	return types.ThreadVisibilitySummary{
+		OwnedByMe:    true,
+		Private:      true,
+		SharedTeams:  []types.ThreadTeamSummary{},
+		MatchedTeams: []types.ThreadTeamSummary{},
+	}
 }
 
 func scanMessage(row threadScanner, assets []types.Asset) (types.Message, error) {

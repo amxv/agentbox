@@ -145,17 +145,47 @@ type OnboardingState struct {
 }
 
 type Thread struct {
-	ID                       string  `json:"id"`
-	TenantID                 string  `json:"-"`
-	OwnerUserID              string  `json:"owner_user_id"`
-	Title                    string  `json:"title"`
-	CreatedAt                string  `json:"created_at"`
-	UpdatedAt                string  `json:"updated_at"`
-	CreatedBy                string  `json:"created_by"`
-	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
-	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
-	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	ID                       string                  `json:"id"`
+	TenantID                 string                  `json:"-"`
+	OwnerUserID              string                  `json:"owner_user_id"`
+	Title                    string                  `json:"title"`
+	CreatedAt                string                  `json:"created_at"`
+	UpdatedAt                string                  `json:"updated_at"`
+	CreatedBy                string                  `json:"created_by"`
+	CreatedByUserID          *string                 `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string                 `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string                 `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string                 `json:"created_by_actor_name,omitempty"`
+	VisibilitySummary        ThreadVisibilitySummary `json:"visibility_summary"`
+}
+
+type ThreadTeamSummary struct {
+	ID   string `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type ThreadVisibilitySummary struct {
+	OwnedByMe    bool                `json:"owned_by_me"`
+	Private      bool                `json:"private"`
+	SharedWithMe bool                `json:"shared_with_me"`
+	SharedTeams  []ThreadTeamSummary `json:"shared_teams"`
+	MatchedTeams []ThreadTeamSummary `json:"matched_teams"`
+	Public       bool                `json:"public"`
+}
+
+const (
+	ThreadFilterAll     = "all"
+	ThreadFilterPrivate = "private"
+	ThreadFilterShared  = "shared"
+	ThreadFilterTeam    = "team"
+	ThreadFilterPublic  = "public"
+)
+
+type ThreadListParams struct {
+	Limit   int
+	Filter  string
+	TeamRef string
 }
 
 type ThreadAccess struct {
@@ -341,16 +371,17 @@ type UploadedAssetReference struct {
 }
 
 type SearchThreadResult struct {
-	ID                 string   `json:"id"`
-	TenantID           string   `json:"-"`
-	OwnerUserID        string   `json:"owner_user_id"`
-	Title              string   `json:"title"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
-	CreatedBy          string   `json:"created_by"`
-	MessageCount       int      `json:"message_count"`
-	LastMessagePreview string   `json:"last_message_preview"`
-	MatchedSnippets    []string `json:"matched_snippets"`
+	ID                 string                  `json:"id"`
+	TenantID           string                  `json:"-"`
+	OwnerUserID        string                  `json:"owner_user_id"`
+	Title              string                  `json:"title"`
+	CreatedAt          string                  `json:"created_at"`
+	UpdatedAt          string                  `json:"updated_at"`
+	CreatedBy          string                  `json:"created_by"`
+	MessageCount       int                     `json:"message_count"`
+	LastMessagePreview string                  `json:"last_message_preview"`
+	MatchedSnippets    []string                `json:"matched_snippets"`
+	VisibilitySummary  ThreadVisibilitySummary `json:"visibility_summary"`
 }
 
 type SearchThreadParams struct {
@@ -358,6 +389,8 @@ type SearchThreadParams struct {
 	Limit        int
 	CreatedBy    *string
 	UpdatedAfter *string
+	Filter       string
+	TeamRef      string
 }
 
 type APIKey struct {

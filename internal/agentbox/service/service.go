@@ -35,7 +35,7 @@ type Repository interface {
 	RevokeThreadPublicLink(ctx context.Context, userID string, threadID string) (bool, error)
 	GetThreadByPublicTokenHash(ctx context.Context, tokenHash string) (*types.ThreadWithMessages, error)
 	GetAssetByPublicTokenHash(ctx context.Context, tokenHash string, assetID string) (*types.Asset, error)
-	ListThreads(ctx context.Context, userID string, limit int) ([]types.Thread, error)
+	ListThreadsFiltered(ctx context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error)
 	SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
@@ -94,13 +94,26 @@ func New(repo Repository, assetStore assets.AssetStore) *Service {
 }
 
 func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit int) ([]types.Thread, error) {
+	return s.ListThreadsFiltered(ctx, auth, types.ThreadListParams{Limit: limit})
+}
+
+func (s *Service) ListThreadsFiltered(ctx context.Context, auth types.AuthContext, params types.ThreadListParams) ([]types.Thread, error) {
 	if err := requireScope(auth, "threads:read"); err != nil {
 		return nil, err
 	}
-	if limit == 0 {
-		limit = 50
+	if params.Limit == 0 {
+		params.Limit = 50
 	}
-	return s.repo.ListThreads(ctx, auth.UserID, limit)
+	if params.Limit < 1 {
+		params.Limit = 1
+	}
+	if params.Limit > 200 {
+		params.Limit = 200
+	}
+	if err := normalizeThreadFilter(&params.Filter, &params.TeamRef); err != nil {
+		return nil, err
+	}
+	return s.repo.ListThreadsFiltered(ctx, auth.UserID, params)
 }
 
 func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
@@ -133,7 +146,31 @@ func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, par
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "updated_after must be an RFC3339 timestamp."}
 		}
 	}
+	if err := normalizeThreadFilter(&params.Filter, &params.TeamRef); err != nil {
+		return nil, err
+	}
 	return s.repo.SearchThreads(ctx, auth.UserID, params)
+}
+
+func normalizeThreadFilter(filter *string, teamRef *string) error {
+	*filter = strings.ToLower(strings.TrimSpace(*filter))
+	*teamRef = strings.TrimSpace(*teamRef)
+	if *filter == "" {
+		*filter = types.ThreadFilterAll
+	}
+	switch *filter {
+	case types.ThreadFilterAll, types.ThreadFilterPrivate, types.ThreadFilterShared, types.ThreadFilterPublic:
+		if *teamRef != "" {
+			return CodedError{Code: "INVALID_ARGUMENT", Message: "team is valid only with filter=team."}
+		}
+	case types.ThreadFilterTeam:
+		if *teamRef == "" {
+			return CodedError{Code: "INVALID_ARGUMENT", Message: "team is required when filter=team."}
+		}
+	default:
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "filter must be all, private, shared, team, or public."}
+	}
+	return nil
 }
 
 func (s *Service) CreateThread(ctx context.Context, auth types.AuthContext, title string) (types.Thread, error) {

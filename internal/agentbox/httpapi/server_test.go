@@ -1411,8 +1411,28 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 	}
 
 	listB := request(http.MethodGet, "/api/threads", keyB.Key, "")
-	if listB.Code != http.StatusOK || !strings.Contains(listB.Body.String(), thread.ID) {
+	if listB.Code != http.StatusOK || !strings.Contains(listB.Body.String(), thread.ID) || !strings.Contains(listB.Body.String(), `"shared_with_me":true`) || !strings.Contains(listB.Body.String(), `"slug":"shared-team"`) {
 		t.Fatalf("team member list status=%d body=%s", listB.Code, listB.Body.String())
+	}
+	sharedFilterB := request(http.MethodGet, "/api/threads?filter=shared", keyB.Key, "")
+	if sharedFilterB.Code != http.StatusOK || !strings.Contains(sharedFilterB.Body.String(), thread.ID) {
+		t.Fatalf("shared filter status=%d body=%s", sharedFilterB.Code, sharedFilterB.Body.String())
+	}
+	teamFilterB := request(http.MethodGet, "/api/threads?filter=team&team=shared-team", keyB.Key, "")
+	if teamFilterB.Code != http.StatusOK || !strings.Contains(teamFilterB.Body.String(), thread.ID) {
+		t.Fatalf("team filter status=%d body=%s", teamFilterB.Code, teamFilterB.Body.String())
+	}
+	privateFilterB := request(http.MethodGet, "/api/threads?filter=private", keyB.Key, "")
+	if privateFilterB.Code != http.StatusOK || strings.Contains(privateFilterB.Body.String(), thread.ID) {
+		t.Fatalf("private filter status=%d body=%s", privateFilterB.Code, privateFilterB.Body.String())
+	}
+	publicFilterB := request(http.MethodGet, "/api/threads?filter=public", keyB.Key, "")
+	if publicFilterB.Code != http.StatusOK || strings.Contains(publicFilterB.Body.String(), thread.ID) {
+		t.Fatalf("public filter status=%d body=%s", publicFilterB.Code, publicFilterB.Body.String())
+	}
+	invalidFilterB := request(http.MethodGet, "/api/threads?filter=team", keyB.Key, "")
+	if invalidFilterB.Code != http.StatusBadRequest || !strings.Contains(invalidFilterB.Body.String(), `"code":"INVALID_ARGUMENT"`) {
+		t.Fatalf("invalid filter status=%d body=%s", invalidFilterB.Code, invalidFilterB.Body.String())
 	}
 	searchB := request(http.MethodGet, "/api/threads?query=team-shared", keyB.Key, "")
 	if searchB.Code != http.StatusOK || !strings.Contains(searchB.Body.String(), thread.ID) {
