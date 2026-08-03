@@ -55,24 +55,17 @@
   ],
   "commands": [
     {
-      "name": "latest-messages",
-      "title": "Latest Messages",
-      "subtitle": "Agentbox",
-      "description": "Browse recent messages across Agentbox threads and copy message content.",
-      "mode": "view"
-    },
-    {
-      "name": "search-threads",
-      "title": "Search Threads",
-      "subtitle": "Agentbox",
-      "description": "Search recent Agentbox threads, inspect messages, and open thread actions.",
-      "mode": "view"
-    },
-    {
       "name": "list-threads",
-      "title": "List Threads",
+      "title": "Browse Threads",
       "subtitle": "Agentbox",
-      "description": "Browse recent Agentbox threads, inspect messages, and open thread actions.",
+      "description": "Browse and search every Agentbox thread currently accessible to your user.",
+      "mode": "view"
+    },
+    {
+      "name": "create-thread",
+      "title": "Create Thread",
+      "subtitle": "Agentbox",
+      "description": "Create a private Agentbox thread with an optional first message and attachments.",
       "mode": "view"
     },
     {

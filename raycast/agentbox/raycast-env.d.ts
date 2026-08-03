@@ -20,12 +20,10 @@ type ExtensionPreferences = {
 declare type Preferences = ExtensionPreferences
 
 declare namespace Preferences {
-  /** Preferences accessible in the `latest-messages` command */
-  export type LatestMessages = ExtensionPreferences & {}
-  /** Preferences accessible in the `search-threads` command */
-  export type SearchThreads = ExtensionPreferences & {}
   /** Preferences accessible in the `list-threads` command */
   export type ListThreads = ExtensionPreferences & {}
+  /** Preferences accessible in the `create-thread` command */
+  export type CreateThread = ExtensionPreferences & {}
   /** Preferences accessible in the `post-message` command */
   export type PostMessage = ExtensionPreferences & {}
   /** Preferences accessible in the `doctor` command */
@@ -33,12 +31,10 @@ declare namespace Preferences {
 }
 
 declare namespace Arguments {
-  /** Arguments passed to the `latest-messages` command */
-  export type LatestMessages = {}
-  /** Arguments passed to the `search-threads` command */
-  export type SearchThreads = {}
   /** Arguments passed to the `list-threads` command */
   export type ListThreads = {}
+  /** Arguments passed to the `create-thread` command */
+  export type CreateThread = {}
   /** Arguments passed to the `post-message` command */
   export type PostMessage = {}
   /** Arguments passed to the `doctor` command */

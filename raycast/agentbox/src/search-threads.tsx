@@ -1,17 +1,34 @@
-import { Action, ActionPanel, Icon, Keyboard, List, Toast, openExtensionPreferences, showToast } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Icon,
+  Keyboard,
+  List,
+  LocalStorage,
+  Toast,
+  openExtensionPreferences,
+  showToast,
+} from "@raycast/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentboxAPIError,
   Asset,
   Message,
   SearchThreadResult,
+  Team,
   Thread,
+  ThreadFilter,
+  ThreadPageInfo,
+  ThreadVisibilitySummary,
   ThreadWithMessages,
+  attributionLabel,
   dashboardThreadUrl,
   getAssetDownloadUrl,
   getThread,
-  listThreads,
-  searchThreads,
+  listTeams,
+  listThreadPage,
+  searchThreadPage,
+  visibilityLabels,
 } from "./api";
 import { AttachmentActions } from "./attachment-actions";
 import {
@@ -36,6 +53,7 @@ type ListedThread = {
   messageCount?: number;
   lastMessagePreview?: string;
   matchedSnippets: string[];
+  visibility: ThreadVisibilitySummary;
 };
 
 type LoadState = {
@@ -46,91 +64,284 @@ type LoadState = {
 
 type ThreadMessage = Message & {
   threadTitle: string;
-  threadCreatedBy: string;
-  threadUpdatedAt: string;
 };
 
-const RECENT_LIMIT = 50;
-const SEARCH_LIMIT = 25;
+type InboxFilterValue = "all" | "private" | "shared" | "public" | `team:${string}`;
+
+const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 300;
 const IMAGE_PREVIEW_URL_EXPIRY_SECONDS = 60 * 60;
+const INBOX_FILTER_STORAGE_KEY = "agentbox.inbox.filter";
+const EMPTY_PAGE: ThreadPageInfo = { limit: PAGE_SIZE, has_more: false };
 
-export default function SearchThreads() {
+export default function BrowseThreads() {
   const [searchText, setSearchText] = useState("");
   const [threads, setThreads] = useState<ListedThread[]>([]);
+  const [page, setPage] = useState<ThreadPageInfo>(EMPTY_PAGE);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [filterValue, setFilterValue] = useState<InboxFilterValue>("all");
+  const [filterReady, setFilterReady] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>({ isLoading: true, error: null, hasLoaded: false });
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const requestId = useRef(0);
+  const loadingMoreRef = useRef(false);
 
   const trimmedSearch = searchText.trim();
 
-  const loadThreads = useCallback(async (query: string, runId: number) => {
-    setLoadState((current) => ({ ...current, isLoading: true, error: null }));
-    try {
-      const data = query
-        ? (await searchThreads({ query, limit: SEARCH_LIMIT })).map(threadFromSearchResult)
-        : (await listThreads(RECENT_LIMIT)).map(threadFromRecent);
-      if (requestId.current !== runId) {
-        return;
+  useEffect(() => {
+    let cancelled = false;
+    async function restoreFilter() {
+      const stored = await LocalStorage.getItem<string>(INBOX_FILTER_STORAGE_KEY);
+      if (!cancelled) {
+        setFilterValue(parseInboxFilter(stored));
+        setFilterReady(true);
       }
-      setThreads(data);
-      setLoadState({ isLoading: false, error: null, hasLoaded: true });
-    } catch (error) {
-      if (requestId.current !== runId) {
-        return;
-      }
-      const normalized = normalizeError(error);
-      setThreads([]);
-      setLoadState({ isLoading: false, error: normalized, hasLoaded: true });
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Could not load threads",
-        message: normalized.message,
-      });
     }
+    void restoreFilter();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    async function loadCallerTeams() {
+      try {
+        const data = await listTeams();
+        if (cancelled) return;
+        setTeams(data);
+        setFilterValue((current) => {
+          if (!current.startsWith("team:")) return current;
+          const slug = current.slice("team:".length);
+          if (data.some((team) => team.slug === slug)) return current;
+          void LocalStorage.setItem(INBOX_FILTER_STORAGE_KEY, "all");
+          return "all";
+        });
+      } catch (error) {
+        if (!cancelled) {
+          await showToast({
+            style: Toast.Style.Failure,
+            title: "Could not load team filters",
+            message: normalizeError(error).message,
+          });
+        }
+      }
+    }
+    void loadCallerTeams();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  const loadThreads = useCallback(
+    async ({
+      append,
+      cursor,
+      filter,
+      query,
+      runId,
+    }: {
+      append: boolean;
+      cursor?: string;
+      filter: InboxFilterValue;
+      query: string;
+      runId: number;
+    }) => {
+      if (append) {
+        loadingMoreRef.current = true;
+        setIsLoadingMore(true);
+      } else {
+        setLoadState((current) => ({ ...current, isLoading: true, error: null }));
+      }
+      try {
+        const filterParams = threadFilterParams(filter);
+        const response = query
+          ? await searchThreadPage({ query, limit: PAGE_SIZE, cursor, ...filterParams })
+          : await listThreadPage({ limit: PAGE_SIZE, cursor, ...filterParams });
+        if (requestId.current !== runId) return;
+        const data = query
+          ? response.threads.map((thread) => threadFromSearchResult(thread as SearchThreadResult))
+          : response.threads.map((thread) => threadFromRecent(thread as Thread));
+        setThreads((current) => (append ? appendUniqueThreads(current, data) : data));
+        setPage(response.page);
+        setLoadState({ isLoading: false, error: null, hasLoaded: true });
+      } catch (error) {
+        if (requestId.current !== runId) return;
+        const normalized = normalizeError(error);
+        if (!append) setThreads([]);
+        setLoadState({ isLoading: false, error: normalized, hasLoaded: true });
+        await showToast({
+          style: Toast.Style.Failure,
+          title: append ? "Could not load more threads" : "Could not load threads",
+          message: normalized.message,
+        });
+      } finally {
+        if (requestId.current === runId) {
+          loadingMoreRef.current = false;
+          setIsLoadingMore(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!filterReady) return;
     const runId = requestId.current + 1;
     requestId.current = runId;
     const timeout = setTimeout(
       () => {
-        void loadThreads(trimmedSearch, runId);
+        void loadThreads({ append: false, filter: filterValue, query: trimmedSearch, runId });
       },
       trimmedSearch ? SEARCH_DEBOUNCE_MS : 0,
     );
     return () => clearTimeout(timeout);
-  }, [loadThreads, refreshKey, trimmedSearch]);
+  }, [filterReady, filterValue, loadThreads, refreshKey, trimmedSearch]);
+
+  function resetForRequestChange() {
+    requestId.current += 1;
+    loadingMoreRef.current = false;
+    setIsLoadingMore(false);
+    setThreads([]);
+    setPage(EMPTY_PAGE);
+  }
+
+  function handleSearchTextChange(value: string) {
+    if (value === searchText) return;
+    resetForRequestChange();
+    setSearchText(value);
+  }
+
+  function handleFilterChange(value: string) {
+    const next = parseInboxFilter(value);
+    if (next === filterValue) return;
+    resetForRequestChange();
+    setFilterValue(next);
+    void LocalStorage.setItem(INBOX_FILTER_STORAGE_KEY, next);
+  }
+
+  function refresh() {
+    resetForRequestChange();
+    setRefreshKey((value) => value + 1);
+  }
+
+  function loadMore() {
+    const cursor = page.next_cursor;
+    if (!cursor || loadingMoreRef.current) return;
+    void loadThreads({
+      append: true,
+      cursor,
+      filter: filterValue,
+      query: trimmedSearch,
+      runId: requestId.current,
+    });
+  }
 
   const emptyView = (
     <ThreadEmptyView
       error={loadState.error}
       hasLoaded={loadState.hasLoaded}
       isSearching={Boolean(trimmedSearch)}
-      onRefresh={() => setRefreshKey((value) => value + 1)}
+      onRefresh={refresh}
     />
   );
 
   return (
     <List
       filtering={false}
-      isLoading={loadState.isLoading}
+      isLoading={loadState.isLoading || isLoadingMore || !filterReady}
       isShowingDetail
-      onSearchTextChange={setSearchText}
+      onSearchTextChange={handleSearchTextChange}
+      pagination={{ pageSize: PAGE_SIZE, hasMore: Boolean(page.next_cursor), onLoadMore: loadMore }}
+      searchBarAccessory={<ThreadFilterDropdown teams={teams} value={filterValue} onChange={handleFilterChange} />}
       searchBarPlaceholder="Search Agentbox threads"
       searchText={searchText}
     >
       {threads.length === 0 ? (
         emptyView
       ) : (
-        <List.Section title={trimmedSearch ? "Search Results" : "Recent Threads"} subtitle={`${threads.length}`}>
+        <List.Section
+          title={trimmedSearch ? "Search Results" : inboxFilterTitle(filterValue, teams)}
+          subtitle={`${threads.length}${page.has_more ? "+" : ""}`}
+        >
           {threads.map((thread) => (
-            <ThreadListItem key={thread.id} thread={thread} onRefresh={() => setRefreshKey((value) => value + 1)} />
+            <ThreadListItem key={thread.id} thread={thread} onRefresh={refresh} />
           ))}
         </List.Section>
       )}
     </List>
   );
+}
+
+function ThreadFilterDropdown({
+  onChange,
+  teams,
+  value,
+}: {
+  onChange: (value: string) => void;
+  teams: Team[];
+  value: InboxFilterValue;
+}) {
+  return (
+    <List.Dropdown tooltip="Filter accessible threads" value={value} onChange={onChange}>
+      <List.Dropdown.Section title="Visibility">
+        <List.Dropdown.Item value="all" title="All Accessible" />
+        <List.Dropdown.Item value="private" title="Private to Me" />
+        <List.Dropdown.Item value="shared" title="Shared with Me" />
+        <List.Dropdown.Item value="public" title="Public" />
+      </List.Dropdown.Section>
+      {teams.length > 0 && (
+        <List.Dropdown.Section title="Teams">
+          {teams.map((team) => (
+            <List.Dropdown.Item key={team.id} value={`team:${team.slug}`} title={team.name} />
+          ))}
+        </List.Dropdown.Section>
+      )}
+    </List.Dropdown>
+  );
+}
+
+function parseInboxFilter(value: string | undefined): InboxFilterValue {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "private" || trimmed === "shared" || trimmed === "public") return trimmed;
+  if (trimmed.startsWith("team:") && trimmed.slice("team:".length).trim()) {
+    return `team:${trimmed.slice("team:".length).trim()}`;
+  }
+  return "all";
+}
+
+function threadFilterParams(value: InboxFilterValue): { filter: ThreadFilter; team?: string } {
+  if (value.startsWith("team:")) {
+    return { filter: "team", team: value.slice("team:".length) };
+  }
+  switch (value) {
+    case "private":
+      return { filter: "private" };
+    case "shared":
+      return { filter: "shared" };
+    case "public":
+      return { filter: "public" };
+    default:
+      return { filter: "all" };
+  }
+}
+
+function appendUniqueThreads(current: ListedThread[], incoming: ListedThread[]): ListedThread[] {
+  const byID = new Map(current.map((thread) => [thread.id, thread]));
+  for (const thread of incoming) byID.set(thread.id, thread);
+  return Array.from(byID.values());
+}
+
+function inboxFilterTitle(value: InboxFilterValue, teams: Team[]): string {
+  if (value === "private") return "Private to Me";
+  if (value === "shared") return "Shared with Me";
+  if (value === "public") return "Public Threads";
+  if (value.startsWith("team:")) {
+    const slug = value.slice("team:".length);
+    return teams.find((team) => team.slug === slug)?.name ?? "Team Threads";
+  }
+  return "All Accessible Threads";
 }
 
 function ThreadListItem({ thread, onRefresh }: { thread: ListedThread; onRefresh: () => void }) {
@@ -462,10 +673,18 @@ function ThreadEmptyView({
 }
 
 function ThreadListMetadata({ thread }: { thread: ListedThread }) {
+  const labels = visibilityLabels(thread.visibility);
   return (
     <List.Item.Detail.Metadata>
-      <List.Item.Detail.Metadata.Label title="Thread ID" text={thread.id} />
       <List.Item.Detail.Metadata.Label title="Creator" text={thread.createdBy || "Unknown"} />
+      <List.Item.Detail.Metadata.Label title="Visibility" text={labels.join(" · ")} />
+      <List.Item.Detail.Metadata.Label title="Owned by Me" text={thread.visibility.owned_by_me ? "Yes" : "No"} />
+      {thread.visibility.matched_teams.length > 0 && (
+        <List.Item.Detail.Metadata.Label
+          title="Matched Teams"
+          text={thread.visibility.matched_teams.map((team) => team.name).join(", ")}
+        />
+      )}
       {thread.messageCount !== undefined && (
         <List.Item.Detail.Metadata.Label title="Messages" text={String(thread.messageCount)} />
       )}
@@ -483,8 +702,9 @@ function threadFromRecent(thread: Thread): ListedThread {
     title: thread.title,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
-    createdBy: thread.created_by,
+    createdBy: attributionLabel(thread, thread.created_by),
     matchedSnippets: [],
+    visibility: thread.visibility_summary,
   };
 }
 
@@ -494,15 +714,17 @@ function threadFromSearchResult(thread: SearchThreadResult): ListedThread {
     title: thread.title,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
-    createdBy: thread.created_by,
+    createdBy: attributionLabel(thread, thread.created_by),
     messageCount: thread.message_count,
     lastMessagePreview: thread.last_message_preview,
     matchedSnippets: thread.matched_snippets ?? [],
+    visibility: thread.visibility_summary,
   };
 }
 
 function threadAccessories(thread: ListedThread): List.Item.Accessory[] {
   const accessories: List.Item.Accessory[] = [];
+  accessories.push({ text: visibilityLabels(thread.visibility).join(" · "), icon: Icon.Eye });
   if (thread.messageCount !== undefined) {
     accessories.push({ text: `${thread.messageCount} msg`, icon: Icon.SpeechBubble });
   }
@@ -516,7 +738,19 @@ function threadAccessories(thread: ListedThread): List.Item.Accessory[] {
 }
 
 function threadListMarkdown(thread: ListedThread): string {
-  const lines = [`# ${escapeMarkdown(thread.title || thread.id)}`, "", `\`${thread.id}\``];
+  const lines = [
+    `# ${escapeMarkdown(thread.title || thread.id)}`,
+    "",
+    `**Visibility:** ${escapeMarkdown(visibilityLabels(thread.visibility).join(" · "))}`,
+    "",
+    `**Created by:** ${escapeMarkdown(thread.createdBy || "Unknown")}`,
+  ];
+  if (thread.visibility.matched_teams.length > 0) {
+    lines.push(
+      "",
+      `**Access through:** ${escapeMarkdown(thread.visibility.matched_teams.map((team) => team.name).join(", "))}`,
+    );
+  }
   if (thread.lastMessagePreview) {
     lines.push("", "## Latest Message", "", escapeMarkdown(thread.lastMessagePreview));
   }
@@ -593,7 +827,7 @@ function ThreadMessageEmptyView({
 function MessageMetadata({ message }: { message: ThreadMessage }) {
   return (
     <List.Item.Detail.Metadata>
-      <List.Item.Detail.Metadata.Label title="Author" text={message.author || "Unknown"} />
+      <List.Item.Detail.Metadata.Label title="Author" text={attributionLabel(message, message.author)} />
       <List.Item.Detail.Metadata.Label title="Attachments" text={String(message.assets.length)} />
       <List.Item.Detail.Metadata.Label title="Created" text={formatDate(message.created_at)} />
       <List.Item.Detail.Metadata.Separator />
@@ -637,8 +871,6 @@ function chronologicalThreadMessages(thread: ThreadWithMessages): ThreadMessage[
     .map(({ message }) => ({
       ...message,
       threadTitle: thread.title,
-      threadCreatedBy: thread.created_by,
-      threadUpdatedAt: thread.updated_at,
     }));
 }
 
@@ -656,7 +888,7 @@ function messageAccessories(message: ThreadMessage): List.Item.Accessory[] {
     accessories.push({ text: `${message.assets.length} file`, icon: Icon.Paperclip });
   }
   if (message.author) {
-    accessories.push({ text: message.author, icon: Icon.Person });
+    accessories.push({ text: attributionLabel(message, message.author), icon: Icon.Person });
   }
   if (message.created_at) {
     accessories.push({ date: new Date(message.created_at), tooltip: `Sent ${formatDate(message.created_at)}` });
@@ -665,11 +897,7 @@ function messageAccessories(message: ThreadMessage): List.Item.Accessory[] {
 }
 
 function safeDashboardThreadUrl(threadId: string): string {
-  try {
-    return dashboardThreadUrl(threadId);
-  } catch {
-    return `https://agentbox-black.vercel.app/threads/${encodeURIComponent(threadId)}`;
-  }
+  return dashboardThreadUrl(threadId);
 }
 
 function normalizeError(error: unknown): Error {

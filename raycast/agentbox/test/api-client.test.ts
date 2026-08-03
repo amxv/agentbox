@@ -454,4 +454,22 @@ test("Raycast source cannot regain tenant, persistence, attachment-public-URL, o
     assert.doesNotMatch(source, /asset\.public_url\b/, `${file} reads direct attachment public URLs`);
     assert.doesNotMatch(source, /\bmcpUrl\b|\/api\/mcp|Copy MCP URL/, `${file} reuses an MCP credential or endpoint`);
   }
+
+  assert.equal(sourceFiles.includes("latest-messages.tsx"), false, "the unbounded Latest Messages fan-out returned");
+  const browseSource = await readFile(path.join(sourceDirectory, "search-threads.tsx"), "utf8");
+  assert.match(browseSource, /pagination=\{\{/);
+  assert.match(browseSource, /<List\.Dropdown/);
+  assert.match(browseSource, /listThreadPage/);
+  assert.match(browseSource, /searchThreadPage/);
+  assert.match(browseSource, /LocalStorage\.setItem\(INBOX_FILTER_STORAGE_KEY/);
+  assert.match(browseSource, /requestId\.current/);
+
+  const manifest = JSON.parse(await readFile(path.join(testDirectory, "..", "package.json"), "utf8")) as {
+    commands: Array<{ name: string; title: string }>;
+  };
+  assert.deepEqual(
+    manifest.commands.map((command) => command.name),
+    ["list-threads", "create-thread", "post-message", "doctor"],
+  );
+  assert.equal(manifest.commands.find((command) => command.name === "list-threads")?.title, "Browse Threads");
 });
