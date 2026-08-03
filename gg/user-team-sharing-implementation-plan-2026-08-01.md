@@ -6,10 +6,10 @@
 - **Date:** 2026-08-01.
 - **Primary specification:** `docs/user-team-sharing-spec.md` (read in full). Every phase below must preserve its terminology and acceptance criteria.
 - **Planning format consumed:** the user-supplied `gg-plan-doc.md` and `blueprint-writer.md` artifacts. The discussion-first portion of the blueprint workflow was explicitly waived because the product decisions were resolved in the preceding conversation.
-- **Code inspected:** `cmd/api`, `cmd/migrate`, `internal/agentbox/{types,db,service,httpapi,mcpserver,assets,auth,config,profiles,cli}`, the Next.js routes and dashboard under `app/`, the SQL files under `migrations/`, and the existing Go tests.
+- **Code inspected:** `cmd/api`, `cmd/migrate`, `internal/agentbox/{types,db,service,httpapi,mcpserver,assets,auth,config,profiles,cli}`, the Next.js routes and dashboard under `app/`, the SQL files under `migrations/`, the complete Raycast package under `raycast/agentbox`, the Raycast setup pages/docs, and the existing Go/TypeScript tests.
 - **Verified baseline:** `go test ./...` passed on the cloned repository before these documentation-only commits.
 - **Not verified from production:** actual PostgreSQL row counts, actual R2 object counts and missing-object state, provider-specific backup facilities, current production environment variables, and whether anything outside this repository calls the legacy admin/tenant endpoints. The rollout phases treat these as pre-cutover facts that must be measured rather than assumed.
-- **Execution model:** Phases 1-14 are the shared Zodex implementation track. Agents working across ChatGPT sessions on `feat/user-team-sharing` must complete and push all code, migrations, tests, UI, CLI, MCP, documentation, credential-free tooling, and production runbooks. Phase 15 is reserved exclusively for a credentialed local agent to perform the real PostgreSQL/R2 backup, Vercel deployment, live migration, production credential setup, and final production verification.
+- **Execution model:** Phases 1-18 are the shared Zodex implementation track. Phases 1-14 are complete; Phases 15-18 add Raycast as a first-class user credential and ordinary participant surface. Agents working across ChatGPT sessions on `feat/user-team-sharing` must complete and push all code, migrations, tests, dashboard/Raycast UI, CLI, MCP, documentation, credential-free tooling, and production runbooks. Phase 19 is reserved exclusively for a credentialed local agent to perform the real PostgreSQL/R2 backup, Vercel deployment, live migration, per-user Raycast developer-mode setup, and final production verification.
 
 ## State of Current System
 
@@ -123,7 +123,7 @@ For a multi-user access-control migration, memory-only tests are insufficient. T
 - Teams are overlapping many-to-many groups managed only by the deployment owner.
 - Every thread has one owner and is private at creation.
 - A canonical thread may be shared with zero or more teams and may have one active public share.
-- Normal browser sessions and user credentials receive the same effective thread set.
+- Normal browser sessions and user credentials, including each user-owned Raycast installation, receive the same effective thread set.
 - The owner's special view-all capability exists only in an authenticated owner browser-session path; normal operations never inspect owner status to broaden access.
 
 ### Cross-phase vocabulary
@@ -200,7 +200,7 @@ List/search queries implement the predicate in SQL and remain indexed and pagina
 
 ### Visibility operation
 
-The backend exposes one atomic visibility operation shared by web, MCP, and CLI. Its public input/output semantics are fixed by `docs/user-team-sharing-spec.md`:
+The backend exposes one atomic visibility operation shared by web, MCP, CLI, and Raycast. Its public input/output semantics are fixed by `docs/user-team-sharing-spec.md`:
 
 ```text
 thread_id
@@ -224,7 +224,7 @@ The public page reuses the existing message renderer rather than maintaining a s
 
 Before production authorization changes, a verified PostgreSQL backup and R2 backup/inventory exist with matching manifests and counts. A dry run reports missing or orphaned content. Cutover creates the permanent owner account and assigns every legacy thread to it privately while preserving IDs, message ordering, bodies, attachment rows, storage keys, and free-form author snapshots.
 
-Credentials, sessions, tenant records, and CLI profile metadata are deliberately reset. Phase 14 removes the old application path and leaves the branch code-complete with no permanent compatibility fallback. Phase 15 applies and verifies that finished system against production.
+Credentials, sessions, tenant records, and CLI profile metadata are deliberately reset. Phase 14 removes the old application path. Phases 15-18 complete the Raycast credential, onboarding, extension, parity, and validation work so the branch is code-complete with no permanent compatibility fallback. Phase 19 applies and verifies that finished system against production and on real macOS Raycast developer installations.
 
 ## Decisions and Assumptions
 
@@ -240,12 +240,12 @@ Credentials, sessions, tenant records, and CLI profile metadata are deliberately
 8. **Use one unified accessible inbox.** Normal list/search operations return owned threads plus threads shared through any current team membership.
 9. **Use live, opaque, revocable public URLs.** Public pages are read-only, `noindex`, render Markdown, and expose authorized attachment previews/downloads.
 10. **Use one visibility MCP tool and one CLI subcommand.** `manage_thread_visibility` and `agentbox visibility` own both team and public changes.
-11. **Create ChatGPT, Claude, and local credentials on demand.** They use separate secrets and actor attribution; onboarding presents them as numbered steps.
+11. **Create ChatGPT, Claude, local, and Raycast credentials on demand.** They use separate secrets and actor attribution; onboarding presents them as numbered steps. Every Raycast development installation receives its own credential.
 12. **Assume one local machine for first onboarding.** Additional machine credentials are created later from settings.
 13. **Let users manage only their credentials.** The owner may inspect metadata and revoke, but cannot retrieve secrets.
 14. **Disable users rather than deleting or transferring them.** History and attribution remain; sessions, credentials, and memberships are revoked.
 15. **Allow owner purge of disabled-user attachments only.** Purge is by stable uploader user ID, deletes R2 objects, and leaves tombstones.
-16. **Defer Raycast distribution.** The data model may support future Raycast credentials, but this track does not publish or redesign the extension.
+16. **Make Raycast a first-class ordinary-user surface through local developer installation.** Each user independently runs the checked-in extension in Raycast developer mode and connects it to the same deployment with a dedicated user-owned credential. Public Store, private Store, and centrally managed Raycast team distribution remain out of scope.
 
 ### Assumptions
 
@@ -258,9 +258,11 @@ Credentials, sessions, tenant records, and CLI profile metadata are deliberately
 7. **Team removal preserves contributions and shares.** Removing a membership changes who qualifies for access; it does not delete the team's share rows or historical messages.
 8. **The existing browser-assisted CLI login remains a supported optional setup path.** The first-run onboarding prompt is the primary local setup, but `agentbox login` is useful for later machines once made user-scoped.
 9. **The API continues to accept query-string API keys for MCP and CLI.** This track changes ownership and access, not the existing remote MCP credential transport.
-10. **Pagination can preserve the current limit-based API initially, but SQL indexes and predicates must support cursor pagination later.** No phase may introduce in-memory filtering or N+1 team lookups on list/search hot paths.
+10. **Normal accessible list/search must be truly pageable.** Add a bounded cursor or continuation contract shared by the dashboard and Raycast so either client can traverse the complete effective-access set. SQL indexes and predicates must support the page order; no phase may introduce authorization filtering in memory or N+1 team/thread lookups.
 11. **Production deployment can tolerate a planned write pause for the final content-preserving cutover.** If zero-downtime writes are required, the final rollout phase must be amended before execution because dual writes would materially change the plan.
 12. **No external consumer requires the legacy `/api/admin/tenants`, `/api/admin/keys`, `agentbox init`, or `agentbox provision tenant` contracts.** The final cutover removes them. This must be verified against production usage before the deletion phase.
+13. **Every Raycast installation is local and unique.** The extension is loaded with `npm run dev` / `ray develop`, stores its deployment URL and dedicated API key in required Raycast preferences, and does not depend on a Raycast organization, team store, or the Go CLI at runtime.
+14. **The dashboard is the primary Raycast setup source.** `agentbox raycast-key` may remain as a user-scoped alternative, but onboarding and Credentials must always let a signed-in user create, rotate, revoke, and recover setup instructions for a Raycast installation without an owner secret.
 
 ## Acceptance Criteria
 
@@ -272,32 +274,37 @@ Credentials, sessions, tenant records, and CLI profile metadata are deliberately
 6. Public signup fails; a valid owner-generated invitation is required to register.
 7. Invitations are random, hashed, expiring, revocable, single-use, and can atomically create zero or several initial team memberships.
 8. Newly registered users immediately appear in the owner dashboard and receive an authenticated session plus resumable onboarding.
-9. Every new thread is private regardless of whether it is created by browser, API, MCP, or CLI.
+9. Every new thread is private regardless of whether it is created by browser, API, MCP, CLI, or Raycast.
 10. A user's browser sessions and active credentials can access exactly the same owned/team-shared thread set, subject only to credential scopes.
 11. A user with no teams has a fully functional private inbox and can create public links.
 12. A user may belong to several teams; a thread may be shared with several teams; no thread, message, or attachment is copied by sharing.
-13. List, search, get, post, direct upload, pending-upload finalize, preview, and download all enforce the same stable-ID-based access rule.
+13. List, search, get, post, direct upload, pending-upload finalize, preview, download, and visibility mutation all enforce the same stable-ID-based access rule.
 14. Search and asset endpoints do not reveal the existence or metadata of inaccessible threads.
 15. Any authorized participant can atomically add shares to teams they belong to, remove any existing share, publish, unpublish, and regenerate the public link.
 16. The MCP server exposes exactly one new `manage_thread_visibility` tool, and `create_thread` remains private-only.
 17. The CLI exposes `agentbox visibility <thread-id>` with the specified team/public flags, and `agentbox create` remains private-only.
-18. The dashboard exposes a unified inbox with All, Private, Shared with me, per-team, and Public filters.
-19. Messages visibly distinguish user and actor surface, including Web dashboard, ChatGPT, Claude, and Local CLI, while preserving legacy snapshots.
-20. ChatGPT, Claude, and local credentials are independently created, independently revocable, and shown only once.
-21. Onboarding presents numbered ChatGPT, Claude, and local setup cards and generates a local-agent prompt that installs the npm CLI, saves a profile, and successfully lists accessible threads.
-22. Public links are opaque, live, read-only, `noindex`, revocable, and render existing Markdown/Mermaid/code/table functionality without private account metadata.
-23. Public attachment URLs are short-lived and can be signed only through a valid active share for the containing thread.
-24. The owner can manage users, invitations, teams, memberships, and credential metadata from the web dashboard.
-25. Owner view-all-content works only through an owner browser session; an owner API key cannot use that capability.
-26. Disabling a user immediately invalidates sessions and credentials, removes effective team access, prevents login, and preserves all content and attribution.
-27. Purging a disabled user's attachments deletes only objects uploaded by that user, is safe to retry, and leaves readable tombstones.
-28. PostgreSQL-backed tests prove migrations, access predicates, uniqueness, transactions, and public/owner authorization; memory-only tests are not the sole evidence.
-29. Runtime repository calls no longer execute schema DDL.
-30. The finished codebase has one authorization model: legacy tenant routes, fields, profile metadata, and compatibility paths are removed.
+18. The dashboard and Raycast expose unified inboxes with All, Private, Shared with me, per-team, and Public filters over the same backend result set.
+19. Messages visibly distinguish user and actor surface, including Web dashboard, ChatGPT, Claude, Local CLI, and Raycast, while preserving legacy snapshots.
+20. ChatGPT, Claude, local, and per-installation Raycast credentials are independently created, independently revocable, and shown only once.
+21. Onboarding presents numbered ChatGPT, Claude, local, and Raycast setup cards, remains available after skip/completion, and generates both the local-agent prompt and the per-installation Raycast developer-mode setup bundle.
+22. The Raycast extension models the final user/team DTOs: no tenant fields, storage keys, direct R2 public URLs, or owner-web bypasses appear in its runtime types or UI.
+23. Raycast lists and searches the complete effective accessible set, renders caller-relative visibility summaries and stable `User · Actor` attribution, and never reconstructs access by filtering a broader client-side set.
+24. Raycast can create private threads, post replies, upload attachments through the hardened direct-upload flow, preview/download authorized attachments, and render unavailable or purged attachment states without broken actions.
+25. Raycast reads and atomically changes current team shares and public state through the canonical `/api/threads/:id/visibility` operation, including public-link copy/regeneration and a warning before self-revoking access.
+26. Rotating or revoking a Raycast credential invalidates only that installation; disabling its owning user invalidates it with every other user session and credential.
+27. Public links are opaque, live, read-only, `noindex`, revocable, and render existing Markdown/Mermaid/code/table functionality without private account metadata.
+28. Public attachment URLs are short-lived and can be signed only through a valid active share for the containing thread.
+29. The owner can manage users, invitations, teams, memberships, and credential metadata from the web dashboard.
+30. Owner view-all-content works only through an owner browser session; owner API, CLI, MCP, and Raycast credentials cannot use that capability.
+31. Disabling a user immediately invalidates sessions and credentials, removes effective team access, prevents login, and preserves all content and attribution.
+32. Purging a disabled user's attachments deletes only objects uploaded by that user, is safe to retry, and leaves readable tombstones.
+33. PostgreSQL-backed tests prove migrations, access predicates, uniqueness, transactions, onboarding connector isolation, and public/owner authorization; memory-only tests are not the sole evidence.
+34. Raycast package lint/build and contract tests are mandatory in CI and in the cutover verifier; the repository contains a local macOS developer-mode smoke runbook for Phase 19.
+35. Runtime repository calls no longer execute schema DDL, and the finished codebase has one authorization model with legacy tenant routes, fields, profile metadata, and compatibility paths removed.
 
 ## Cross-Session Execution Protocol
 
-This blueprint is also the durable handoff record for agents implementing the track across separate ChatGPT sessions. Zodex agents execute Phases 1-14. The credentialed local agent executes Phase 15 only after the shared branch is code-complete. Every implementation agent must follow the relevant protocol before and during work.
+This blueprint is also the durable handoff record for agents implementing the track across separate ChatGPT sessions. Zodex agents execute Phases 1-18. The credentialed local agent executes Phase 19 only after the shared branch is code-complete. Every implementation agent must follow the relevant protocol before and during work.
 
 ### Start-of-session procedure
 
@@ -320,12 +327,12 @@ This blueprint is also the durable handoff record for agents implementing the tr
 
 ### Remote-machine boundary
 
-Shared Zodex agents are responsible for completing every code-bearing part of Phases 1-14, including:
+Shared Zodex agents are responsible for completing every code-bearing part of Phases 1-18, including:
 
 - canonical migrations and dry-run/backup tooling;
 - PostgreSQL-backed tests using a credential-free local or CI test database where available;
 - R2 behavior behind fakes or test doubles, plus production-safe commands and runbooks;
-- all Go backend, Next.js dashboard, MCP, CLI, npm package, and documentation changes;
+- all Go backend, Next.js dashboard, MCP, CLI, Raycast extension, npm package, and documentation changes;
 - final removal of tenant-era code from the feature branch once the replacement path is proven by tests.
 
 Shared Zodex agents must not attempt or claim completion of:
@@ -333,14 +340,15 @@ Shared Zodex agents must not attempt or claim completion of:
 - production PostgreSQL backup or row-count verification;
 - production R2 inventory, backup, deletion, or object verification;
 - production Vercel deployment or environment-variable changes;
-- creation or rotation of real production owner, ChatGPT, Claude, or local credentials;
+- creation or rotation of real production owner, ChatGPT, Claude, local, or Raycast credentials;
+- importing/configuring the extension in a real local Raycast installation;
 - the live maintenance window and production cutover.
 
-Those live actions belong only to Phase 15. When every code-bearing task is complete, the Zodex agents must mark Phases 1-14 `Complete`, leave Phase 15 `Reserved for local agent`, and stop. The exact production runbook, commands, expected evidence, and rollback procedure must already be committed for the credentialed local agent.
+Those live actions belong only to Phase 19. When every code-bearing task is complete, the Zodex agents must mark Phases 1-18 `Complete`, leave Phase 19 `Reserved for local agent`, and stop. The exact production and Raycast developer-mode runbooks, commands, expected evidence, and rollback procedure must already be committed for the credentialed local agent.
 
 ### Credentialed local-agent boundary
 
-The local agent starts only after Phases 1-14 are complete on the branch. It must read the full specification, this blueprint, all progress checkpoints, and all amendments before executing Phase 15. It may make and push narrowly scoped fixes discovered during real backup, deployment, migration, or production verification, but it must not redesign the approved architecture during cutover. Any discovery that changes later work belongs in `Amendments` immediately.
+The local agent starts only after Phases 1-18 are complete on the branch. It must read the full specification, this blueprint, all progress checkpoints, and all amendments before executing Phase 19. It may make and push narrowly scoped fixes discovered during real backup, deployment, migration, or production verification, but it must not redesign the approved architecture during cutover. Any discovery that changes later work belongs in `Amendments` immediately.
 
 ### Shared-branch safety
 
@@ -371,11 +379,17 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 | 10. Unified inbox and attribution UX | Complete | `cda8603` | Caller-relative summaries plus SQL-backed All, Private, Shared with me, per-team, and Public filters power dashboard controls and thread cards. Authenticated/public views render stable `User · Actor` snapshots with exact legacy fallback, while CLI JSON/plain and MCP list/search/get expose the same safe metadata. |
 | 11. Owner user and credential administration | Complete | `a6ea63d` | The owner browser lists every user's active and revoked credential metadata and can idempotently force-revoke by credential ID without receiving secrets. Disablement atomically revokes sessions/credentials/pending CLI codes and removes all team memberships; enablement restores none of them, disabled users cannot be re-added, and preserved shared content remains available to still-qualified members. |
 | 12. Disabled-user attachment purge | Complete | `8850e92` | Owner-browser-only bounded purge selects exact asset keys by stable uploader user ID for disabled non-owner users, tolerates missing objects, records resumable tombstones/failures, preserves rows/filenames/attribution, excludes purged keys from backup object expectations, and renders authenticated/public tombstones without storage keys or signed URLs. |
-| 13. Owner-only web content viewer | Complete | `2deb1f4` | Separate owner-browser-only list, search, detail, and attachment-signing paths power a clearly labeled read-only `/owner/content` dashboard with user/team filters. Normal dashboard, API, MCP, CLI, and owner credentials remain on the ordinary effective-access predicate; live production review remains Phase 15 verification. |
+| 13. Owner-only web content viewer | Complete | `2deb1f4` | Separate owner-browser-only list, search, detail, and attachment-signing paths power a clearly labeled read-only `/owner/content` dashboard with user/team filters. Normal dashboard, API, MCP, CLI, and owner credentials remain on the ordinary effective-access predicate; live production review remains Phase 19 verification. |
 | 14. Final code cutover and tenant removal | Complete | `86e381f` | Final migration `0017`, domain/runtime cleanup, removed compatibility routes and CLI commands, maintenance and bounded-migration controls, schema postcheck, CI-backed `verify:cutover`, and the production/rollback runbook leave one schema runner, one user/team authorization model, and one public contract. |
-| 15. Credentialed production cutover | Reserved for local agent | — | Pull the pushed Phase 14 checkpoint, confirm CI, then execute `docs/user-team-sharing-production-cutover.md` with production credentials. |
+| 15. Raycast credential and onboarding integration | Pending | — | Add the fourth user-owned connector, additive onboarding schema support, one-time developer-mode setup bundle, dashboard re-entry, and independent rotation/revocation. |
+| 16. Raycast API-contract migration | Pending | — | Replace tenant-era extension DTOs and API assumptions with the final user/team/visibility/attribution/attachment contracts and client methods. |
+| 17. Raycast dashboard-parity workflows | Pending | — | Implement effective-access filters, full thread workflows, attachment states, and canonical team/public visibility management in Raycast. |
+| 18. Raycast hardening, docs, CI, and local handoff | Pending | — | Remove private-team-store assumptions, update all setup surfaces, add contract/CI gates, and commit the exact macOS developer-mode smoke runbook. |
+| 19. Credentialed production and Raycast cutover | Reserved for local agent | — | Pull the pushed Phase 18 checkpoint, confirm exact-head CI, then execute the production and local Raycast runbooks with real credentials. |
 
 ### Checkpoint log
+
+Checkpoint entries written before the 2026-08-03 Raycast scope extension retain the phase numbers that were current when they were recorded. Any historical reference to the former local-only Phase 15 now maps to current Phase 19; it does not mean the new Raycast Phases 15-18 are complete.
 
 Append one entry immediately after every pushed slice or phase using this shape:
 
@@ -595,9 +609,69 @@ YYYY-MM-DD — Phase N / short slice name
 - Remaining production-only work: real PostgreSQL/R2 preflight and off-deployment restore verification, maintenance mode, migrations through `0016`, owner setup using the manifest email/ID, migration `0017`, Vercel backend/dashboard deployment, credential recreation, preservation/security smoke tests, and reopening writes. These remain exclusively Phase 15 work for the credentialed local agent.
 - Next: the credentialed local agent must fast-forward this exact green branch head, read the specification, blueprint, this checkpoint, and `docs/user-team-sharing-production-cutover.md`, then begin with `backup:preflight` on the untouched legacy production schema using the exact future owner email. It must not apply migration `0017` before the manifest is accepted and permanent-owner setup returns the manifest's proposed owner ID.
 
+## Raycast Migration Trace
+
+This trace was produced by reading the complete extension under `raycast/agentbox`, the current onboarding/credential code, the final user/team DTOs and HTTP routes, the dashboard visibility implementation, setup documentation, and the historical Raycast plan. It is the implementation map for Phases 15-18.
+
+### Credential and onboarding boundary
+
+- `migrations/0012_user_onboarding.sql` currently constrains connectors to `chatgpt`, `claude`, and `local`. Do not edit applied history in place; add `0018_raycast_onboarding.sql` to admit `raycast` while preserving existing rows and uniqueness.
+- `internal/agentbox/service/service.go` recognizes the `raycast` purpose but currently gives it the broad default scope set, including `mcp:use`; `onboardingCredentialSpec` and `CreateOnboardingConnection` do not accept or produce Raycast setup material. Add a fourth connector with actor name `Raycast`, narrow it to the thread/asset scopes the extension actually needs, emit one-time preference values/developer-mode commands, and keep rotation independent.
+- `internal/agentbox/db/repository.go` and `internal/agentbox/db/memory.go` persist generic connector rows but hard-code three-step ordering. Add deterministic fourth-step ordering and keep the PostgreSQL and memory implementations behaviorally identical.
+- `internal/agentbox/types/types.go`, `internal/agentbox/httpapi/server.go`, and onboarding service/HTTP/PostgreSQL tests need structured Raycast setup output without persisting or redisplaying the secret.
+- `app/onboarding/onboarding-view.tsx` hard-codes `Connector = "chatgpt" | "claude" | "local"`, `/3` progress, three cards, and MCP-versus-local output rendering. Add the fourth card and a Raycast-specific one-time output view. `app/onboarding/page.tsx`, `app/keys/keys-view.tsx`, and the generic connector proxy must remain resumable and browser-session-only.
+- `internal/agentbox/cli/bootstrap.go` already provides user-scoped `agentbox raycast-key`; retain it as an alternative setup path, but make dashboard onboarding the primary path and keep every installation on a separate credential.
+
+### Raycast API client and data contracts
+
+- `raycast/agentbox/src/api.ts` still models `tenant_id`, `tenant_slug`, storage keys, direct `public_url` fields, and legacy creator-only DTOs. Replace them with the final `AuthContext`, `Thread`, `SearchThreadResult`, `Message`, `Asset`, `ThreadVisibilitySummary`, `ManagedThreadVisibility`, `Team`, purge/unavailable fields, and stable user/actor snapshots from `internal/agentbox/types/types.go`.
+- Remove runtime dependence on fields that authenticated JSON intentionally hides, especially `storage_key`; remove direct-R2 `public_url` behavior. Signed download/preview URLs and explicit tombstone/unavailable state are the only attachment paths.
+- Extend the client with `/api/me/teams`, caller-relative `filter` / `team` list and search parameters, `GET /api/threads/:id/visibility`, and atomic `PATCH /api/threads/:id/visibility` methods. Keep thread creation private-only.
+- Preserve the hardened upload sequence: one atomic batch of upload intents, exact required headers for each presigned `PUT`, then one message finalization with `uploaded_assets`. Surface replay, expiry, size, MIME, and unavailable-object errors without guessing success.
+- Keep query-string API-key transport for parity with existing normal clients, but source it only from the required Raycast password preference and never log or render it. The owner-web routes are never part of the Raycast client.
+
+### Effective-access inbox and thread rendering
+
+- `search-threads.tsx` and `list-threads.tsx` currently provide overlapping commands, fetch only fixed-size recent/search result sets, and omit caller-relative visibility. The normal `/api/threads` list/search contract is also limit-only today, so add a shared continuation/page response and consume it from both dashboard and Raycast. Rework Raycast around the backend's unified effective-access set and All, Private, Shared with me, per-team, and Public filters. A paginated `List` with `List.Dropdown` is the natural shape; do not fetch a broad set and filter authorization in memory.
+- `latest-messages.tsx` currently lists 30 threads and issues one `getThread` request per row before flattening 100 messages. Remove this N+1 path, replace it with a bounded backend capability if one is deliberately added, or retire the command. It must not claim to represent all accessible messages while sampling the first 30 threads.
+- `search-threads.tsx`, `latest-messages.tsx`, and `markdown.ts` render only legacy `created_by` / `author`. Use the same exact snapshot fallback as the dashboard: stable user display name plus actor name, then legacy string when the new references are absent.
+- Thread cards and detail metadata must show private/team/public summaries, matched teams, and ownership without exposing stable internal IDs unnecessarily. Public status alone never adds an authenticated thread to another user's inbox.
+- Request effects need cancellation or request-generation fencing so search/filter changes and navigation cannot let stale results overwrite current state.
+
+### Create, reply, upload, download, and attachment state
+
+- `create-thread.tsx` already creates private threads and can post an initial message with attachments; expose it as an explicit manifest command and preserve private-only creation.
+- `post-message.tsx` already supports existing/new targets and attachments. Replace manual-ID-first UX with selection/actions from the effective-access thread list while keeping direct thread ID as an optional expert path.
+- `form-helpers.ts` and `api.ts` must validate the server's exact batch-upload response, preserve file order, send the returned required headers, and finalize once.
+- `attachment-actions.tsx`, `latest-messages.tsx`, `search-threads.tsx`, and `markdown.ts` currently inspect obsolete `public_url` fields and always offer download actions. Render purged and unavailable attachments explicitly, suppress signing/download/preview actions for them, and use authorized signed URLs only.
+- Downloads may continue to save into the optional preference folder, but filenames must remain sanitized and collisions deterministic. Raycast filesystem/network use is local to that installation and must not expose credential or signed URL values in logs.
+
+### Team and public visibility parity
+
+- The extension currently has no visibility client or UI. Add a nested Raycast view or form reachable from every accessible thread.
+- Read `ManagedThreadVisibility` to show current shares, the caller's available teams, public state, and current public URL. Submit one atomic patch containing exact add/remove sets plus public/regeneration intent.
+- Match dashboard behavior for idempotence, invalid team references, publish/unpublish/regeneration, public-link copy, and successful self-revocation. Warn before removing the last share that currently grants the caller access, then close or refresh the thread view after the committed mutation.
+- Do not add sharing fields to create-thread forms. Do not call owner-only administration or content-view routes.
+
+### Manifest, setup surfaces, and validation
+
+- `raycast/agentbox/package.json` and `README.md` are still shaped around the `zue-ai` private Store and a five-command team-plan limit. The approved target is per-user developer-mode installation, so remove store/team assumptions from the required path, permit the useful command set, and leave publication as explicitly deferred work.
+- `copy-mcp-url.ts` and the MCP-copy utility reuse the Raycast API key for an unrelated MCP surface. Retire that behavior from the normal extension and remove `mcp:use` from newly generated Raycast credentials; ChatGPT/Claude/local connectors keep their own dedicated credentials.
+- Keep extension-level required `baseUrl` and password `apiKey` preferences. Do not ship a real deployment URL as a universal default; onboarding provides the deployment-specific value.
+- `app/raycast/page.tsx`, `public/raycast.md`, and `public/setup-self-host.md` still direct users through the CLI and private-team publishing language. Rewrite them around the signed-in dashboard Raycast card, unique per-installation credentials, `npm install`, and `npm run dev`.
+- Add Raycast contract tests or fixture-driven tests for URL construction, DTO decoding, filters, visibility patches, attribution fallback, attachment tombstones, and error mapping. Add `npm ci`, `npm run lint`, and `npm run build` for `raycast/agentbox` to CI and `verify:cutover`.
+- Zodex can prove package build/lint and backend integration without production credentials. The real `ray develop` import, preference entry, hot reload, and macOS interaction smoke test belong only to Phase 19.
+
+### External Raycast constraints verified for this plan
+
+- [Preferences](https://developers.raycast.com/api-reference/preferences) - required extension preferences block commands until configured; `getPreferenceValues` supplies the values at runtime.
+- [Security](https://developers.raycast.com/information/security) - password preferences are stored in Raycast's local encrypted database and scoped to the extension; extensions can perform direct network and filesystem operations.
+- [CLI](https://developers.raycast.com/information/developer-tools/cli) - `ray develop` imports a local extension, enables hot reload, and is the supported developer-mode workflow; `ray build` and `ray lint` are the package validation commands.
+- [Manifest](https://developers.raycast.com/information/manifest) and [List](https://developers.raycast.com/api-reference/user-interface/list) - extension-level required password preferences, additional view commands, `List.Dropdown`, and built-in list pagination support the approved setup and effective-access inbox design.
+
 ## Plan Phases
 
-The sequence intentionally adds and proves the new path before changing production semantics. Every phase ends with a buildable, testable system. Phases 1-14 are completed on Zodex and end with a code-complete branch containing only the new authorization model. Phase 15 is the separate credentialed local production cutover.
+The sequence intentionally adds and proves the new path before changing production semantics. Every phase ends with a buildable, testable system. Phases 1-14 completed the core user/team architecture. Phases 15-18 migrate Raycast onto that architecture and end with a code-complete branch. Phase 19 is the separate credentialed local production and Raycast cutover.
 
 ### Phase 1: Make migrations canonical and produce a verified content backup workflow
 
@@ -635,7 +709,7 @@ Create a production preflight/backup command under `cmd/` or the CLI's deploymen
 
 Do not rename existing R2 keys. Do not mutate production content in this phase. The output must be repeatable, timestamped, and safe to rerun.
 
-On the shared Zodex branch, implement and test this workflow without production credentials. Use test databases, `assets.FakeStore`, and credential-free fixtures to prove the manifest, failure, retry, and idempotency behavior. Do not run or claim a real production backup from Zodex; Phase 15 is the only phase that gathers and records that production evidence.
+On the shared Zodex branch, implement and test this workflow without production credentials. Use test databases, `assets.FakeStore`, and credential-free fixtures to prove the manifest, failure, retry, and idempotency behavior. Do not run or claim a real production backup from Zodex; Phase 19 is the only phase that gathers and records that production evidence.
 
 Add PostgreSQL-backed migration tests that start from representative legacy schemas, apply migrations once and twice, and verify the ledger and content are unchanged on retry. Add CI capable of running those tests against a real PostgreSQL service.
 
@@ -911,7 +985,7 @@ The local card creates one machine credential and returns a copyable prompt writ
 
 Keep browser-assisted `agentbox login` as an alternative for later machines, but do not make the onboarding prompt depend on a browser callback.
 
-Raycast setup remains absent.
+Raycast setup remains absent from this completed historical phase; Phase 15 adds it as the fourth resumable connector without rewriting the earlier checkpoint.
 
 #### Validation strategy
 
@@ -1283,9 +1357,9 @@ Complete the feature branch's final code cutover. Implement the final content mi
 
 Delete all legacy tenant authorization and compatibility code from the feature branch once the replacement path is proven. Remove tenant selectors, tenant DTO fields, tenant provisioning/admin endpoints, `agentbox init`, `agentbox provision tenant`, admin-key key creation, old profile metadata, direct `R2_PUBLIC_BASE_URL` behavior, and tests/docs that assert the old model.
 
-Retain `AGENTBOX_ADMIN_KEY` only if the final owner-bootstrap/recovery design still requires it; document its narrow role. End with one schema runner, one user/team authorization model, one set of public contracts, and a complete production procedure that Phase 15 can execute without inventing missing commands or decisions.
+Retain `AGENTBOX_ADMIN_KEY` only if the final owner-bootstrap/recovery design still requires it; document its narrow role. End with one schema runner, one user/team authorization model, and one set of public contracts. Phases 15-18 must extend that finished architecture rather than reintroduce compatibility paths, and Phase 19 must be able to execute the combined production/Raycast procedure without inventing missing commands or decisions.
 
-When this phase is complete, Zodex agents must update the progress ledger, mark Phases 1-14 `Complete`, leave Phase 15 `Reserved for local agent`, push the final code-complete checkpoint, and stop. They must not run the production backup, pause writes, migrate the live database, access live R2, deploy Vercel, or create real production credentials.
+When this phase is complete, Zodex agents mark Phases 1-14 `Complete` and continue into the approved Raycast Phases 15-18. They stop only after those phases are complete, the combined runbooks are committed, and Phase 19 remains `Reserved for local agent`. They must not run the production backup, pause writes, migrate the live database, access live R2, deploy Vercel, import the extension into a real Raycast installation, or create real production credentials.
 
 #### Validation strategy
 
@@ -1299,55 +1373,255 @@ When this phase is complete, Zodex agents must update the progress ledger, mark 
 #### What must not break
 
 - No legacy fixture thread, message, attachment row, historical attribution snapshot, or stored R2 key may be lost.
-- The branch must remain deployable at every commit and must be code-complete before the local agent begins Phase 15.
+- The branch must remain deployable at every commit and must be code-complete through Phase 18 before the local agent begins Phase 19.
 - The final system must not retain two authorization models.
 
-### Phase 15: Credentialed local production backup, deployment, and cutover
+### Phase 15: Add Raycast as a user-owned onboarding connector
 
-**Execution environment: local machine with production PostgreSQL, Cloudflare R2, Vercel, and AgentBox credentials only. Zodex agents must not start this phase.**
+#### Files to read before starting
+
+**Specification and migration history:**
+
+- `docs/user-team-sharing-spec.md` (Sections 2.3-2.4, 6.4, 7, 9.4, 17, and 18) - the updated Raycast identity, setup, parity, and acceptance contract.
+- `migrations/0012_user_onboarding.sql` and the canonical migration runner - preserve applied history and add `0018_raycast_onboarding.sql` for the fourth connector.
+- `internal/agentbox/db/repository.go` and `internal/agentbox/db/memory.go` onboarding methods - generic persistence, active-credential lookup, deterministic step order, rotation, and copy behavior.
+
+**Service and HTTP:**
+
+- `internal/agentbox/types/types.go` (`OnboardingStep`, `OnboardingState`, `APIKey`, `AuthContext`) - extend output without persisting a secret.
+- `internal/agentbox/service/service.go` (`CreateOnboardingConnection`, `ConnectorAPIKeyScopes`, `onboardingCredentialSpec`) - `raycast` is recognized as a purpose but currently inherits `mcp:use` and is not an onboarding connector.
+- `internal/agentbox/httpapi/server.go` onboarding routes and response shape - remain browser-session-only and one-time-secret-safe.
+- Existing onboarding service, HTTP, memory, and PostgreSQL integration tests - add the fourth connector and preserve connector isolation.
+
+**Dashboard and setup entry points:**
+
+- `app/onboarding/onboarding-view.tsx`, `app/onboarding/page.tsx`, `app/api/onboarding/connectors/[connector]/route.ts` - add the fourth card and structured one-time output.
+- `app/keys/keys-view.tsx` - keep setup available after skip or completion.
+- `internal/agentbox/cli/bootstrap.go` (`raycast-key`) - retain as an alternative user-scoped path; do not make CLI installation a dashboard prerequisite.
+
+#### What to do
+
+Add `0018_raycast_onboarding.sql` to expand `user_onboarding_steps.connector` to admit `raycast` without deleting or rewriting existing ChatGPT, Claude, or local steps. Update PostgreSQL and memory ordering to `chatgpt`, `claude`, `local`, `raycast` and prove the result is stable regardless of creation order.
+
+Extend onboarding credential creation with connector `raycast`, credential name/actor `Raycast`, purpose `raycast`, and the least-privilege `threads:read`, `threads:write`, `assets:read`, and `assets:write` scopes. Do not include `mcp:use`; MCP connectors remain separate actors with separate credentials. Produce structured one-time setup material containing the deployment base URL, API key, extension path, developer-mode commands, preference names, and final list-thread check. Persist only credential metadata and onboarding completion; revisiting the dashboard must never redisplay the secret.
+
+Add the fourth numbered onboarding card. It must explain that this is one local Raycast installation, that another Mac/installation requires another credential, and that rotation invalidates only the selected installation. The output view must make the base URL and API key individually copyable and include `npm install` plus `npm run dev` instructions. Keep skip/open-inbox behavior and Credentials-page re-entry.
+
+Do not add owner credentials, private-store publishing, or a team-managed installation flow. Do not let an API key call onboarding routes.
+
+#### Validation strategy
+
+- PostgreSQL migration tests must start from the current canonical schema, preserve the three existing connector rows, add Raycast, and reject unknown connector values.
+- Service/HTTP tests must prove no credentials are created by GET or skip; Raycast creation is explicit, browser-only, one-time-secret, metadata-only on revisit, and independently rotatable/revocable.
+- Two users may each have a `Raycast` credential; one user may create additional custom Raycast credentials for additional installations without affecting another connector.
+- Rotating Raycast must invalidate its old secret without changing ChatGPT, Claude, local, browser sessions, or another Raycast key.
+- The returned scopes must pass list/search/get/create/post/upload/download/visibility authorization and fail owner-web routes.
+- `go test ./...`, PostgreSQL integration tests with no skips, dashboard typecheck/lint/build, and `git diff --check` must pass.
+
+#### What must not break
+
+- Existing onboarding records and connector secrets remain isolated.
+- Setup remains optional and resumable.
+- Secrets are shown exactly once and never enter logs, source, checkpoint text, or persisted onboarding JSON.
+
+### Phase 16: Migrate the Raycast client to the final user/team API contracts
+
+#### Files to read before starting
+
+**Canonical backend contracts:**
+
+- `internal/agentbox/types/types.go` - exact current auth, thread, search, attribution, visibility, team, asset, purge, and upload DTOs.
+- `internal/agentbox/httpapi/server.go` - `/api/auth/me`, `/api/me/teams`, `/api/threads`, `/api/threads/:id`, `/api/threads/:id/visibility`, uploads, messages, and asset download routes.
+- `app/threads/inbox-view.tsx`, `app/threads/[threadId]/thread-view.tsx`, and `app/threads/[threadId]/thread-visibility-control.tsx` - current ordinary-user semantics and exact attribution/visibility behavior.
+
+**Raycast client:**
+
+- Every source file under `raycast/agentbox/src/`, especially `api.ts`, `form-helpers.ts`, `markdown.ts`, and `attachment-actions.tsx`.
+- `raycast/agentbox/package.json`, `tsconfig.json`, and package-local lint/build configuration.
+
+#### What to do
+
+Replace the tenant-era local types in `api.ts` with final user/team types. `AuthContext` must use user/actor/session/key/scopes/owner-browser metadata and contain no tenant fields. Thread and search results must carry caller-relative visibility summaries and stable user/actor snapshots. Assets must expose signed URL, purge, and unavailable metadata only; runtime types and rendering must not expect `storage_key` or direct `public_url`. If upload-intent responses still expose `storage_key` even though clients finalize by `upload_id`, introduce a safe HTTP response DTO that omits it while leaving internal persistence unchanged.
+
+Add a bounded continuation/page contract to the normal thread list and search endpoints, then add typed client methods for caller teams, page traversal, all five list/search filters, thread detail, visibility read, and one atomic visibility patch. Update the dashboard to consume the same page contract without losing its existing default behavior. Preserve existing create/post/upload/download methods but align them exactly with the hardened server response and error codes. Thread creation remains private-only.
+
+Add request cancellation or generation fencing to every asynchronous list/search/detail effect. Centralize attribution fallback, visibility labels, error mapping, URL construction, and configuration validation rather than duplicating them across commands.
+
+Add package-local contract tests or fixture-driven tests for URL/query construction, final DTO decoding, auth metadata, filters, visibility payloads, upload response ordering, purge/unavailable assets, and coded errors. Tests may use a local fake HTTP server or pure fixtures but must reflect actual Go JSON contracts.
+
+#### Validation strategy
+
+- Source-contract checks must fail on `tenant_id`, `tenant_slug`, runtime `storage_key`, or direct asset `public_url` in Raycast source.
+- With more rows than one page, a user key can traverse the same complete ordered IDs from dashboard/API and Raycast list/search for All, Private, Shared, one team, and Public filters without duplicates or omissions.
+- Cross-user thread/asset IDs receive the same non-disclosing failure as every other normal client.
+- Upload tests must preserve batch order, required headers, exact `upload_id` finalization, and clear expiry/size/MIME/replay errors.
+- `npm ci`, package contract tests, `npm run lint`, and `npm run build` must pass under `raycast/agentbox`; root typecheck/lint/build and Go tests must remain green.
+
+#### What must not break
+
+- Query-string API-key behavior remains compatible with existing authenticated HTTP routes.
+- Raycast never calls owner-only content or administration routes.
+- Removing stale fields does not regress Markdown, file upload, download-folder, or dashboard-link behavior.
+
+### Phase 17: Deliver Raycast parity for effective-access inbox, threads, attachments, and sharing
+
+#### Files to read before starting
+
+**Extension UX:**
+
+- `raycast/agentbox/package.json` command manifest.
+- `search-threads.tsx`, `list-threads.tsx`, `latest-messages.tsx`, `create-thread.tsx`, `post-message.tsx`, `attachment-actions.tsx`, `markdown.ts`, `doctor.tsx`, and `utility-actions.tsx`.
+- Official Raycast List, Form, Actions, Preferences, and developer CLI documentation linked in the implementation evidence.
+
+**Ordinary dashboard behavior:**
+
+- `app/threads/inbox-view.tsx` - filters and visibility summaries.
+- `app/threads/[threadId]/thread-view.tsx` - message order, attribution, attachment states, reply flow.
+- `app/threads/[threadId]/thread-visibility-control.tsx` - canonical visibility UX, public-link lifecycle, and self-revocation warning.
+
+#### What to do
+
+Make Raycast a complete ordinary-user surface for the same effective-access set as the dashboard:
+
+- Provide one primary Browse/Inbox command with server-side search, built-in `List` pagination, and a stored `List.Dropdown` for All, Private, Shared with me, per-team, and Public.
+- Show private/team/public summaries, matched team context, stable `User · Actor` attribution, update time, message count, and safe previews.
+- Provide full thread detail with chronological messages, Markdown rendering, image previews, attachment metadata, and actions to copy/open/post/download.
+- Expose Create Thread as a manifest command. Creation is always private; optional initial body and attachments use the canonical create-then-upload/post sequence.
+- Let users reply from thread actions or a root Post Message command, choosing from accessible threads rather than requiring an ID for the common path.
+- Render purged attachments as `Attachment deleted by deployment owner` and missing objects as `Attachment unavailable`; suppress preview, signing, and download actions in both states.
+- Add a Manage Visibility view reachable from every thread. It reads current/available teams, submits exact add/remove sets plus public intent atomically, supports publish/unpublish/copy/regenerate, and warns before self-revocation.
+- After a successful self-revoking mutation, report success, remove the inaccessible thread from local state, and do not treat the expected subsequent denial as rollback.
+
+Remove or redesign `Latest Messages`: its current 30-thread fan-out cannot represent the complete accessible set and creates an N+1 request pattern. Do not add a broad backend endpoint merely to preserve a command unless it is bounded, indexed, authorized by the same predicate, and useful to dashboard/CLI consumers too.
+
+Use the freedom of local developer-mode installation to expose the useful command set; do not preserve the former five-command private-team limit. Keep utility actions subordinate to thread work and remove the Raycast-key-to-MCP URL action rather than coupling one credential to two actor surfaces.
+
+#### Validation strategy
+
+- Raycast fixture/E2E tests must cover owned private, team-shared, overlapping-team, public-status, zero-team, and inaccessible threads without duplicates.
+- The same actor key must create/post as `User · Raycast`; other browser/MCP/CLI actors retain their distinct labels.
+- Visibility tests must cover add/remove by ID and slug, combined team/public changes, idempotent retries, invalid teams, public rotation, and self-revocation.
+- Attachment tests must cover normal image preview, download, sanitized filename collision, purged tombstone, missing object, and cross-thread asset denial.
+- Search/filter changes must not display stale responses after a newer request completes.
+- Package lint/build/tests plus relevant Go HTTP/PostgreSQL tests and root Next checks must pass.
+
+#### What must not break
+
+- Raycast public status does not grant authenticated inbox access by itself.
+- No Raycast action can invoke the owner-only web view or owner administration.
+- Existing dashboard, MCP, CLI, public page, and normal API behavior remain unchanged except for shared contract hardening.
+
+### Phase 18: Harden developer-mode distribution, documentation, CI, and the local handoff
+
+#### Files to read before starting
+
+**Raycast package and public setup:**
+
+- `raycast/agentbox/package.json`, `README.md`, lockfile, icon, and all commands.
+- `app/raycast/page.tsx`, `public/raycast.md`, and the Raycast sections of `public/setup-self-host.md`.
+- `app/onboarding/onboarding-view.tsx` and Credentials re-entry.
+
+**Validation and rollout:**
+
+- `.github/workflows/*`, root `package.json`, `scripts/verify-user-team-cutover.sh`, `AGENTS.md`, and production/rollback runbooks.
+- All Raycast contract tests added in Phases 16-17.
+
+#### What to do
+
+Rewrite the package and setup documentation around the approved distribution model: every user checks out the repository, installs `raycast/agentbox` dependencies, runs `npm run dev`, and configures that local installation with the base URL and dedicated API key generated from their dashboard. Private Store ownership, five-command team limits, and `npm run publish` are not part of the required migration path.
+
+Keep `baseUrl` and `apiKey` as required extension preferences, with `apiKey` using Raycast's password preference. Remove a universal production URL default. Explain one credential per installation, one-time visibility, rotation/revocation, and how to reopen onboarding from Credentials.
+
+Update the public Raycast page, raw Markdown guide, self-host guide, onboarding copy, and package README so they describe the same user/team architecture and exact commands. Preserve `agentbox raycast-key` only as an optional alternative for an already authenticated CLI user.
+
+Add Raycast gates to CI and `verify:cutover`: package `npm ci`, contract tests, lint, and production build. Add source scans for retired tenant/storage/public assumptions. Extend backend HTTP/PostgreSQL tests with a Raycast-scoped credential proving effective-access parity, attribution, visibility, attachment authorization, revocation, disablement, and owner non-bypass.
+
+Commit a macOS developer-mode smoke runbook for Phase 19. It must include clone/update, dependency install, `npm run dev`, preference entry, extension diagnostics, each user workflow, visibility/self-revocation, credential rotation, disablement, and cleanup. It must specify expected evidence without asking the Zodex agent to claim a real Raycast import.
+
+When complete, update the progress ledger, mark Phases 15-18 `Complete`, leave Phase 19 `Reserved for local agent`, push the exact code-complete checkpoint, wait for exact-head CI success, and stop.
+
+#### Validation strategy
+
+- Clean package install, contract tests, lint, and build pass from `raycast/agentbox` without relying on root `node_modules`.
+- Root Go tests with PostgreSQL required/no skips, vet/build, Next typecheck/lint/build, CLI/API builds, and `verify:cutover` all pass.
+- CI runs every Raycast gate and fails when the extension regresses to tenant-shaped DTOs or private-store-only instructions.
+- Documentation snippets are source-checked against real package scripts, command names, preference names, and onboarding response fields.
+- The committed runbook is executable by a local agent without inventing code changes, credentials, URLs, or Raycast steps.
+
+#### What must not break
+
+- No secrets, real setup bundles, signed URLs, or production thread content enter source, fixtures, screenshots, CI logs, or docs.
+- Store publication remains deferred rather than silently removed as a future option.
+- The branch remains deployable and code-complete before Phase 19 begins.
+
+### Phase 19: Credentialed local production and Raycast cutover
+
+**Execution environment: local machine with production PostgreSQL, Cloudflare R2, Vercel, AgentBox, macOS, and Raycast credentials only. Zodex agents must not start this phase.**
 
 #### Files to read before starting
 
 **Authoritative scope and execution history:**
 
-- `docs/user-team-sharing-spec.md` (read in full) - the production acceptance contract and non-negotiable preservation requirements.
-- This blueprint (read in full, especially `Implementation Progress`, `Amendments`, Phase 1, and Phase 14) - confirm every code phase is complete and incorporate discoveries recorded by previous agents.
-- The production runbook and rollback procedure committed by Phase 14 - use the exact reviewed sequence rather than improvising a new cutover.
+- `docs/user-team-sharing-spec.md` (read in full) - including the Raycast scope extension.
+- This blueprint (read in full, especially `Implementation Progress`, `Raycast Migration Trace`, `Amendments`, Phase 14, and Phases 15-18).
+- `gg/raycast-extension-implementation-plan-2026-07-07.md` only as historical context; do not restore its tenant/private-store assumptions.
+- The production, rollback, and Raycast developer-mode runbooks committed by Phase 18.
 
 **Credentialed commands and deployment:**
 
-- Canonical migrations, preflight/backup tooling, owner bootstrap/recovery tooling, and smoke-check commands completed in Phases 1-14 - inspect their help and dry-run modes before using production credentials.
-- `cmd/api/main.go`, `cmd/migrate/main.go`, deployment configuration under `deploy/`, and `AGENTS.md` - verify the exact backend/dashboard deployment order and required environment variables.
-- Latest branch history and outgoing diff - ensure the local checkout includes the pushed code-complete Phase 14 checkpoint before any live action.
+- Canonical migrations, preflight/backup tooling, owner bootstrap/recovery tooling, smoke-check commands, and Raycast package completed in Phases 1-18.
+- `cmd/api/main.go`, `cmd/migrate/main.go`, deployment configuration under `deploy/`, `raycast/agentbox/package.json`, and `AGENTS.md`.
+- Latest branch history, exact-head CI, and outgoing diff; verify the checkout contains the pushed Phase 18 checkpoint before any live action.
 
 #### What to do
 
-Run the production preflight and verified backup before applying any authorization migration. Store the PostgreSQL backup, R2 backup/inventory, manifests, and restoration instructions outside the deployment being migrated. Resolve every missing-object, orphan-row, or count mismatch before continuing.
+Run the production preflight and verified backup before applying any authorization migration. Store the PostgreSQL backup, R2 backup/inventory, manifests, and restoration instructions outside the deployment being migrated. Resolve every missing-object, orphan-row, owner-manifest, or count mismatch before continuing.
 
-Pause writes for the planned maintenance window. Bootstrap the permanent owner using the reviewed recovery path, apply the canonical migrations, assign every legacy thread privately to that owner, and verify IDs, timestamps, message order, bodies, content types, attachment rows, storage keys, object existence, and historical attribution against the pre-cutover manifests.
+Pause writes for the planned maintenance window. Bootstrap the permanent owner using the reviewed recovery path, apply all canonical migrations including the Raycast onboarding connector migration, assign every legacy thread privately to that owner, and verify IDs, timestamps, message order, bodies, content types, attachment rows, storage keys, object existence, and historical attribution against the pre-cutover manifests.
 
-Deploy the completed Go backend and Next.js dashboard with the reviewed production configuration. Recreate the owner's browser account/session and separate ChatGPT, Claude, and local credentials. Existing sessions, API keys, and tenant-shaped CLI profiles are intentionally invalidated.
+Deploy the completed Go backend and Next.js dashboard with the reviewed production configuration. Recreate the owner's browser account/session and separate ChatGPT, Claude, local, and Raycast credentials. Existing sessions, API keys, and tenant-shaped CLI/Raycast configuration are intentionally invalidated.
 
-Exercise the full production smoke matrix: login, private thread creation, list/search/get/post, direct uploads, pending-upload finalization, downloads, invitation registration, zero-team users, overlapping teams, visibility changes, public links and revocation, onboarding, disablement, purge behavior, and owner-browser-only content access. Confirm that the owner's API keys, MCP URLs, and CLI credentials cannot use the web-only view-all capability.
+On the local Mac, use the signed-in dashboard Raycast card to create one dedicated credential, check out the exact production commit, run the committed dependency/developer-mode commands, and enter the generated preferences. Do not reuse the owner secret, MCP URL, CLI key, or another user's Raycast key.
 
-Reopen writes only after every preservation and security check passes. If production execution exposes a code defect, make the narrowest correct fix on `feat/user-team-sharing`, update `Implementation Progress` and `Amendments`, run the relevant checks, commit, and push before resuming the runbook. When production verification is complete, mark Phase 15 `Complete` and push the final progress update to the same branch.
+Exercise the Raycast smoke matrix against production:
+
+- diagnostics resolve the expected user and `Raycast` actor without tenant metadata;
+- All, Private, Shared with me, each team, and Public filters match the dashboard's accessible thread IDs;
+- create a private thread, post text and attachments, view messages in order, preview/download healthy files, and observe explicit missing/purged states;
+- share with an available team, unshare, publish, copy/regenerate/unpublish the public link, and verify self-revocation behavior;
+- rotate the Raycast credential and prove the old installation key fails while other user credentials continue working;
+- invite or use a second ordinary test user with their own developer installation and prove cross-user privacy plus shared-team collaboration;
+- confirm the owner's Raycast credential cannot access another user's private thread through the owner-web bypass;
+- disable the test user and prove their Raycast installation is immediately rejected while preserved shared history remains visible to still-qualified users.
+
+Exercise the full non-Raycast production smoke matrix from the original cutover plan: login, list/search/get/post, uploads, downloads, invitations, zero-team users, overlapping teams, visibility/public links, onboarding, owner administration, disablement, purge, and owner-browser-only content access.
+
+Reopen writes only after every preservation, security, dashboard, client, and Raycast check passes. If production execution exposes a code defect, make the narrowest correct fix on `feat/user-team-sharing`, update `Implementation Progress` and `Amendments`, run all relevant checks, commit, push, and wait for exact-head CI before resuming the runbook. When production verification is complete, mark Phase 19 `Complete` and push the final progress update.
 
 #### Validation strategy
 
-- Pre- and post-cutover production manifests must match for threads, messages, asset rows, stable IDs, ordering, storage keys, and referenced R2 objects; any unexplained mismatch blocks reopening writes.
-- Every migrated thread must be private to the permanent owner until explicitly shared and must remain readable with its attachments.
-- Old API keys, sessions, and tenant-shaped CLI profiles must fail; newly created owner credentials must work with independent actor attribution.
-- Production checks must prove cross-user privacy, overlapping team access, removal of access after membership/share changes, public-token revocation, disabled-user invalidation, and owner API-key non-bypass.
-- Backend/dashboard health, logs, migration ledger, and R2 signing behavior must remain clean through the maintenance window and after writes reopen.
+- Pre- and post-cutover manifests match for threads, messages, asset rows, stable IDs, ordering, storage keys, and referenced R2 objects; any unexplained mismatch blocks reopening writes.
+- Every migrated thread is private to the permanent owner until explicitly shared and remains readable with its attachments.
+- Old API keys, sessions, tenant-shaped CLI profiles, and stale Raycast preferences fail; newly created per-surface credentials work with independent actor attribution.
+- Dashboard and Raycast produce the same ordinary-user accessible thread IDs and visibility state for the same user.
+- Production checks prove cross-user privacy, overlapping team access, removal after membership/share changes, public-token revocation, disabled-user invalidation, and owner API/CLI/MCP/Raycast non-bypass.
+- Backend/dashboard health, logs, migration ledger, R2 signing behavior, Raycast diagnostics, and exact-head CI remain clean through the maintenance window and after writes reopen.
 
 #### What must not break
 
 - No production thread, message, attachment row, historical attribution snapshot, or referenced R2 object may be lost or silently reassigned.
-- Writes must not reopen while backup, manifest, migration, security, or smoke checks are incomplete or failing.
+- Writes must not reopen while backup, manifest, migration, security, dashboard, Raycast, or smoke checks are incomplete or failing.
+- Do not reuse credentials across people, surfaces, or Raycast installations.
 - Do not force-push or bypass the shared progress ledger when production fixes are required; the final branch must contain the exact code and runbook state that reached production.
 
 ## Amendments
 
 ### 2026-08-02 — Active public URLs must be redisplayable
 
-The Phase 8 implementation initially stored only a public-token hash and treated the generated URL as copy-once browser state. Full rereading of the approved specification and the Phase 9 output contract showed that this contradicted the required authenticated visibility response, which must return the current public URL whenever public sharing is active. Migration `0015_visibility_contract.sql` therefore adds retained token material for authenticated redisplay while preserving the hash as the anonymous lookup/index key; the token remains excluded from internal JSON DTOs and is exposed only as the constructed public URL to authorized thread participants. Any development database row created before migration `0015` has no reconstructable token and must be rotated once; this feature has not been cut over to production, so Phase 15 will apply the canonical migration before live public-link use.
+The Phase 8 implementation initially stored only a public-token hash and treated the generated URL as copy-once browser state. Full rereading of the approved specification and the Phase 9 output contract showed that this contradicted the required authenticated visibility response, which must return the current public URL whenever public sharing is active. Migration `0015_visibility_contract.sql` therefore adds retained token material for authenticated redisplay while preserving the hash as the anonymous lookup/index key; the token remains excluded from internal JSON DTOs and is exposed only as the constructed public URL to authorized thread participants. Any development database row created before migration `0015` has no reconstructable token and must be rotated once; this feature has not been cut over to production, so Phase 19 will apply the canonical migration before live public-link use.
+
+### 2026-08-03 — Raycast is now part of the user/team migration
+
+The original specification and blueprint treated Raycast as a future credential and deferred extension redesign/distribution. The user explicitly changed that scope after the core user/team implementation was complete. Raycast must now behave as an ordinary user-owned surface over the same effective-access predicate and canonical visibility operation as the private dashboard, including create, reply, upload, view, download, team sharing, and public-link management.
+
+The accepted distribution model is intentionally narrow: every user loads the checked-in extension independently in Raycast developer mode and configures one dedicated credential for that installation. Public Store, private Store, and centrally managed team distribution remain deferred. The previous local-only Phase 15 is renumbered to Phase 19; new Phases 15-18 own all code, schema, onboarding, extension, documentation, CI, and runbook work. Historical checkpoint text is retained as evidence of the earlier execution state and must be interpreted through the numbering note in `Implementation Progress`.

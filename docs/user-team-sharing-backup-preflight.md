@@ -145,5 +145,5 @@ The shared Zodex implementation environment does not have production PostgreSQL,
 R2, Vercel, or application credentials. It can build and test this command but
 must not claim a production backup. A credentialed local agent must run this
 preflight, preserve the output off deployment, and record the real manifest path
-and counts before the Phase 15 maintenance window. Continue only with the exact
+and counts before the Phase 19 maintenance window. Continue only with the exact
 sequence in [`user-team-sharing-production-cutover.md`](user-team-sharing-production-cutover.md).

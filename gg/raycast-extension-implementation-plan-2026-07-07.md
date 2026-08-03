@@ -1,5 +1,7 @@
 # Raycast Extension Implementation Plan
 
+> **Status: Historical implementation record.** The initial extension described here was built against the former tenant-era API. The authoritative migration work is now defined by Phases 15-18 of `gg/user-team-sharing-implementation-plan-2026-08-01.md` and the Raycast requirements in `docs/user-team-sharing-spec.md`. Do not execute the old assumptions that backend changes are unnecessary, that team-store distribution is required, or that tenant-shaped DTOs remain valid.
+
 Date: 2026-07-07
 
 ## State of Current System

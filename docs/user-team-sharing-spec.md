@@ -1,6 +1,6 @@
 # AgentBox User, Team, and Public Sharing Specification
 
-Status: Approved for implementation planning
+Status: Approved for implementation planning; Raycast scope extended 2026-08-03
 
 Date: 2026-08-01
 
@@ -58,6 +58,7 @@ A user owns:
 - their ChatGPT credential and MCP URL;
 - their Claude credential and MCP URL;
 - their local-machine CLI credential;
+- one or more Raycast credentials, with one credential per local Raycast installation;
 - any additional credentials they create later;
 - memberships in zero or more teams.
 
@@ -67,7 +68,7 @@ Email addresses are unique within the deployment.
 
 ### 2.4 Credential and actor
 
-ChatGPT, Claude, a local CLI installation, and future Raycast installations are credentials acting on behalf of a user. They are not separate users.
+ChatGPT, Claude, a local CLI installation, and each Raycast development installation are credentials acting on behalf of a user. They are not separate users.
 
 Each credential must have:
 
@@ -227,11 +228,12 @@ Invalid, expired, revoked, or already-consumed invitations must not reveal deplo
 
 The first authenticated destination after signup is a resumable onboarding experience. It remains available later from settings.
 
-Onboarding presents three numbered setup steps in this order:
+Onboarding presents four numbered setup steps in this order:
 
 1. Connect ChatGPT
 2. Connect Claude
 3. Connect a local coding agent
+4. Connect Raycast
 
 Credentials are created only when the user clicks the relevant setup action. Unused credentials must not be pre-created.
 
@@ -267,6 +269,21 @@ The card produces a copyable prompt intended to be pasted into a local coding ag
 - tell the local agent to report whether setup and the test succeeded.
 
 The initial generated prompt assumes one machine and one key.
+
+### 6.4 Raycast setup
+
+The Raycast card creates one dedicated credential for one local Raycast development installation. Every user installs the checked-in extension independently with Raycast developer mode; public Store, private Store, and centrally managed team distribution are not required for this migration.
+
+The card must show the credential secret only once and provide a copyable setup bundle containing:
+
+- the deployment dashboard/base URL;
+- the dedicated Raycast API key;
+- the repository and extension path;
+- the commands required to install dependencies and run the extension in developer mode;
+- the exact Raycast preference names and values to enter;
+- a final connection check that lists only the threads currently accessible to that user.
+
+The Raycast credential must have the scopes needed to list, search, read, create, post, upload, download, and manage visibility on accessible threads. It must not gain owner-web view-all authority. Rotation or revocation affects only that Raycast installation. The setup card remains available from the dashboard after onboarding is skipped or completed, and additional installations use additional credentials.
 
 ## 7. Credential Management
 
@@ -384,6 +401,20 @@ Every accessible thread page must expose a visibility control that uses the same
 
 The control must make it clear when an action will remove the user's own team-based access.
 
+### 9.4 Raycast
+
+The Raycast extension must use the same authenticated HTTP list, search, get, create, post, upload, download, and canonical visibility endpoints as the normal dashboard, MCP, and CLI clients. It must not implement a separate workspace, tenant, team inbox, or privileged owner path.
+
+Raycast must expose the same caller-relative visibility information and controls available to an ordinary dashboard user:
+
+- All, Private, Shared with me, per-team, and Public filters;
+- current team shares and teams available to the acting user;
+- atomic add-team and remove-team changes;
+- publish, unpublish, copy, and regenerate behavior for the public URL;
+- a clear warning before a change removes the caller's own final team-derived access.
+
+Thread creation in Raycast remains private-only. Sharing happens only after creation through the canonical visibility operation.
+
 ## 10. Inbox, Search, and Thread Reads
 
 The default inbox remains one unified inbox. A user and all of their credentials see every thread they currently qualify to access:
@@ -399,7 +430,7 @@ The dashboard should expose lightweight filters:
 - one filter for each team
 - Public
 
-The default MCP and CLI list/search behavior uses the unified accessible set without requiring a workspace or team selector.
+The default MCP, CLI, and Raycast list/search behavior uses the unified accessible set without requiring a workspace or team selector. Raycast exposes the same lightweight filters as the dashboard and must not broaden or narrow the backend result in client memory.
 
 Search must never reveal titles, message snippets, counts, attachments, or existence of inaccessible threads.
 
@@ -525,7 +556,7 @@ Authorization must be expressed through stable IDs and relational constraints, n
 
 ## 17. Explicitly Deferred or Out of Scope
 
-- Publishing or distributing the Raycast extension.
+- Publishing the Raycast extension to the public Raycast Store, a private Store, or a centrally managed Raycast team. Local per-user developer-mode installation is in scope.
 - Granular per-thread read versus write roles.
 - Per-message visibility.
 - Direct user-to-user sharing outside a team.
@@ -546,17 +577,19 @@ Authorization must be expressed through stable IDs and relational constraints, n
 4. Signup is possible only through a valid, unexpired, unconsumed, owner-generated invitation.
 5. An invitation can add the new user to zero, one, or several initial teams atomically.
 6. Every new thread is private and visible only to its owner, that owner's credentials, and the owner's web-only debugging viewer.
-7. ChatGPT, Claude, local CLI, and browser messages are independently attributable to one user and one actor surface.
-8. Users and their credentials list, search, read, post, upload, and download only threads they own or receive through current team memberships.
+7. ChatGPT, Claude, local CLI, Raycast, and browser messages are independently attributable to one user and one actor surface.
+8. Users and their browser sessions, MCP credentials, CLI credentials, and Raycast credentials list, search, read, post, upload, and download only threads they own or receive through current team memberships.
 9. A user may belong to multiple teams, and one thread may be shared with multiple teams without copying data.
 10. Any currently authorized participant can add a share to a team they belong to, remove an existing team share, publish, unpublish, or regenerate the public URL.
-11. MCP exposes one `manage_thread_visibility` tool; CLI exposes one `agentbox visibility` subcommand; thread creation remains private-only.
-12. The unified inbox and normal list/search operations return the complete effective accessible set without a team/workspace selector.
+11. MCP exposes one `manage_thread_visibility` tool; CLI exposes one `agentbox visibility` subcommand; Raycast uses the same canonical visibility HTTP operation; thread creation remains private-only.
+12. The dashboard and Raycast unified inboxes and all normal list/search operations return the complete effective accessible set without a team/workspace selector, with All, Private, Shared with me, per-team, and Public filters.
 13. Public URLs are opaque, revocable, live, read-only, `noindex`, and render messages and public attachments without exposing private account metadata.
-14. Every user independently creates and revokes their own ChatGPT, Claude, and local credentials; secrets are shown only once.
-15. First-run onboarding presents numbered ChatGPT, Claude, and local setup cards and produces a working one-machine local-agent setup prompt whose final test lists accessible threads.
-16. Only the deployment owner can invite or disable users, manage teams and memberships, inspect all credential metadata, revoke another user's credential, and use the web-only view-all-content surface.
-17. The deployment owner's CLI and MCP credentials do not receive view-all-content privileges.
-18. Disabling a user immediately revokes sessions and credentials while preserving ownership, messages, team-shared history, and attribution.
-19. The owner can idempotently purge only attachments uploaded by a disabled user, freeing R2 storage while preserving attachment tombstones in message history.
-20. The finished codebase has one centralized stable-ID-based authorization model and no permanent fallback to the old tenant-wide path.
+14. Every user independently creates and revokes their own ChatGPT, Claude, local, and per-installation Raycast credentials; secrets are shown only once.
+15. First-run onboarding presents numbered ChatGPT, Claude, local, and Raycast setup cards, remains available later from the dashboard, produces a working one-machine local-agent prompt, and produces a working developer-mode Raycast setup bundle whose final test lists accessible threads.
+16. A Raycast installation can create private threads, read and search the user's effective accessible set, post replies, upload and download attachments, render unavailable or purged attachment states, and manage team/public visibility without receiving owner-web privileges.
+17. Rotating or revoking one user's Raycast credential invalidates only that installation and does not affect that user's browser, ChatGPT, Claude, local CLI, or another Raycast installation.
+18. Only the deployment owner can invite or disable users, manage teams and memberships, inspect all credential metadata, revoke another user's credential, and use the web-only view-all-content surface.
+19. The deployment owner's CLI, MCP, and Raycast credentials do not receive view-all-content privileges.
+20. Disabling a user immediately revokes sessions and credentials while preserving ownership, messages, team-shared history, and attribution.
+21. The owner can idempotently purge only attachments uploaded by a disabled user, freeing R2 storage while preserving attachment tombstones in message history.
+22. The finished codebase has one centralized stable-ID-based authorization model and no permanent fallback to the old tenant-wide path.
