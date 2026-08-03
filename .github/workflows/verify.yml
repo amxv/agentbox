@@ -53,3 +53,27 @@ jobs:
 
       - name: Run final user/team cutover verification
         run: bun run verify:cutover
+
+  raycast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: raycast/agentbox/package-lock.json
+
+      - name: Install Raycast extension dependencies
+        working-directory: raycast/agentbox
+        run: npm ci
+
+      - name: Verify Raycast extension
+        working-directory: raycast/agentbox
+        env:
+          CI: "1"
+          NO_COLOR: "1"
+        run: npm run verify

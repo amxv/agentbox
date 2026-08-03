@@ -182,8 +182,8 @@ new product paths:
    attachment. Use the owner's API key, CLI profile, and MCP URL against normal
    endpoints and prove they cannot read that same private thread.
 10. Confirm every timeline entry still shows stable `User · Actor` attribution.
-
-11. Run the ChatGPT artifact attachment smoke from the Phase 19 handoff: refresh the connector, run Scan Tools when available, create a Markdown artifact in ChatGPT, ask it to attach “the file I just created” without a manual file ID, and verify exact bytes, filename/MIME, `User · ChatGPT` attribution, R2 persistence, and rejection of a malformed string/path input.
+11. Execute [`raycast-developer-mode-smoke.md`](raycast-developer-mode-smoke.md) on the local Mac against this exact deployed commit. Preserve sanitized evidence for all five filters, private creation, replies, ordered/colliding attachments, signed and unavailable states, visibility/self-revocation, per-installation rotation, owner non-bypass, and disabled-user invalidation.
+12. Run the ChatGPT artifact attachment smoke from the Phase 19 handoff: refresh the connector, run Scan Tools when available, create a Markdown artifact in ChatGPT, ask it to attach “the file I just created” without a manual file ID, and verify exact bytes, filename/MIME, `User · ChatGPT` attribution, R2 persistence, and rejection of a malformed string/path input.
 
 Useful trusted-shell checks include:
 

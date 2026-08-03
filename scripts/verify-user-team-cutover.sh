@@ -21,6 +21,38 @@ if rg -n 'EnsureSchema' cmd internal app \
   exit 1
 fi
 
+echo 'Checking maintained Raycast surfaces for retired package assumptions...'
+raycast_legacy_pattern='Latest Messages|Search Threads|List Threads|Five commands|5 commands|private team store|npm run publish|ray publish|zue-ai|MCP URL construction'
+if rg -n -i "$raycast_legacy_pattern" \
+  app/page.tsx \
+  app/raycast/page.tsx \
+  public/raycast.md \
+  public/setup-self-host.md \
+  raycast/agentbox/README.md \
+  raycast/agentbox/package.json; then
+  echo 'Retired Raycast command, Store, or shared-credential assumptions remain in maintained surfaces.' >&2
+  exit 1
+fi
+
+echo 'Checking the Raycast package contract...'
+node <<'NODE'
+const fs = require('node:fs');
+const manifest = JSON.parse(fs.readFileSync('raycast/agentbox/package.json', 'utf8'));
+const expected = ['list-threads', 'create-thread', 'post-message', 'doctor'];
+const actual = manifest.commands.map((command) => command.name);
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  throw new Error(`unexpected Raycast commands: ${JSON.stringify(actual)}`);
+}
+if (manifest.scripts.publish || !manifest.scripts.verify) {
+  throw new Error('Raycast manifest must expose verify and omit Store publishing from the migration path');
+}
+const baseURL = manifest.preferences.find((preference) => preference.name === 'baseUrl');
+const apiKey = manifest.preferences.find((preference) => preference.name === 'apiKey');
+if (!baseURL?.required || baseURL.default || !apiKey?.required || apiKey.type !== 'password') {
+  throw new Error('Raycast must require a deployment-specific baseUrl and password apiKey without a universal default');
+}
+NODE
+
 echo 'Running Go tests and static analysis...'
 go test ./...
 go vet ./...
@@ -31,6 +63,13 @@ bun run lint
 bun run build:api
 bun run build:cli
 bun run build
+
+echo 'Running clean Raycast package verification...'
+(
+  cd raycast/agentbox
+  npm ci
+  CI=1 NO_COLOR=1 npm run verify
+)
 
 echo 'Checking patch hygiene...'
 git diff --check

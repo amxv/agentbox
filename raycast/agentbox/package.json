@@ -1,8 +1,8 @@
 {
   "name": "agentbox",
   "version": "0.1.0",
-  "description": "Search, create, and update Agentbox threads from Raycast.",
-  "title": "Agentbox",
+  "description": "Browse and participate in your AgentBox inbox from Raycast.",
+  "title": "AgentBox",
   "icon": "icon.png",
   "author": "amxv",
   "license": "MIT",
@@ -23,19 +23,18 @@
     "dev": "ray develop",
     "build": "ray build -e dist",
     "lint": "ray lint",
-    "publish": "ray publish",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test test/api-client.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run test && npm run typecheck && npm run lint && npm run build"
   },
   "preferences": [
     {
       "name": "baseUrl",
       "title": "Agentbox URL",
-      "description": "Dashboard or API proxy URL. The production dashboard proxies /api requests.",
+      "description": "Dashboard origin from the one-time AgentBox Raycast setup bundle.",
       "type": "textfield",
       "required": true,
-      "placeholder": "https://agentbox-black.vercel.app",
-      "default": "https://agentbox-black.vercel.app"
+      "placeholder": "https://your-agentbox.example.com"
     },
     {
       "name": "apiKey",

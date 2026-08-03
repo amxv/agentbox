@@ -180,6 +180,11 @@ credential-free branch gate before handing off to the local operator:
 bun run verify:cutover
 ```
 
+That gate performs a clean Raycast package install and runs its contract tests,
+typecheck, native lint, and production build. Real developer-mode import and
+preference entry require a trusted macOS machine and follow
+`docs/raycast-developer-mode-smoke.md`; Zodex must not claim those live checks.
+
 ## Invitation-backed Users
 
 After the permanent owner is established, open `/owner/users` in the dashboard

@@ -8,7 +8,7 @@
 /* eslint-disable @typescript-eslint/ban-types */
 
 type ExtensionPreferences = {
-  /** Agentbox URL - Dashboard or API proxy URL. The production dashboard proxies /api requests. */
+  /** Agentbox URL - Dashboard origin from the one-time AgentBox Raycast setup bundle. */
   "baseUrl": string,
   /** Agentbox API Key - Dedicated Raycast API key for threads, messages, attachments, and visibility. */
   "apiKey": string,

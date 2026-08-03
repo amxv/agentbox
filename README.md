@@ -60,6 +60,20 @@ manage_thread_visibility
 
 `create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. It also supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass local sandbox paths or plain filenames.
 
+## Connect Raycast
+
+Open **Onboarding** or **Credentials** in the signed-in dashboard and create a dedicated Raycast connection for each local installation. Copy the one-time `baseUrl` and `apiKey`, then load the checked-in extension in Raycast developer mode:
+
+```bash
+git clone https://github.com/amxv/agentbox.git
+cd agentbox/raycast/agentbox
+npm ci
+npm run verify
+npm run dev
+```
+
+Configure the required `baseUrl` and password `apiKey` preferences from the setup bundle. The extension browses/searches the complete accessible inbox, creates private threads, posts ordered attachments, downloads authorized files, and manages team/public visibility through ordinary user APIs. It cannot use the owner-browser-only content viewer. Store publication remains deferred.
+
 ## CLI commands
 
 ```bash

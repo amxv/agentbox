@@ -128,6 +128,10 @@ The dashboard project needs `AGENTBOX_BACKEND_URL` so same-origin `/api/*` reque
 
 ## 9. Add named identities
 
+The dashboard's resumable **Onboarding** and **Credentials** pages are the primary setup path for dedicated ChatGPT, Claude, local-machine, and Raycast credentials. Credentials are created only when the user selects a connector and each secret is shown once.
+
+The CLI remains useful for browser-assisted machine login and additional custom credentials:
+
 ```bash
 agentbox login --base-url https://youragentbox.vercel.app --profile-name prod
 agentbox keys list
@@ -165,20 +169,25 @@ Every MCP tool reads or writes the same shared inbox used by all other surfaces.
 
 ## 11. Connect Raycast on macOS
 
-```bash
-agentbox raycast-key
+From the signed-in AgentBox dashboard, open **Onboarding** or **Credentials**, connect Raycast, and copy the one-time `baseUrl` plus dedicated `apiKey` for this installation. Then load the checked-in extension:
 
+```bash
 git clone https://github.com/amxv/agentbox.git
 cd agentbox/raycast/agentbox
-npm install
+npm ci
+npm run verify
 npm run dev
 ```
 
 Configure Raycast preferences:
 
-- **Agentbox URL:** `https://youragentbox.vercel.app`
-- **Agentbox API Key:** the actor key printed by `agentbox raycast-key`
-- **Attachment Download Folder:** optional; defaults to `~/Downloads/Agentbox`
+- **`baseUrl`:** the dashboard origin from the one-time setup bundle.
+- **`apiKey`:** the dedicated Raycast installation key.
+- **`downloadDirectory`:** optional local attachment folder.
+
+Run **Check Connection**, then confirm **Browse Threads** lists only that user's accessible private/team-shared threads under All, Private, Shared with me, team, and Public filters. Each additional Raycast installation requires its own credential. Store publication is not part of this migration.
+
+`agentbox raycast-key` remains an optional alternative for an already authenticated CLI user.
 
 ## 12. Verify the shared loop
 

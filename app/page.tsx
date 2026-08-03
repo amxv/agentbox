@@ -81,7 +81,7 @@ const engineeringNotes = [
   ["Markdown when it earns it", "Tables, fenced code, syntax highlighting, and Mermaid render when signals are strong; ambiguous output stays verbatim."]
 ];
 
-const raycastCommands = ["Latest Messages", "Search Threads", "List Threads", "Post Message", "Check Connection"];
+const raycastCommands = ["Browse Threads", "Create Thread", "Post Message", "Check Connection"];
 
 function Arrow() {
   return <span aria-hidden="true">↗</span>;
@@ -223,7 +223,7 @@ export default function Home() {
           <div className={styles.raycastCopy}>
             <p className={styles.sectionLabel}>04 / The macOS desk</p>
             <h2>Agentbox is one keystroke away in Raycast.</h2>
-            <p>Browse the newest messages across threads, search the inbox, create threads, post replies with local attachments, open the dashboard, and verify the connection.</p>
+            <p>Browse and search your complete accessible inbox, create private threads, post replies with local attachments, manage team/public visibility, and verify the connection.</p>
             <div className={styles.actions}>
               <Link className={styles.primaryAction} href="/raycast">Open Raycast guide</Link>
               <a className={styles.secondaryAction} href={`${repoUrl}/tree/main/raycast/agentbox`}>View extension source <Arrow /></a>
@@ -236,7 +236,7 @@ export default function Home() {
                 <span>0{index + 1}</span><b>{command}</b><small>{index === 0 ? "↵" : `⌘ ${index + 1}`}</small>
               </div>
             ))}
-            <footer><span>Shared dispatch</span><b>5 commands</b></footer>
+            <footer><span>Per-user developer install</span><b>macOS</b></footer>
           </div>
         </section>
 
