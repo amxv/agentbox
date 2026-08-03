@@ -239,6 +239,65 @@ func TestServerUploadCompensatesWhenAccessIsLostAfterObjectWrite(t *testing.T) {
 	}
 }
 
+func TestChatGPTFileFailureAndAccessLossLeaveNoPartialState(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := New(repo, store)
+	owner := types.User{ID: "usr_chatgpt_owner", Email: "owner-chatgpt@example.com", DisplayName: "ChatGPT Owner"}
+	member := types.User{ID: "usr_chatgpt_member", Email: "member-chatgpt@example.com", DisplayName: "ChatGPT Member"}
+	repo.Users = append(repo.Users, owner, member)
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_chatgpt_owner", ActorName: "Web dashboard"}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectAPIKey, KeyID: "key_chatgpt_member", ActorName: "ChatGPT"}
+	team, err := repo.CreateTeam(context.Background(), "chatgpt-team", "ChatGPT Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.ID, member.ID} {
+		if _, err := repo.AddTeamMember(context.Background(), team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread, err := svc.CreateThread(context.Background(), ownerAuth, "ChatGPT compensation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setThreadVisibilityForTest(context.Background(), repo, owner.ID, thread.ID, []string{team.ID}); err != nil {
+		t.Fatal(err)
+	}
+	fileName := "handoff.md"
+	mimeType := "text/markdown"
+	file := &assets.ChatGPTFileInput{
+		DownloadURL: "https://files.openai.example/download/token",
+		FileID:      "file_compensation",
+		FileName:    &fileName,
+		MimeType:    &mimeType,
+	}
+
+	store.ChatGPTFailure = errors.New("simulated R2 write failure")
+	if _, err := svc.PostMessage(context.Background(), memberAuth, PostMessageParams{ThreadID: thread.ID, Body: "must not persist", File: file}); err == nil || !strings.Contains(err.Error(), "simulated R2 write failure") {
+		t.Fatalf("R2 failure error=%v", err)
+	}
+	if len(store.ChatGPTInputs) != 1 || len(store.Uploads) != 0 || len(store.DeleteCalls) != 0 || len(repo.Messages) != 0 || len(repo.Assets) != 0 {
+		t.Fatalf("R2 failure left state inputs=%#v uploads=%#v deletes=%#v messages=%#v assets=%#v", store.ChatGPTInputs, store.Uploads, store.DeleteCalls, repo.Messages, repo.Assets)
+	}
+
+	store.ChatGPTFailure = nil
+	store.AfterUpload = func(types.NewAsset) { _, _ = repo.RemoveTeamMember(context.Background(), team.ID, member.ID) }
+	_, err = svc.PostMessage(context.Background(), memberAuth, PostMessageParams{ThreadID: thread.ID, Body: "must compensate", File: file})
+	if !errors.Is(err, types.ErrThreadNotFound) {
+		t.Fatalf("post after access loss error=%v", err)
+	}
+	if len(store.ChatGPTInputs) != 2 || len(store.Uploads) != 1 || len(store.DeleteCalls) != 1 || store.DeleteCalls[0] != store.Uploads[0].StorageKey {
+		t.Fatalf("ChatGPT compensation inputs=%#v uploads=%#v deletes=%#v", store.ChatGPTInputs, store.Uploads, store.DeleteCalls)
+	}
+	if len(repo.Messages) != 0 || len(repo.Assets) != 0 {
+		t.Fatalf("failed ChatGPT post committed rows messages=%#v assets=%#v", repo.Messages, repo.Assets)
+	}
+	if _, err := store.HeadAssetObject(context.Background(), store.Uploads[0].StorageKey); err == nil {
+		t.Fatal("compensated ChatGPT object still exists")
+	}
+}
+
 func TestMissingAttachmentIsUnavailableAcrossAuthenticatedAndPublicSigning(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}

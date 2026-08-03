@@ -249,6 +249,12 @@ func TestPostMessageAcceptsStructuredChatGPTArtifact(t *testing.T) {
 	if len(payload.Message.Assets) != 1 || payload.Message.Assets[0].FileName != "handoff.md" || payload.Message.Assets[0].SizeBytes != int64(len("fake-chatgpt-file")) {
 		t.Fatalf("message = %#v", payload.Message)
 	}
+	if payload.Message.CreatedByUserDisplayName == nil || *payload.Message.CreatedByUserDisplayName != "Test User" || payload.Message.CreatedByActorName == nil || *payload.Message.CreatedByActorName != "tester" {
+		t.Fatalf("message attribution = %#v", payload.Message)
+	}
+	if payload.Message.Assets[0].CreatedByUserDisplayName == nil || *payload.Message.Assets[0].CreatedByUserDisplayName != "Test User" || payload.Message.Assets[0].CreatedByActorName == nil || *payload.Message.Assets[0].CreatedByActorName != "tester" {
+		t.Fatalf("asset attribution = %#v", payload.Message.Assets[0])
+	}
 	if len(store.Uploads) != 1 || store.Uploads[0].FileName != "handoff.md" || store.Uploads[0].SizeBytes != int64(len("fake-chatgpt-file")) {
 		t.Fatalf("uploads = %#v message assets = %#v", store.Uploads, payload.Message.Assets)
 	}

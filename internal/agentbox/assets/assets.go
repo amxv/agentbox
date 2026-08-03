@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
-	"net/http"
 	"net/url"
 	"path"
 	"regexp"
@@ -151,10 +149,10 @@ type ChatGPTFileInput struct {
 }
 
 type R2Store struct {
-	cfg        config.Config
-	client     *s3.Client
-	presigner  *s3.PresignClient
-	httpClient *http.Client
+	cfg         config.Config
+	client      *s3.Client
+	presigner   *s3.PresignClient
+	fileFetcher RemoteFileFetcher
 }
 
 func NewR2Store(ctx context.Context, cfg config.Config) (*R2Store, error) {
@@ -178,10 +176,10 @@ func NewR2Store(ctx context.Context, cfg config.Config) (*R2Store, error) {
 		o.UsePathStyle = true
 	})
 	return &R2Store{
-		cfg:        cfg,
-		client:     client,
-		presigner:  s3.NewPresignClient(client),
-		httpClient: http.DefaultClient,
+		cfg:         cfg,
+		client:      client,
+		presigner:   s3.NewPresignClient(client),
+		fileFetcher: NewSecureRemoteFileFetcher(),
 	}, nil
 }
 
@@ -328,28 +326,13 @@ func (s *R2Store) UploadChatGPTFile(ctx context.Context, userID string, threadID
 	if err != nil {
 		return agenttypes.NewAsset{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, file.DownloadURL, nil)
+	fetcher := s.fileFetcher
+	if fetcher == nil {
+		fetcher = NewSecureRemoteFileFetcher()
+	}
+	bytes, err := fetcher.Fetch(ctx, file.DownloadURL, s.cfg.MaxFileSizeBytes)
 	if err != nil {
 		return agenttypes.NewAsset{}, err
-	}
-	response, err := s.httpClient.Do(request)
-	if err != nil {
-		return agenttypes.NewAsset{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return agenttypes.NewAsset{}, fmt.Errorf("Failed to download ChatGPT file: %d %s", response.StatusCode, http.StatusText(response.StatusCode))
-	}
-	if response.ContentLength > s.cfg.MaxFileSizeBytes {
-		return agenttypes.NewAsset{}, fmt.Errorf("File is too large. Max size is %d bytes.", s.cfg.MaxFileSizeBytes)
-	}
-
-	bytes, err := io.ReadAll(io.LimitReader(response.Body, s.cfg.MaxFileSizeBytes+1))
-	if err != nil {
-		return agenttypes.NewAsset{}, err
-	}
-	if int64(len(bytes)) > s.cfg.MaxFileSizeBytes {
-		return agenttypes.NewAsset{}, fmt.Errorf("File is too large. Max size is %d bytes.", s.cfg.MaxFileSizeBytes)
 	}
 
 	fileName := file.FileID + ".bin"

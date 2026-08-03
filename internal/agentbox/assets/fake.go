@@ -18,6 +18,8 @@ type FakeStore struct {
 	MaxFileSizeBytes int64
 	AssetBucket      string
 	Uploads          []types.NewAsset
+	ChatGPTInputs    []ChatGPTFileInput
+	ChatGPTFailure   error
 	Buckets          map[string]map[string]backup.ObjectMetadata
 	CopyCalls        []backup.CopyObjectRequest
 	DeleteCalls      []string
@@ -233,6 +235,13 @@ func (f *FakeStore) UploadChatGPTFile(ctx context.Context, userID string, thread
 	file, err := NormalizeChatGPTFileInput(input)
 	if err != nil {
 		return types.NewAsset{}, err
+	}
+	f.mutex.Lock()
+	f.ChatGPTInputs = append(f.ChatGPTInputs, file)
+	failure := f.ChatGPTFailure
+	f.mutex.Unlock()
+	if failure != nil {
+		return types.NewAsset{}, failure
 	}
 	fileName := file.FileID + ".bin"
 	if file.FileName != nil {
