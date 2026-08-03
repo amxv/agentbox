@@ -400,6 +400,8 @@ function listChoice(thread: Thread): ThreadChoice {
     updatedAt: thread.updated_at,
     attribution: attributionLabel(thread, thread.created_by),
     visibility: visibilityLabels(thread.visibility_summary),
+    messageCount: thread.message_count,
+    preview: thread.last_message_preview,
   };
 }
 

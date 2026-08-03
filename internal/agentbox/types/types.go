@@ -164,6 +164,8 @@ type Thread struct {
 	CreatedByKeyID           *string                 `json:"created_by_key_id,omitempty"`
 	CreatedByUserDisplayName *string                 `json:"created_by_user_display_name,omitempty"`
 	CreatedByActorName       *string                 `json:"created_by_actor_name,omitempty"`
+	MessageCount             *int                    `json:"message_count,omitempty"`
+	LastMessagePreview       *string                 `json:"last_message_preview,omitempty"`
 	VisibilitySummary        ThreadVisibilitySummary `json:"visibility_summary"`
 }
 

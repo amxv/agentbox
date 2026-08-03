@@ -873,6 +873,14 @@ select
   t.created_by_key_id,
   t.created_by_user_display_name,
   t.created_by_actor_name,
+  (select count(*)::int from messages summary_count where summary_count.thread_id = t.id) as message_count,
+  coalesce((
+    select left(summary_latest.body, 512)
+    from messages summary_latest
+    where summary_latest.thread_id = t.id
+    order by summary_latest.created_at desc, summary_latest.id desc
+    limit 1
+  ), '') as last_message_body,
 `+threadVisibilitySummarySelect+`
 from threads t
 where `+normalThreadAccessPredicate+`
@@ -889,7 +897,7 @@ limit $6
 	threads := []types.Thread{}
 	positions := []types.ThreadPageCursor{}
 	for rows.Next() {
-		thread, updatedAt, err := scanThreadWithVisibilityPosition(rows)
+		thread, updatedAt, err := scanThreadSummaryWithVisibilityPosition(rows)
 		if err != nil {
 			return types.ThreadPage{}, err
 		}
@@ -3105,6 +3113,34 @@ func scanThreadWithVisibilityPosition(row threadScanner) (types.Thread, time.Tim
 	}
 	thread.CreatedAt = isoMillis(createdAt)
 	thread.UpdatedAt = isoMillis(updatedAt)
+	visibility, err := decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
+	if err != nil {
+		return types.Thread{}, time.Time{}, err
+	}
+	thread.VisibilitySummary = visibility
+	return thread, updatedAt, nil
+}
+
+func scanThreadSummaryWithVisibilityPosition(row threadScanner) (types.Thread, time.Time, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	var thread types.Thread
+	var messageCount int
+	var lastMessageBody string
+	var ownedByMe bool
+	var sharedTeamsJSON []byte
+	var matchedTeamsJSON []byte
+	var isPublic bool
+	dest := threadScanDest(&thread, &createdAt, &updatedAt)
+	dest = append(dest, &messageCount, &lastMessageBody, &ownedByMe, &sharedTeamsJSON, &matchedTeamsJSON, &isPublic)
+	if err := row.Scan(dest...); err != nil {
+		return types.Thread{}, time.Time{}, err
+	}
+	thread.CreatedAt = isoMillis(createdAt)
+	thread.UpdatedAt = isoMillis(updatedAt)
+	thread.MessageCount = &messageCount
+	preview := previewText(lastMessageBody, 180)
+	thread.LastMessagePreview = &preview
 	visibility, err := decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
 	if err != nil {
 		return types.Thread{}, time.Time{}, err

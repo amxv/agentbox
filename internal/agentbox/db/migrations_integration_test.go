@@ -2481,6 +2481,23 @@ func TestThreadContinuationPagesTraverseEveryEffectiveAccessFilter(t *testing.T)
 		}
 		createdIDs = append(createdIDs, thread.ID)
 	}
+	summaryThreadID := createdIDs[0]
+	for _, body := range []string{"first PostgreSQL summary", "second PostgreSQL summary"} {
+		if _, err := repository.PostMessage(ctx, member.ID, summaryThreadID, memberAuth, body, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repository.pool.Exec(ctx, `
+update messages
+set created_at = case body
+  when 'first PostgreSQL summary' then '2026-08-03T12:34:54Z'::timestamptz
+  when 'second PostgreSQL summary' then '2026-08-03T12:34:55Z'::timestamptz
+  else created_at
+end
+where thread_id = $1
+`, summaryThreadID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := repository.pool.Exec(ctx, `
 update threads
 set updated_at = '2026-08-03T12:34:56.123456Z'::timestamptz
@@ -2497,6 +2514,16 @@ where schemaname = current_schema() and indexname = 'threads_updated_id_idx'
 	}
 	if !strings.Contains(indexDefinition, "updated_at DESC") || !strings.Contains(indexDefinition, "id") {
 		t.Fatalf("continuation index definition=%q", indexDefinition)
+	}
+	var messageIndexDefinition string
+	if err := repository.pool.QueryRow(ctx, `
+select indexdef from pg_indexes
+where schemaname = current_schema() and indexname = 'messages_thread_latest_idx'
+`).Scan(&messageIndexDefinition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(messageIndexDefinition, "thread_id") || !strings.Contains(messageIndexDefinition, "created_at DESC") || !strings.Contains(messageIndexDefinition, "id DESC") {
+		t.Fatalf("message summary index definition=%q", messageIndexDefinition)
 	}
 
 	type filterCase struct {
@@ -2545,6 +2572,12 @@ where schemaname = current_schema() and indexname = 'threads_updated_id_idx'
 					t.Fatal(err)
 				}
 				for _, thread := range page.Threads {
+					if thread.MessageCount == nil || thread.LastMessagePreview == nil {
+						t.Fatalf("thread summary omitted for %s: %#v", thread.ID, thread)
+					}
+					if thread.ID == summaryThreadID && (*thread.MessageCount != 2 || *thread.LastMessagePreview != "second PostgreSQL summary") {
+						t.Fatalf("thread summary=%d %q, want 2 and latest body", *thread.MessageCount, *thread.LastMessagePreview)
+					}
 					if listSeen[thread.ID] {
 						t.Fatalf("duplicate list thread %s", thread.ID)
 					}

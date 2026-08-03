@@ -741,6 +741,8 @@ function threadFromRecent(thread: Thread): ListedThread {
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
     createdBy: attributionLabel(thread, thread.created_by),
+    messageCount: thread.message_count,
+    lastMessagePreview: thread.last_message_preview,
     matchedSnippets: [],
     visibility: thread.visibility_summary,
   };

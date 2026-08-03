@@ -340,6 +340,7 @@ func (m *MemoryRepository) ListThreadsPage(_ context.Context, userID string, par
 			if !threadAfterPageCursor(thread, params.Cursor) {
 				continue
 			}
+			thread = m.threadWithMessageSummary(thread)
 			threads = append(threads, thread)
 		}
 	}
@@ -367,6 +368,28 @@ func (m *MemoryRepository) ListThreadsPage(_ context.Context, userID string, par
 		pageInfo.NextCursor = &next
 	}
 	return types.ThreadPage{Threads: threads[:visible], Page: pageInfo}, nil
+}
+
+func (m *MemoryRepository) threadWithMessageSummary(thread types.Thread) types.Thread {
+	messageCount := 0
+	lastMessageBody := ""
+	lastMessageAt := ""
+	lastMessageID := ""
+	for _, message := range m.Messages {
+		if message.ThreadID != thread.ID {
+			continue
+		}
+		messageCount++
+		if message.CreatedAt > lastMessageAt || (message.CreatedAt == lastMessageAt && message.ID > lastMessageID) {
+			lastMessageAt = message.CreatedAt
+			lastMessageID = message.ID
+			lastMessageBody = message.Body
+		}
+	}
+	thread.MessageCount = &messageCount
+	preview := previewText(lastMessageBody, 180)
+	thread.LastMessagePreview = &preview
+	return thread
 }
 
 func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {

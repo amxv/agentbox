@@ -78,6 +78,8 @@ export type Thread = AttributionSnapshot & {
   created_by: string;
   created_by_user_id?: string;
   created_by_key_id?: string;
+  message_count?: number;
+  last_message_preview?: string;
   visibility_summary: ThreadVisibilitySummary;
 };
 
@@ -585,6 +587,8 @@ function decodeThread(value: unknown, path = "thread"): Thread {
       `${path}.created_by_user_display_name`,
     ),
     created_by_actor_name: optionalString(record.created_by_actor_name, `${path}.created_by_actor_name`),
+    message_count: optionalNumber(record.message_count, `${path}.message_count`),
+    last_message_preview: optionalString(record.last_message_preview, `${path}.last_message_preview`),
     visibility_summary: decodeVisibilitySummary(record.visibility_summary, `${path}.visibility_summary`),
   };
 }
@@ -742,6 +746,11 @@ function expectBoolean(value: unknown, path: string): boolean {
 function optionalBoolean(value: unknown, path: string): boolean | undefined {
   if (value === undefined || value === null) return undefined;
   return expectBoolean(value, path);
+}
+
+function optionalNumber(value: unknown, path: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  return expectNumber(value, path);
 }
 
 function expectStringArray(value: unknown, path: string): string[] {

@@ -44,6 +44,8 @@ function threadFixture(id: string, title = id): Thread {
     created_by_key_id: "key_raycast",
     created_by_user_display_name: "Ashray",
     created_by_actor_name: "Raycast",
+    message_count: 0,
+    last_message_preview: "",
     visibility_summary: privateVisibility,
   };
 }
@@ -164,6 +166,8 @@ test("all five filters and search traverse opaque continuation pages without dup
     listed.map((thread) => thread.id),
     ["thr_1", "thr_2"],
   );
+  assert.equal(listed[0].message_count, 0);
+  assert.equal(listed[0].last_message_preview, "");
   const searched = await client.searchAllThreads({
     query: "needle",
     limit: 2,
@@ -527,6 +531,10 @@ test("Raycast source cannot regain tenant, persistence, attachment-public-URL, o
   assert.match(postSource, /Enter Thread ID Manually/);
   assert.match(postSource, /requestId\.current/);
   assert.doesNotMatch(postSource, /id="target"|target === "new"|createThread\(/);
+  assert.match(postSource, /thread\.message_count/);
+  assert.match(postSource, /thread\.last_message_preview/);
+  assert.match(browseSource, /thread\.message_count/);
+  assert.match(browseSource, /thread\.last_message_preview/);
 
   const manifest = JSON.parse(await readFile(path.join(testDirectory, "..", "package.json"), "utf8")) as {
     commands: Array<{ name: string; title: string }>;

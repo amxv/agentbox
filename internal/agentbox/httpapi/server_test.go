@@ -2319,9 +2319,30 @@ func TestThreadListAndSearchExposeStableContinuationPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, suffix := range []string{"alpha", "bravo", "charlie", "delta", "echo"} {
-		if _, err := svc.CreateThread(t.Context(), browser, "cursor marker "+suffix); err != nil {
+	summaryThreadID := ""
+	for index, suffix := range []string{"alpha", "bravo", "charlie", "delta", "echo"} {
+		thread, err := svc.CreateThread(t.Context(), browser, "cursor marker "+suffix)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if index == 0 {
+			summaryThreadID = thread.ID
+		}
+	}
+	for _, body := range []string{"first summary message", "second summary message"} {
+		if _, err := svc.PostMessage(t.Context(), browser, service.PostMessageParams{ThreadID: summaryThreadID, Body: body}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range repo.Messages {
+		if repo.Messages[index].ThreadID != summaryThreadID {
+			continue
+		}
+		if repo.Messages[index].Body == "first summary message" {
+			repo.Messages[index].CreatedAt = "2026-08-03T12:34:54.000Z"
+		}
+		if repo.Messages[index].Body == "second summary message" {
+			repo.Messages[index].CreatedAt = "2026-08-03T12:34:55.000Z"
 		}
 	}
 	for index := range repo.Threads {
@@ -2357,10 +2378,20 @@ func TestThreadListAndSearchExposeStableContinuationPages(t *testing.T) {
 		t.Helper()
 		ids := []string{}
 		seen := map[string]bool{}
+		summarySeen := false
 		cursor := ""
 		for pageNumber := 0; pageNumber < 10; pageNumber++ {
 			page := requestPage(extraQuery, cursor)
 			for _, thread := range page.Threads {
+				if thread.MessageCount == nil || thread.LastMessagePreview == nil {
+					t.Fatalf("thread summary omitted from list/search page: %#v", thread)
+				}
+				if thread.ID == summaryThreadID {
+					summarySeen = true
+					if *thread.MessageCount != 2 || *thread.LastMessagePreview != "second summary message" {
+						t.Fatalf("thread summary=%d %q, want 2 and latest body", *thread.MessageCount, *thread.LastMessagePreview)
+					}
+				}
 				if seen[thread.ID] {
 					t.Fatalf("duplicate thread %s across continuation pages", thread.ID)
 				}
@@ -2370,6 +2401,9 @@ func TestThreadListAndSearchExposeStableContinuationPages(t *testing.T) {
 			if !page.Page.HasMore {
 				if page.Page.NextCursor != nil {
 					t.Fatalf("terminal page exposed next cursor: %#v", page.Page)
+				}
+				if !summarySeen {
+					t.Fatalf("summary thread %s was not traversed", summaryThreadID)
 				}
 				return ids
 			}
