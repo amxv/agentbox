@@ -10,7 +10,7 @@
 type ExtensionPreferences = {
   /** Agentbox URL - Dashboard or API proxy URL. The production dashboard proxies /api requests. */
   "baseUrl": string,
-  /** Agentbox API Key - Actor API key for thread, message, attachment, and MCP requests. */
+  /** Agentbox API Key - Dedicated Raycast API key for threads, messages, attachments, and visibility. */
   "apiKey": string,
   /** Attachment Download Folder - Folder where attachment download actions save files. */
   "downloadDirectory"?: string

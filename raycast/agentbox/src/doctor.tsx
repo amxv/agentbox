@@ -10,7 +10,7 @@ import {
   showToast,
 } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AgentboxAPIError, authMe, getPreferences, health, listThreads, mcpUrl } from "./api";
+import { AgentboxAPIError, authMe, getPreferences, health, listTeams, listThreads } from "./api";
 import { AgentboxUtilityActions, safeBaseUrl } from "./utility-actions";
 
 type CheckStatus = "pending" | "pass" | "fail";
@@ -28,7 +28,7 @@ const INITIAL_CHECKS: DoctorCheck[] = [
   { id: "health", title: "Health Endpoint", status: "pending", detail: "Checking /api/health" },
   { id: "account", title: "Account", status: "pending", detail: "Checking /api/auth/me" },
   { id: "authenticated-api", title: "Authenticated API", status: "pending", detail: "Checking /api/threads?limit=1" },
-  { id: "mcp-url", title: "MCP URL", status: "pending", detail: "Checking /api/mcp URL construction" },
+  { id: "teams", title: "Team Access", status: "pending", detail: "Checking /api/me/teams" },
 ];
 
 export default function Doctor() {
@@ -60,13 +60,13 @@ export default function Doctor() {
       return;
     }
 
-    const [healthCheck, accountCheck, authCheck, mcpCheck] = await Promise.all([
+    const [healthCheck, accountCheck, authCheck, teamCheck] = await Promise.all([
       checkHealth(),
       checkAccount(),
       checkAuthenticatedAPI(),
-      checkMcpUrl(),
+      checkTeams(),
     ]);
-    const nextChecks = [preferencesCheck, healthCheck, accountCheck, authCheck, mcpCheck];
+    const nextChecks = [preferencesCheck, healthCheck, accountCheck, authCheck, teamCheck];
     setChecks(nextChecks);
     setIsLoading(false);
 
@@ -176,16 +176,12 @@ async function checkHealth(): Promise<DoctorCheck> {
 async function checkAccount(): Promise<DoctorCheck> {
   try {
     const auth = await authMe();
-    const detailParts = [`tenant ${auth.tenant_id}`];
-    if (auth.tenant_slug) {
-      detailParts.push(`slug ${auth.tenant_slug}`);
-    }
-    if (auth.actor_name) {
-      detailParts.push(`actor ${auth.actor_name}`);
-    }
-    if (auth.subject_type) {
-      detailParts.push(auth.subject_type);
-    }
+    const detailParts = [
+      `user ${auth.user_display_name || auth.user_id}`,
+      `actor ${auth.actor_name}`,
+      auth.subject_type,
+    ];
+    if (auth.scopes?.length) detailParts.push(`${auth.scopes.length} scopes`);
     return pass("account", "Account", detailParts.join(", "));
   } catch (error) {
     return fail("account", "Account", "Could not resolve API key account metadata.", explainRequestError(error));
@@ -210,19 +206,16 @@ async function checkAuthenticatedAPI(): Promise<DoctorCheck> {
   }
 }
 
-async function checkMcpUrl(): Promise<DoctorCheck> {
+async function checkTeams(): Promise<DoctorCheck> {
   try {
-    const endpoint = mcpUrl();
-    const url = new URL(endpoint);
-    if (url.pathname !== "/api/mcp") {
-      return fail("mcp-url", "MCP URL", "MCP endpoint path is not /api/mcp.", sanitizeUrl(endpoint));
-    }
-    if (!url.searchParams.get("key")) {
-      return fail("mcp-url", "MCP URL", "MCP URL is missing the API key query parameter.");
-    }
-    return pass("mcp-url", "MCP URL", sanitizeUrl(endpoint));
+    const teams = await listTeams();
+    const detail =
+      teams.length === 0
+        ? "User belongs to no teams."
+        : `User belongs to ${teams.length} team${teams.length === 1 ? "" : "s"}.`;
+    return pass("teams", "Team Access", detail);
   } catch (error) {
-    return fail("mcp-url", "MCP URL", "Could not construct the MCP URL.", normalizeError(error).message);
+    return fail("teams", "Team Access", "Could not call /api/me/teams.", explainRequestError(error));
   }
 }
 
@@ -303,19 +296,6 @@ function explainRequestError(error: unknown): string {
     return `${error.status}: ${error.message}`;
   }
   return normalizeError(error).message;
-}
-
-function sanitizeUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    const key = url.searchParams.get("key");
-    if (key) {
-      url.searchParams.set("key", maskSecret(key));
-    }
-    return url.toString();
-  } catch {
-    return value;
-  }
 }
 
 function maskSecret(secret: string): string {

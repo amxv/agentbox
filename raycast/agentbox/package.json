@@ -5,16 +5,27 @@
   "title": "Agentbox",
   "icon": "icon.png",
   "author": "amxv",
-  "owner": "zue-ai",
   "license": "MIT",
-  "platforms": ["macOS"],
-  "categories": ["Productivity", "Developer Tools"],
-  "keywords": ["agentbox", "agents", "mcp", "threads", "messages"],
+  "platforms": [
+    "macOS"
+  ],
+  "categories": [
+    "Productivity",
+    "Developer Tools"
+  ],
+  "keywords": [
+    "agentbox",
+    "agents",
+    "threads",
+    "messages"
+  ],
   "scripts": {
     "dev": "ray develop",
     "build": "ray build -e dist",
     "lint": "ray lint",
-    "publish": "ray publish"
+    "publish": "ray publish",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test test/api-client.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "preferences": [
     {
@@ -29,7 +40,7 @@
     {
       "name": "apiKey",
       "title": "Agentbox API Key",
-      "description": "Actor API key for thread, message, attachment, and MCP requests.",
+      "description": "Dedicated Raycast API key for threads, messages, attachments, and visibility.",
       "type": "password",
       "required": true,
       "placeholder": "Paste an Agentbox API key"
@@ -75,7 +86,7 @@
       "name": "doctor",
       "title": "Check Connection",
       "subtitle": "Agentbox",
-      "description": "Check preferences, health, authenticated API access, and MCP URL setup.",
+      "description": "Check preferences, health, user identity, teams, and authenticated thread access.",
       "mode": "view"
     }
   ],

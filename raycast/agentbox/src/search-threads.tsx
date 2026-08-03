@@ -11,7 +11,6 @@ import {
   getAssetDownloadUrl,
   getThread,
   listThreads,
-  mcpUrl,
   searchThreads,
 } from "./api";
 import { AttachmentActions } from "./attachment-actions";
@@ -276,7 +275,9 @@ function MessagePreviewDetail({ isSelected, message }: { isSelected: boolean; me
       };
     }
 
-    const assetsNeedingSignedUrls = imageAssets.filter((asset) => !asset.download_url && !asset.public_url);
+    const assetsNeedingSignedUrls = imageAssets.filter(
+      (asset) => !asset.preview_url && !asset.download_url && !asset.purged_at && !asset.unavailable,
+    );
     if (assetsNeedingSignedUrls.length === 0) {
       return () => {
         isMounted = false;
@@ -318,7 +319,6 @@ function MessagePreviewDetail({ isSelected, message }: { isSelected: boolean; me
 
 function ThreadActions({ thread, onRefresh }: { thread: ListedThread; onRefresh: () => void }) {
   const threadUrl = safeDashboardThreadUrl(thread.id);
-  const mcpEndpoint = safeMcpUrl();
 
   return (
     <ActionPanel>
@@ -350,7 +350,6 @@ function ThreadActions({ thread, onRefresh }: { thread: ListedThread; onRefresh:
       <ActionPanel.Section title="Copy">
         <Action.CopyToClipboard title="Copy Thread ID" content={thread.id} shortcut={Keyboard.Shortcut.Common.Copy} />
         <Action.CopyToClipboard title="Copy Thread URL" content={threadUrl} />
-        <Action.CopyToClipboard title="Copy MCP URL" content={mcpEndpoint} concealed />
       </ActionPanel.Section>
       <AgentboxUtilityActions />
     </ActionPanel>
@@ -670,14 +669,6 @@ function safeDashboardThreadUrl(threadId: string): string {
     return dashboardThreadUrl(threadId);
   } catch {
     return `https://agentbox-black.vercel.app/threads/${encodeURIComponent(threadId)}`;
-  }
-}
-
-function safeMcpUrl(): string {
-  try {
-    return mcpUrl();
-  } catch {
-    return "";
   }
 }
 

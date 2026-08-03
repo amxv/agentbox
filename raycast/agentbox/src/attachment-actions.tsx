@@ -4,7 +4,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { Asset, getAssetDownloadUrl, getPreferences } from "./api";
+import { Asset, assetAvailability, getAssetDownloadUrl, getPreferences } from "./api";
 
 export type AssetWithMessage = Asset & {
   messageId?: string;
@@ -20,53 +20,73 @@ export function AttachmentActions({ assets, title = "Attachments" }: { assets: A
 
   return (
     <ActionPanel.Section title={title}>
-      {assets.map((asset) => (
-        <ActionPanel.Submenu
-          key={asset.id}
-          title={`Attachment: ${assetName(asset)}`}
-          icon={isImageAsset(asset) ? Icon.Image : Icon.Paperclip}
-        >
-          <Action
-            title={isImageAsset(asset) ? "Download and Open Image" : "Download and Open Attachment"}
-            icon={isImageAsset(asset) ? Icon.Image : Icon.Document}
-            onAction={() => void downloadAndOpenAsset(asset)}
-          />
-          <Action
-            title="Download and Show in Finder"
-            icon={Icon.Finder}
-            onAction={() => void downloadAndRevealAsset(asset)}
-          />
-          <Action
-            title="Download and Copy File Path"
-            icon={Icon.Clipboard}
-            shortcut={Keyboard.Shortcut.Common.Copy}
-            onAction={() => void downloadAndCopyAssetPath(asset)}
-          />
-          <Action
-            title="Download and Copy File"
-            icon={Icon.Document}
-            onAction={() => void downloadAndCopyAssetFile(asset)}
-          />
-          <Action
-            title="Open Signed Download URL"
-            icon={Icon.Globe}
-            onAction={() => void openSignedDownloadUrl(asset)}
-          />
-          <Action
-            title="Copy Signed Download URL"
-            icon={Icon.Link}
-            onAction={() => void copySignedDownloadUrl(asset)}
-          />
-          {asset.public_url && (
-            <Action.CopyToClipboard title="Copy Public URL" icon={Icon.Link} content={asset.public_url} />
-          )}
-          {asset.download_url && (
-            <Action.CopyToClipboard title="Copy Asset Download URL" icon={Icon.Link} content={asset.download_url} />
-          )}
-          <Action.CopyToClipboard title="Copy Asset ID" content={asset.id} />
-          {asset.messageId && <Action.CopyToClipboard title="Copy Message ID" content={asset.messageId} />}
-        </ActionPanel.Submenu>
-      ))}
+      {assets.map((asset) => {
+        const availability = assetAvailability(asset);
+        return (
+          <ActionPanel.Submenu
+            key={asset.id}
+            title={`Attachment: ${assetName(asset)}`}
+            icon={availability.available ? (isImageAsset(asset) ? Icon.Image : Icon.Paperclip) : Icon.Warning}
+          >
+            {availability.available ? (
+              <>
+                <Action
+                  title={isImageAsset(asset) ? "Download and Open Image" : "Download and Open Attachment"}
+                  icon={isImageAsset(asset) ? Icon.Image : Icon.Document}
+                  onAction={() => void downloadAndOpenAsset(asset)}
+                />
+                <Action
+                  title="Download and Show in Finder"
+                  icon={Icon.Finder}
+                  onAction={() => void downloadAndRevealAsset(asset)}
+                />
+                <Action
+                  title="Download and Copy File Path"
+                  icon={Icon.Clipboard}
+                  shortcut={Keyboard.Shortcut.Common.Copy}
+                  onAction={() => void downloadAndCopyAssetPath(asset)}
+                />
+                <Action
+                  title="Download and Copy File"
+                  icon={Icon.Document}
+                  onAction={() => void downloadAndCopyAssetFile(asset)}
+                />
+                <Action
+                  title="Open Signed Download URL"
+                  icon={Icon.Globe}
+                  onAction={() => void openSignedDownloadUrl(asset)}
+                />
+                <Action
+                  title="Copy Signed Download URL"
+                  icon={Icon.Link}
+                  onAction={() => void copySignedDownloadUrl(asset)}
+                />
+                {asset.download_url && (
+                  <Action.CopyToClipboard
+                    title="Copy Current Signed URL"
+                    icon={Icon.Link}
+                    content={asset.download_url}
+                  />
+                )}
+              </>
+            ) : (
+              <Action
+                title={availability.label ?? "Attachment unavailable"}
+                icon={Icon.Warning}
+                onAction={() =>
+                  void showToast({
+                    style: Toast.Style.Failure,
+                    title: "Attachment unavailable",
+                    message: availability.label,
+                  })
+                }
+              />
+            )}
+            <Action.CopyToClipboard title="Copy Asset ID" content={asset.id} />
+            {asset.messageId && <Action.CopyToClipboard title="Copy Message ID" content={asset.messageId} />}
+          </ActionPanel.Submenu>
+        );
+      })}
     </ActionPanel.Section>
   );
 }

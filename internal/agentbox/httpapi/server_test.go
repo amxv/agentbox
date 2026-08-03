@@ -1496,21 +1496,20 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 		Uploads []struct {
 			UploadID        string            `json:"upload_id"`
 			UploadURL       string            `json:"upload_url"`
-			StorageKey      string            `json:"storage_key"`
 			RequiredHeaders map[string]string `json:"required_headers"`
 		} `json:"uploads"`
 	}
 	if err := json.Unmarshal(intent.Body.Bytes(), &intentPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(intentPayload.Uploads) != 1 || intentPayload.Uploads[0].UploadID == "" || intentPayload.Uploads[0].UploadURL == "" || intentPayload.Uploads[0].StorageKey == "" || intentPayload.Uploads[0].RequiredHeaders["content-type"] != "text/markdown" {
+	if len(intentPayload.Uploads) != 1 || intentPayload.Uploads[0].UploadID == "" || intentPayload.Uploads[0].UploadURL == "" || intentPayload.Uploads[0].RequiredHeaders["content-type"] != "text/markdown" || strings.Contains(intent.Body.String(), "storage_key") {
 		t.Fatalf("intent payload = %#v", intentPayload)
 	}
-	if !strings.HasPrefix(intentPayload.Uploads[0].StorageKey, "agentbox/usr_user/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
-		t.Fatalf("storage key = %q", intentPayload.Uploads[0].StorageKey)
+	if len(repo.Pending) != 1 || repo.Pending[0].ID != intentPayload.Uploads[0].UploadID || !strings.HasPrefix(repo.Pending[0].StorageKey, "agentbox/usr_user/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
+		t.Fatalf("pending upload = %#v", repo.Pending)
 	}
 	contentType := "text/markdown"
-	store.PutAssetObject(intentPayload.Uploads[0].StorageKey, 12, &contentType)
+	store.PutAssetObject(repo.Pending[0].StorageKey, 12, &contentType)
 
 	postBody := `{"body":"attached","uploaded_assets":[{"upload_id":"` + intentPayload.Uploads[0].UploadID + `"}]}`
 	post := httptest.NewRecorder()
@@ -1645,14 +1644,13 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	}
 	var intentAPayload struct {
 		Uploads []struct {
-			UploadID   string `json:"upload_id"`
-			StorageKey string `json:"storage_key"`
+			UploadID string `json:"upload_id"`
 		} `json:"uploads"`
 	}
 	if err := json.Unmarshal(intentA.Body.Bytes(), &intentAPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(intentAPayload.Uploads) != 1 || !strings.HasPrefix(intentAPayload.Uploads[0].StorageKey, "agentbox/"+authA.UserID+"/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
+	if len(intentAPayload.Uploads) != 1 || strings.Contains(intentA.Body.String(), "storage_key") || len(repo.Pending) == 0 || !strings.HasPrefix(repo.Pending[len(repo.Pending)-1].StorageKey, "agentbox/"+authA.UserID+"/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
 		t.Fatalf("intentAPayload = %#v", intentAPayload)
 	}
 
@@ -1843,18 +1841,27 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 	}
 	var uploadPayload struct {
 		Uploads []struct {
-			UploadID   string `json:"upload_id"`
-			StorageKey string `json:"storage_key"`
+			UploadID string `json:"upload_id"`
 		} `json:"uploads"`
 	}
 	if err := json.Unmarshal(uploadIntent.Body.Bytes(), &uploadPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(uploadPayload.Uploads) != 1 || uploadPayload.Uploads[0].UploadID == "" || uploadPayload.Uploads[0].StorageKey == "" {
+	if len(uploadPayload.Uploads) != 1 || uploadPayload.Uploads[0].UploadID == "" || strings.Contains(uploadIntent.Body.String(), "storage_key") {
 		t.Fatalf("team upload payload=%#v", uploadPayload)
 	}
 	teamContentType := "text/plain"
-	store.PutAssetObject(uploadPayload.Uploads[0].StorageKey, 4, &teamContentType)
+	pendingStorageKey := ""
+	for _, pending := range repo.Pending {
+		if pending.ID == uploadPayload.Uploads[0].UploadID {
+			pendingStorageKey = pending.StorageKey
+			break
+		}
+	}
+	if pendingStorageKey == "" {
+		t.Fatalf("pending upload %s not found: %#v", uploadPayload.Uploads[0].UploadID, repo.Pending)
+	}
+	store.PutAssetObject(pendingStorageKey, 4, &teamContentType)
 	finalizeBody, _ := json.Marshal(map[string]any{
 		"body":       "team upload finalization",
 		"upload_ids": []string{uploadPayload.Uploads[0].UploadID},

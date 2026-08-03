@@ -170,7 +170,8 @@ function attachmentMetadataLine(asset: Asset, linkUrl?: string): string {
 }
 
 function assetPreviewUrl(asset: Asset, imagePreviewUrls?: Record<string, string>): string | undefined {
-  return imagePreviewUrls?.[asset.id] || asset.download_url || asset.public_url || undefined;
+  if (asset.purged_at || asset.unavailable) return undefined;
+  return imagePreviewUrls?.[asset.id] || asset.preview_url || asset.download_url || undefined;
 }
 
 function assetName(asset: Asset): string {

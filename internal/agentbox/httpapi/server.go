@@ -1144,7 +1144,7 @@ func (s *Server) createUploadIntents(w http.ResponseWriter, r *http.Request, thr
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"uploads": uploads})
+	writeJSON(w, http.StatusCreated, map[string]any{"uploads": safeUploadIntentResponses(uploads)})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -1648,6 +1648,32 @@ type viewerAsset struct {
 	types.Asset
 	DownloadURL *string `json:"download_url,omitempty"`
 	PreviewURL  *string `json:"preview_url,omitempty"`
+}
+
+type uploadIntentResponse struct {
+	UploadID        string            `json:"upload_id"`
+	FileName        string            `json:"file_name"`
+	MimeType        *string           `json:"mime_type"`
+	SizeBytes       int64             `json:"size_bytes"`
+	UploadURL       string            `json:"upload_url"`
+	ExpiresIn       int               `json:"expires_in"`
+	RequiredHeaders map[string]string `json:"required_headers"`
+}
+
+func safeUploadIntentResponses(uploads []types.PresignedUpload) []uploadIntentResponse {
+	result := make([]uploadIntentResponse, 0, len(uploads))
+	for _, upload := range uploads {
+		result = append(result, uploadIntentResponse{
+			UploadID:        upload.UploadID,
+			FileName:        upload.FileName,
+			MimeType:        upload.MimeType,
+			SizeBytes:       upload.SizeBytes,
+			UploadURL:       upload.UploadURL,
+			ExpiresIn:       upload.ExpiresIn,
+			RequiredHeaders: upload.RequiredHeaders,
+		})
+	}
+	return result
 }
 
 func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext types.AuthContext, thread *types.ThreadWithMessages) (viewerThread, error) {

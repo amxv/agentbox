@@ -157,7 +157,9 @@ function MessagePreviewDetail({ isSelected, message }: { isSelected: boolean; me
       };
     }
 
-    const assetsNeedingSignedUrls = imageAssets.filter((asset) => !asset.download_url && !asset.public_url);
+    const assetsNeedingSignedUrls = imageAssets.filter(
+      (asset) => !asset.preview_url && !asset.download_url && !asset.purged_at && !asset.unavailable,
+    );
     if (assetsNeedingSignedUrls.length === 0) {
       return () => {
         isMounted = false;
