@@ -1134,7 +1134,8 @@ func TestServiceUserPrivateIsolationAndAPIKeys(t *testing.T) {
 
 func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := New(repo, store)
 	user := types.User{
 		ID:          "usr_onboarding",
 		Email:       "onboarding@example.com",
@@ -1177,6 +1178,10 @@ func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T)
 		t.Fatalf("duplicate initial connector did not require rotation: %v", err)
 	}
 
+	raycast, err := svc.CreateOnboardingConnection(context.Background(), browser, "raycast", "https://agentbox.example", false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	claude, err := svc.CreateOnboardingConnection(context.Background(), browser, "claude", "https://agentbox.example", false)
 	if err != nil {
 		t.Fatal(err)
@@ -1185,19 +1190,33 @@ func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chatgpt.Credential.Key == claude.Credential.Key || chatgpt.Credential.Key == local.Credential.Key || claude.Credential.Key == local.Credential.Key {
-		t.Fatal("onboarding connectors reused credential material")
+	connectorSecrets := []string{chatgpt.Credential.Key, claude.Credential.Key, local.Credential.Key, raycast.Credential.Key}
+	seenSecrets := map[string]bool{}
+	for _, secret := range connectorSecrets {
+		if secret == "" || seenSecrets[secret] {
+			t.Fatal("onboarding connectors reused or omitted credential material")
+		}
+		seenSecrets[secret] = true
 	}
 	if !strings.Contains(local.ProfileCommand, "agentbox profiles add local") || !strings.Contains(local.ProfileCommand, "--user-id '"+user.ID+"'") || !strings.Contains(local.ProfileCommand, "--key-name 'Local CLI'") || !strings.Contains(local.SetupPrompt, "npm install -g @amxv/agentbox") || !strings.Contains(local.SetupPrompt, "agentbox list") {
 		t.Fatalf("local setup output=%#v", local)
+	}
+	if raycast.RaycastSetup == nil || raycast.RaycastSetup.BaseURL != "https://agentbox.example" || raycast.RaycastSetup.APIKey != raycast.Credential.Key || raycast.RaycastSetup.RepositoryURL != "https://github.com/amxv/agentbox.git" || raycast.RaycastSetup.ExtensionPath != "raycast/agentbox" || strings.Join(raycast.RaycastSetup.InstallCommands, "\n") != "git clone https://github.com/amxv/agentbox.git\ncd agentbox/raycast/agentbox\nnpm install\nnpm run dev" || len(raycast.RaycastSetup.Preferences) != 2 || raycast.RaycastSetup.Preferences[0].Name != "baseUrl" || raycast.RaycastSetup.Preferences[1].Name != "apiKey" || !raycast.RaycastSetup.Preferences[1].Secret || !strings.Contains(raycast.RaycastSetup.FinalCheck, "List Threads") {
+		t.Fatalf("raycast setup output=%#v", raycast.RaycastSetup)
+	}
+	if got := strings.Join(raycast.Credential.Scopes, ","); got != "threads:read,threads:write,assets:read,assets:write" || strings.Contains(got, "mcp:use") {
+		t.Fatalf("raycast scopes=%q", got)
+	}
+	if got := []string{local.State.Steps[0].Connector, local.State.Steps[1].Connector, local.State.Steps[2].Connector, local.State.Steps[3].Connector}; strings.Join(got, ",") != "chatgpt,claude,local,raycast" {
+		t.Fatalf("onboarding connector order=%v", got)
 	}
 
 	thread, err := svc.CreateThread(context.Background(), browser, "same user, separate actors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secrets := []string{chatgpt.Credential.Key, claude.Credential.Key, local.Credential.Key}
-	expectedActors := []string{"ChatGPT", "Claude", "Local CLI"}
+	secrets := []string{chatgpt.Credential.Key, claude.Credential.Key, local.Credential.Key, raycast.Credential.Key}
+	expectedActors := []string{"ChatGPT", "Claude", "Local CLI", "Raycast"}
 	for index, secret := range secrets {
 		authContext, err := svc.AuthenticateAPIKey(context.Background(), secret)
 		if err != nil || authContext == nil {
@@ -1212,6 +1231,54 @@ func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T)
 		}
 	}
 
+	raycastAuth, err := svc.AuthenticateAPIKey(context.Background(), raycast.Credential.Key)
+	if err != nil || raycastAuth == nil {
+		t.Fatalf("Raycast auth=%#v err=%v", raycastAuth, err)
+	}
+	raycastThread, err := svc.CreateThread(context.Background(), *raycastAuth, "Raycast scope matrix")
+	if err != nil || raycastThread.CreatedByActorName == nil || *raycastThread.CreatedByActorName != "Raycast" {
+		t.Fatalf("Raycast create thread=%#v err=%v", raycastThread, err)
+	}
+	listed, err := svc.ListThreads(context.Background(), *raycastAuth, 50)
+	listedRaycastThread := false
+	for _, item := range listed {
+		if item.ID == raycastThread.ID {
+			listedRaycastThread = true
+			break
+		}
+	}
+	if err != nil || !listedRaycastThread {
+		t.Fatalf("Raycast list threads=%#v err=%v", listed, err)
+	}
+	searched, err := svc.SearchThreads(context.Background(), *raycastAuth, types.SearchThreadParams{Query: "scope matrix", Limit: 20})
+	if err != nil || len(searched) != 1 || searched[0].ID != raycastThread.ID {
+		t.Fatalf("Raycast search threads=%#v err=%v", searched, err)
+	}
+	loaded, err := svc.GetThread(context.Background(), *raycastAuth, raycastThread.ID)
+	if err != nil || loaded == nil || loaded.ID != raycastThread.ID {
+		t.Fatalf("Raycast get thread=%#v err=%v", loaded, err)
+	}
+	raycastAssetMessage, err := svc.PostMessageWithAsset(context.Background(), *raycastAuth, PostMessageWithAssetParams{
+		ThreadID: raycastThread.ID,
+		Body:     "Raycast attachment",
+		Bytes:    []byte("raycast attachment bytes"),
+		FileName: "raycast.txt",
+	})
+	if err != nil || len(raycastAssetMessage.Assets) != 1 {
+		t.Fatalf("Raycast upload/post=%#v err=%v", raycastAssetMessage, err)
+	}
+	if _, err := svc.SignedAssetDownloadURL(context.Background(), *raycastAuth, raycastAssetMessage.Assets[0].ID, 300); err != nil {
+		t.Fatalf("Raycast attachment download signing failed: %v", err)
+	}
+	publish := true
+	managed, err := svc.ManageThreadVisibility(context.Background(), *raycastAuth, raycastThread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{Public: &publish})
+	if err != nil || !managed.Public || managed.PublicURL == "" {
+		t.Fatalf("Raycast visibility publish=%#v err=%v", managed, err)
+	}
+	if _, err := svc.ManageThreadVisibility(context.Background(), *raycastAuth, raycastThread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{}); err != nil {
+		t.Fatalf("Raycast visibility read failed: %v", err)
+	}
+
 	rotated, err := svc.CreateOnboardingConnection(context.Background(), browser, "chatgpt", "https://agentbox.example", true)
 	if err != nil {
 		t.Fatal(err)
@@ -1224,6 +1291,20 @@ func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T)
 	}
 	if claudeAuth, err := svc.AuthenticateAPIKey(context.Background(), claude.Credential.Key); err != nil || claudeAuth == nil || claudeAuth.ActorName != "Claude" {
 		t.Fatalf("rotating ChatGPT affected Claude: auth=%#v err=%v", claudeAuth, err)
+	}
+
+	rotatedRaycast, err := svc.CreateOnboardingConnection(context.Background(), browser, "raycast", "https://agentbox.example", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotatedRaycast.Credential.ID != raycast.Credential.ID || rotatedRaycast.Credential.Key == raycast.Credential.Key {
+		t.Fatalf("raycast rotation=%#v original=%#v", rotatedRaycast.Credential, raycast.Credential)
+	}
+	if oldAuth, err := svc.AuthenticateAPIKey(context.Background(), raycast.Credential.Key); err != nil || oldAuth != nil {
+		t.Fatalf("rotated Raycast secret remained active: auth=%#v err=%v", oldAuth, err)
+	}
+	if localAuth, err := svc.AuthenticateAPIKey(context.Background(), local.Credential.Key); err != nil || localAuth == nil || localAuth.ActorName != "Local CLI" {
+		t.Fatalf("rotating Raycast affected Local CLI: auth=%#v err=%v", localAuth, err)
 	}
 
 	if err := svc.RevokeAPIKey(context.Background(), browser, "Local CLI"); err != nil {
@@ -1251,6 +1332,18 @@ func TestOnboardingConnectionsAreExplicitResumableAndActorIsolated(t *testing.T)
 	}
 	if _, err := svc.GetOnboardingState(context.Background(), *apiAuth); !hasCodedError(err, "BROWSER_SESSION_REQUIRED") {
 		t.Fatalf("API credential accessed onboarding state: %v", err)
+	}
+
+	secondUser := types.User{ID: "usr_onboarding_second", Email: "second@example.com", DisplayName: "Second User"}
+	repo.Users = append(repo.Users, secondUser)
+	secondBrowser := types.AuthContext{UserID: secondUser.ID, UserDisplayName: secondUser.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_second", ActorName: "Web dashboard"}
+	secondRaycast, err := svc.CreateOnboardingConnection(context.Background(), secondBrowser, "raycast", "https://agentbox.example", false)
+	if err != nil || secondRaycast.Credential.Name != "Raycast" || secondRaycast.Credential.Key == rotatedRaycast.Credential.Key {
+		t.Fatalf("second-user Raycast=%#v err=%v", secondRaycast, err)
+	}
+	additionalRaycast, err := svc.CreateAPIKeyWithPurposeAndScopes(context.Background(), browser, "Raycast MacBook", "raycast", ConnectorAPIKeyScopes("raycast"))
+	if err != nil || additionalRaycast.ID == rotatedRaycast.Credential.ID || strings.Join(additionalRaycast.Scopes, ",") != "threads:read,threads:write,assets:read,assets:write" {
+		t.Fatalf("additional Raycast credential=%#v err=%v", additionalRaycast, err)
 	}
 }
 

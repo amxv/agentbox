@@ -1850,7 +1850,13 @@ where user_id = $1
 select connector, credential_id, completed_at, updated_at
 from user_onboarding_steps
 where user_id = $1
-order by case connector when 'chatgpt' then 1 when 'claude' then 2 else 3 end
+order by case connector
+  when 'chatgpt' then 1
+  when 'claude' then 2
+  when 'local' then 3
+  when 'raycast' then 4
+  else 5
+end
 `, userID)
 	if err != nil {
 		return types.OnboardingState{}, err

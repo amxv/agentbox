@@ -8,7 +8,7 @@ import { CopyButton } from "../components/copy-button";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import styles from "./onboarding.module.css";
 
-type Connector = "chatgpt" | "claude" | "local";
+type Connector = "chatgpt" | "claude" | "local" | "raycast";
 
 type Credential = {
   id: string;
@@ -43,7 +43,23 @@ type ConnectionResult = {
   mcp_url?: string;
   profile_command?: string;
   setup_prompt?: string;
+  raycast_setup?: RaycastSetup;
   instructions: string[];
+};
+
+type RaycastSetup = {
+  base_url: string;
+  api_key: string;
+  repository_url: string;
+  extension_path: string;
+  install_commands: string[];
+  preferences: Array<{
+    name: string;
+    title: string;
+    value: string;
+    secret?: boolean;
+  }>;
+  final_check: string;
 };
 
 const connectors: Array<{
@@ -77,6 +93,14 @@ const connectors: Array<{
     description: "Generate a one-machine setup prompt for Codex, Claude Code, or another local coding agent.",
     actor: "You · Local CLI",
     glyph: "⌁"
+  },
+  {
+    id: "raycast",
+    eyebrow: "Local Raycast",
+    title: "Connect Raycast",
+    description: "Create one dedicated credential for this Mac and load the checked-in extension in Raycast developer mode.",
+    actor: "You · Raycast",
+    glyph: "↗"
   }
 ];
 
@@ -175,12 +199,12 @@ export function OnboardingView() {
           <div className={styles.heroCopy}>
             <p className={styles.kicker}>{state?.dismissed_at ? "Resume setup" : "One identity, separate actors"}</p>
             <h1>Bring your agents into the same inbox.</h1>
-            <p>Each connection gets its own credential and actor label, but all three act for your user. Your private threads stay private to you unless you explicitly share them later.</p>
+            <p>Each connection gets its own credential and actor label, but all four act for your user. Your private threads stay private to you unless you explicitly share them later.</p>
           </div>
           <div className={styles.progress}>
-            <div><span>Connected</span><strong>{activeCount}<small>/3</small></strong></div>
-            <div className={styles.track}><i style={{ width: `${(activeCount / 3) * 100}%` }}/></div>
-            <p>{activeCount === 3 ? "All surfaces are connected." : "Connect only what you use. You can return anytime."}</p>
+            <div><span>Connected</span><strong>{activeCount}<small>/{connectors.length}</small></strong></div>
+            <div className={styles.track}><i style={{ width: `${(activeCount / connectors.length) * 100}%` }}/></div>
+            <p>{activeCount === connectors.length ? "All surfaces are connected." : "Connect only what you use. You can return anytime."}</p>
           </div>
         </section>
 
@@ -227,6 +251,7 @@ export function OnboardingView() {
 }
 
 function ConnectionOutput({ connector, result }: { connector: Connector; result: ConnectionResult }) {
+  if (connector === "raycast") return <RaycastConnectionOutput result={result}/>;
   const value = connector === "local" ? result.setup_prompt ?? "" : result.mcp_url ?? "";
   return (
     <div className={styles.output}>
@@ -235,6 +260,37 @@ function ConnectionOutput({ connector, result }: { connector: Connector; result:
       {connector === "local" && result.profile_command && <div className={styles.command}><span>Profile command inside prompt</span><code>{result.profile_command}</code></div>}
       <ol>{result.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol>
       <p className={styles.onceNote}>Save this now. Agentbox stores only the credential hash and will not show this URL or prompt again.</p>
+    </div>
+  );
+}
+
+function RaycastConnectionOutput({ result }: { result: ConnectionResult }) {
+  const setup = result.raycast_setup;
+  if (!setup) return null;
+  const commands = setup.install_commands.join("\n");
+  return (
+    <div className={styles.output}>
+      <div className={styles.outputHeader}>
+        <div><span>Generated once</span><strong>Raycast developer-mode setup</strong></div>
+        <CopyButton value={commands} label="Copy install commands"/>
+      </div>
+      <div className={styles.setupMeta}>
+        <div><span>Repository</span><code>{setup.repository_url}</code></div>
+        <div><span>Extension path</span><code>{setup.extension_path}</code></div>
+      </div>
+      <pre>{commands}</pre>
+      <div className={styles.preferenceList}>
+        {setup.preferences.map((preference) => (
+          <div className={styles.preference} key={preference.name}>
+            <div><span>{preference.title}</span><code>{preference.name}</code></div>
+            <code>{preference.value}</code>
+            <CopyButton value={preference.value} label={`Copy ${preference.title}`}/>
+          </div>
+        ))}
+      </div>
+      <div className={styles.finalCheck}><span>Final connection check</span><p>{setup.final_check}</p></div>
+      <ol>{result.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol>
+      <p className={styles.onceNote}>Save the API key now. Agentbox stores only its hash. Rotating this credential disconnects only this Raycast installation.</p>
     </div>
   );
 }

@@ -2223,10 +2223,12 @@ func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
 			Name string `json:"name"`
 			Key  string `json:"key"`
 		} `json:"credential"`
-		MCPURL         string   `json:"mcp_url"`
-		ProfileCommand string   `json:"profile_command"`
-		SetupPrompt    string   `json:"setup_prompt"`
-		Instructions   []string `json:"instructions"`
+		Onboarding     types.OnboardingState       `json:"onboarding"`
+		MCPURL         string                      `json:"mcp_url"`
+		ProfileCommand string                      `json:"profile_command"`
+		SetupPrompt    string                      `json:"setup_prompt"`
+		RaycastSetup   *types.RaycastSetupMaterial `json:"raycast_setup"`
+		Instructions   []string                    `json:"instructions"`
 	}
 	createConnector := func(connector string, rotate bool) (*httptest.ResponseRecorder, connectionPayload) {
 		t.Helper()
@@ -2265,10 +2267,30 @@ func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
 	if localResponse.Code != http.StatusCreated || local.Credential.Name != "Local CLI" || !strings.Contains(local.ProfileCommand, "--user-id 'usr_onboarding'") || !strings.Contains(local.SetupPrompt, "npm install -g @amxv/agentbox") || !strings.Contains(local.SetupPrompt, "agentbox list") {
 		t.Fatalf("local status=%d payload=%#v body=%s", localResponse.Code, local, localResponse.Body.String())
 	}
+	raycastResponse, raycast := createConnector("raycast", false)
+	raycastStep := raycast.Onboarding.Steps[len(raycast.Onboarding.Steps)-1]
+	if raycastResponse.Code != http.StatusCreated || raycast.Credential.Name != "Raycast" || raycastStep.Connector != "raycast" || raycastStep.Credential == nil || strings.Join(raycastStep.Credential.Scopes, ",") != "threads:read,threads:write,assets:read,assets:write" || raycast.RaycastSetup == nil || raycast.RaycastSetup.APIKey != raycast.Credential.Key || raycast.RaycastSetup.BaseURL != "https://agentbox.example" || len(raycast.RaycastSetup.InstallCommands) != 4 || raycast.RaycastSetup.Preferences[0].Name != "baseUrl" || raycast.RaycastSetup.Preferences[1].Name != "apiKey" {
+		t.Fatalf("raycast status=%d payload=%#v body=%s", raycastResponse.Code, raycast, raycastResponse.Body.String())
+	}
 
 	persisted := getState()
-	if persisted.Code != http.StatusOK || strings.Contains(persisted.Body.String(), rotated.Credential.Key) || strings.Contains(persisted.Body.String(), claude.Credential.Key) || strings.Contains(persisted.Body.String(), local.Credential.Key) || !strings.Contains(persisted.Body.String(), `"name":"ChatGPT"`) || !strings.Contains(persisted.Body.String(), `"name":"Claude"`) || !strings.Contains(persisted.Body.String(), `"name":"Local CLI"`) {
+	if persisted.Code != http.StatusOK || strings.Contains(persisted.Body.String(), rotated.Credential.Key) || strings.Contains(persisted.Body.String(), claude.Credential.Key) || strings.Contains(persisted.Body.String(), local.Credential.Key) || strings.Contains(persisted.Body.String(), raycast.Credential.Key) || !strings.Contains(persisted.Body.String(), `"name":"ChatGPT"`) || !strings.Contains(persisted.Body.String(), `"name":"Claude"`) || !strings.Contains(persisted.Body.String(), `"name":"Local CLI"`) || !strings.Contains(persisted.Body.String(), `"name":"Raycast"`) {
 		t.Fatalf("persisted onboarding leaked or missed metadata: status=%d body=%s", persisted.Code, persisted.Body.String())
+	}
+
+	mcpRequest := httptest.NewRequest(http.MethodGet, "/api/mcp?key="+url.QueryEscape(raycast.Credential.Key), nil)
+	mcpResponse := httptest.NewRecorder()
+	server.ServeHTTP(mcpResponse, mcpRequest)
+	if mcpResponse.Code != http.StatusForbidden || !strings.Contains(mcpResponse.Body.String(), "mcp:use scope is required") {
+		t.Fatalf("Raycast credential reached MCP: status=%d body=%s", mcpResponse.Code, mcpResponse.Body.String())
+	}
+
+	ownerRequest := httptest.NewRequest(http.MethodGet, "/api/owner/content/threads", nil)
+	ownerRequest.Header.Set("authorization", "Bearer "+raycast.Credential.Key)
+	ownerResponse := httptest.NewRecorder()
+	server.ServeHTTP(ownerResponse, ownerRequest)
+	if ownerResponse.Code != http.StatusForbidden || !strings.Contains(ownerResponse.Body.String(), "OWNER_BROWSER_REQUIRED") {
+		t.Fatalf("Raycast credential reached owner web content: status=%d body=%s", ownerResponse.Code, ownerResponse.Body.String())
 	}
 
 	apiRequest := httptest.NewRequest(http.MethodGet, "/api/onboarding", nil)

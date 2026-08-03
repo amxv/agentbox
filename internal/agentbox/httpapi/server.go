@@ -942,6 +942,7 @@ func (s *Server) onboardingConnector(w http.ResponseWriter, r *http.Request) {
 		"mcp_url":         result.MCPURL,
 		"profile_command": result.ProfileCommand,
 		"setup_prompt":    result.SetupPrompt,
+		"raycast_setup":   result.RaycastSetup,
 		"instructions":    result.Instructions,
 	})
 }

@@ -783,6 +783,16 @@ func (s *Service) CreateOnboardingConnection(ctx context.Context, auth types.Aut
 			"The agent will install the public npm package, save an active local profile, and run agentbox list.",
 			"Use a separate credential later for each additional machine.",
 		}
+	case "raycast":
+		setup := raycastSetupMaterial(baseURL, secret)
+		result.RaycastSetup = &setup
+		result.Instructions = []string{
+			"Clone or update the AgentBox repository on the Mac where Raycast is installed.",
+			"Install the extension dependencies and run it in Raycast developer mode with the commands below.",
+			"Enter the generated Agentbox URL and Agentbox API Key in the required extension preferences.",
+			"Run List Threads in Raycast and confirm it shows only the threads currently accessible to your user.",
+			"Create a separate Raycast credential for every additional Mac or local Raycast installation.",
+		}
 	}
 	if err != nil {
 		return OnboardingConnectionResult{}, err
@@ -845,13 +855,14 @@ type SignupInvitationInspection struct {
 }
 
 type OnboardingConnectionResult struct {
-	Connector      string                `json:"connector"`
-	Credential     types.APIKey          `json:"credential"`
-	State          types.OnboardingState `json:"state"`
-	MCPURL         string                `json:"mcp_url,omitempty"`
-	ProfileCommand string                `json:"profile_command,omitempty"`
-	SetupPrompt    string                `json:"setup_prompt,omitempty"`
-	Instructions   []string              `json:"instructions"`
+	Connector      string                      `json:"connector"`
+	Credential     types.APIKey                `json:"credential"`
+	State          types.OnboardingState       `json:"state"`
+	MCPURL         string                      `json:"mcp_url,omitempty"`
+	ProfileCommand string                      `json:"profile_command,omitempty"`
+	SetupPrompt    string                      `json:"setup_prompt,omitempty"`
+	RaycastSetup   *types.RaycastSetupMaterial `json:"raycast_setup,omitempty"`
+	Instructions   []string                    `json:"instructions"`
 }
 
 func (s *Service) IssueOwnerSetupToken(ctx context.Context, ttl time.Duration) (OwnerSetupTokenResult, error) {
@@ -1596,8 +1607,10 @@ func cliAPIKeyScopes() []string {
 
 func ConnectorAPIKeyScopes(purpose string) []string {
 	switch strings.ToLower(strings.TrimSpace(purpose)) {
-	case "chatgpt", "raycast":
+	case "chatgpt", "claude":
 		return defaultAPIKeyScopes()
+	case "raycast":
+		return []string{"threads:read", "threads:write", "assets:read", "assets:write"}
 	case "local", "cli":
 		return cliAPIKeyScopes()
 	default:
@@ -1801,8 +1814,32 @@ func onboardingCredentialSpec(value string) (connector string, name string, purp
 		return connector, "Claude", "claude", ConnectorAPIKeyScopes("claude"), nil
 	case "local":
 		return connector, "Local CLI", "local", ConnectorAPIKeyScopes("local"), nil
+	case "raycast":
+		return connector, "Raycast", "raycast", ConnectorAPIKeyScopes("raycast"), nil
 	default:
-		return "", "", "", nil, CodedError{Code: "INVALID_ONBOARDING_CONNECTOR", Message: "connector must be chatgpt, claude, or local.", Err: types.ErrInvalidOnboardingConnector}
+		return "", "", "", nil, CodedError{Code: "INVALID_ONBOARDING_CONNECTOR", Message: "connector must be chatgpt, claude, local, or raycast.", Err: types.ErrInvalidOnboardingConnector}
+	}
+}
+
+func raycastSetupMaterial(baseURL string, secret string) types.RaycastSetupMaterial {
+	const repositoryURL = "https://github.com/amxv/agentbox.git"
+	const extensionPath = "raycast/agentbox"
+	return types.RaycastSetupMaterial{
+		BaseURL:       baseURL,
+		APIKey:        secret,
+		RepositoryURL: repositoryURL,
+		ExtensionPath: extensionPath,
+		InstallCommands: []string{
+			"git clone " + repositoryURL,
+			"cd agentbox/" + extensionPath,
+			"npm install",
+			"npm run dev",
+		},
+		Preferences: []types.RaycastSetupPreference{
+			{Name: "baseUrl", Title: "Agentbox URL", Value: baseURL},
+			{Name: "apiKey", Title: "Agentbox API Key", Value: secret, Secret: true},
+		},
+		FinalCheck: "In Raycast, run Agentbox: List Threads and confirm it lists only the threads currently accessible to your user.",
 	}
 }
 

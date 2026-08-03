@@ -2269,16 +2269,23 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 		t.Fatalf("duplicate onboarding credential error=%v", err)
 	}
 
+	raycast, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "raycast", "Raycast", "raycast", hashSecret("agb_onboarding_raycast"), "agb_raycast", []string{"threads:read", "threads:write", "assets:read", "assets:write"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	claude, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "claude", "Claude", "claude", hashSecret("agb_onboarding_claude"), "agb_claude", []string{"threads:read", "mcp:use"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	local, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local"), "agb_local", []string{"threads:read", "threads:write", "keys:read", "keys:write"}, false)
-	if err != nil || len(state.Steps) != 3 {
+	if err != nil || len(state.Steps) != 4 {
 		t.Fatalf("local onboarding key=%#v state=%#v err=%v", local, state, err)
 	}
-	if chat.ID == claude.ID || chat.ID == local.ID || claude.ID == local.ID {
-		t.Fatalf("connectors collapsed credentials: chat=%s claude=%s local=%s", chat.ID, claude.ID, local.ID)
+	if got := []string{state.Steps[0].Connector, state.Steps[1].Connector, state.Steps[2].Connector, state.Steps[3].Connector}; strings.Join(got, ",") != "chatgpt,claude,local,raycast" {
+		t.Fatalf("onboarding connector order=%v", got)
+	}
+	if chat.ID == claude.ID || chat.ID == local.ID || chat.ID == raycast.ID || claude.ID == local.ID || claude.ID == raycast.ID || local.ID == raycast.ID {
+		t.Fatalf("connectors collapsed credentials: chat=%s claude=%s local=%s raycast=%s", chat.ID, claude.ID, local.ID, raycast.ID)
 	}
 
 	rotatedSecret := "agb_onboarding_chat_rotated"
@@ -2348,6 +2355,69 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 	}
 	if keys, err := repository.ListAPIKeys(ctx, concurrentUser.ID); err != nil || len(keys) != 1 || keys[0].Name != "ChatGPT" {
 		t.Fatalf("concurrent onboarding keys=%#v err=%v", keys, err)
+	}
+}
+
+func TestRaycastOnboardingMigrationPreservesExistingConnectorRows(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.MigrateThrough(ctx, "0016"); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "raycast-migration-owner@example.com", "Raycast Migration Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MigrateThrough(ctx, "0017"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into user_onboarding (user_id)
+values ($1)
+`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, connector := range []string{"local", "chatgpt", "claude"} {
+		if _, err := repository.pool.Exec(ctx, `
+insert into user_onboarding_steps (user_id, connector)
+values ($1, $2)
+`, owner.ID, connector); err != nil {
+			t.Fatalf("seed %s onboarding step: %v", connector, err)
+		}
+	}
+
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err := repository.GetOnboardingState(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Steps) != 3 || state.Steps[0].Connector != "chatgpt" || state.Steps[1].Connector != "claude" || state.Steps[2].Connector != "local" {
+		t.Fatalf("existing onboarding rows changed or reordered incorrectly: %#v", state.Steps)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into user_onboarding_steps (user_id, connector)
+values ($1, 'raycast')
+`, owner.ID); err != nil {
+		t.Fatalf("Raycast connector rejected after migration 0018: %v", err)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into user_onboarding_steps (user_id, connector)
+values ($1, 'unknown')
+`, owner.ID); err == nil {
+		t.Fatal("unknown onboarding connector was accepted after migration 0018")
+	} else {
+		var postgresError *pgconn.PgError
+		if !errors.As(err, &postgresError) || postgresError.Code != "23514" {
+			t.Fatalf("unknown connector error = %v, want check violation", err)
+		}
+	}
+	var migrationName string
+	if err := repository.pool.QueryRow(ctx, `select name from schema_migrations where version = '0018'`).Scan(&migrationName); err != nil {
+		t.Fatal(err)
+	}
+	if migrationName != "0018_raycast_onboarding.sql" {
+		t.Fatalf("migration 0018 name = %q", migrationName)
 	}
 }
 

@@ -1117,8 +1117,12 @@ func onboardingConnectorOrder(connector string) int {
 		return 1
 	case "claude":
 		return 2
-	default:
+	case "local":
 		return 3
+	case "raycast":
+		return 4
+	default:
+		return 5
 	}
 }
 

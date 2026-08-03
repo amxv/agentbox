@@ -136,6 +136,23 @@ type OnboardingState struct {
 	Steps       []OnboardingStep `json:"steps"`
 }
 
+type RaycastSetupPreference struct {
+	Name   string `json:"name"`
+	Title  string `json:"title"`
+	Value  string `json:"value"`
+	Secret bool   `json:"secret,omitempty"`
+}
+
+type RaycastSetupMaterial struct {
+	BaseURL         string                   `json:"base_url"`
+	APIKey          string                   `json:"api_key"`
+	RepositoryURL   string                   `json:"repository_url"`
+	ExtensionPath   string                   `json:"extension_path"`
+	InstallCommands []string                 `json:"install_commands"`
+	Preferences     []RaycastSetupPreference `json:"preferences"`
+	FinalCheck      string                   `json:"final_check"`
+}
+
 type Thread struct {
 	ID                       string                  `json:"id"`
 	OwnerUserID              string                  `json:"owner_user_id"`
