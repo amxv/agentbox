@@ -573,7 +573,7 @@ function ThreadActions({
         <Action.Push
           title="Post Message"
           icon={Icon.Message}
-          target={<PostMessage initialThreadId={thread.id} />}
+          target={<PostMessage initialThreadId={thread.id} initialThreadTitle={thread.title} />}
           shortcut={{ modifiers: ["cmd"], key: "return" }}
         />
         <Action.Push

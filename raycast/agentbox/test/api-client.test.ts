@@ -520,6 +520,14 @@ test("Raycast source cannot regain tenant, persistence, attachment-public-URL, o
   assert.match(browseSource, /LocalStorage\.setItem\(INBOX_FILTER_STORAGE_KEY/);
   assert.match(browseSource, /requestId\.current/);
 
+  const postSource = await readFile(path.join(sourceDirectory, "post-message.tsx"), "utf8");
+  assert.match(postSource, /listThreadPage/);
+  assert.match(postSource, /searchThreadPage/);
+  assert.match(postSource, /pagination=\{\{/);
+  assert.match(postSource, /Enter Thread ID Manually/);
+  assert.match(postSource, /requestId\.current/);
+  assert.doesNotMatch(postSource, /id="target"|target === "new"|createThread\(/);
+
   const manifest = JSON.parse(await readFile(path.join(testDirectory, "..", "package.json"), "utf8")) as {
     commands: Array<{ name: string; title: string }>;
   };
