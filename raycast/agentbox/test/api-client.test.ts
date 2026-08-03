@@ -14,6 +14,12 @@ import {
   type Thread,
   type ThreadVisibilitySummary,
 } from "../src/api-client.ts";
+import {
+  mutationHasChanges,
+  visibilityMutation,
+  visibilityTeamOptions,
+  wouldSelfRevoke,
+} from "../src/visibility-model.ts";
 
 const timestamp = "2026-08-03T12:34:56Z";
 
@@ -296,6 +302,56 @@ test("visibility reads and patches preserve team and public-link metadata", asyn
     regenerate_public_link: true,
   });
   assert.equal(managed.public_link?.token_prefix, "agpub_123");
+});
+
+test("visibility mutations calculate exact deltas and warn only for real self-revocation", () => {
+  const platform = {
+    id: "team_platform",
+    slug: "platform",
+    name: "Platform",
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+  const design = { id: "team_design", slug: "design", name: "Design", created_at: timestamp, updated_at: timestamp };
+  const external = {
+    id: "team_external",
+    slug: "external",
+    name: "External",
+    created_at: timestamp,
+    updated_at: timestamp,
+  };
+  const current = {
+    thread_id: "thr_visibility",
+    owner_user_id: "usr_owner",
+    shared_teams: [external, platform],
+    available_teams: [platform, design],
+    public: true,
+    public_url: "https://agentbox.example/public/agpub",
+  };
+
+  const mutation = visibilityMutation(current, {
+    selectedTeamIDs: [platform.id, design.id, design.id],
+    publicEnabled: false,
+  });
+  assert.deepEqual(mutation, {
+    add_teams: [design.id],
+    remove_teams: [external.id],
+    public: false,
+  });
+  assert.equal(mutationHasChanges(mutation), true);
+  assert.equal(mutationHasChanges({}), false);
+  assert.equal(
+    wouldSelfRevoke({ currentUserID: "usr_member", current, selectedTeamIDs: [external.id] }),
+    true,
+    "a public link and a team the caller does not belong to must not preserve authenticated access",
+  );
+  assert.equal(wouldSelfRevoke({ currentUserID: "usr_member", current, selectedTeamIDs: [platform.id] }), false);
+  assert.equal(wouldSelfRevoke({ currentUserID: "usr_member", current, selectedTeamIDs: [design.id] }), false);
+  assert.equal(wouldSelfRevoke({ currentUserID: "usr_owner", current, selectedTeamIDs: [] }), false);
+  assert.deepEqual(
+    visibilityTeamOptions(current).map((team) => team.id),
+    [design.id, external.id, platform.id],
+  );
 });
 
 test("create, post, and signed-download methods use the final envelopes", async () => {

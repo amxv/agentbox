@@ -41,6 +41,7 @@ import {
   messageMarkdown,
   threadMessagesMarkdown,
 } from "./markdown";
+import ManageVisibility from "./manage-visibility";
 import PostMessage from "./post-message";
 import { AgentboxUtilityActions } from "./utility-actions";
 
@@ -226,6 +227,15 @@ export default function BrowseThreads() {
     setRefreshKey((value) => value + 1);
   }
 
+  function removeThread(threadId: string) {
+    requestId.current += 1;
+    loadingMoreRef.current = false;
+    setIsLoadingMore(false);
+    setThreads((current) => current.filter((thread) => thread.id !== threadId));
+    setPage(EMPTY_PAGE);
+    setRefreshKey((value) => value + 1);
+  }
+
   function loadMore() {
     const cursor = page.next_cursor;
     if (!cursor || loadingMoreRef.current) return;
@@ -266,7 +276,7 @@ export default function BrowseThreads() {
           subtitle={`${threads.length}${page.has_more ? "+" : ""}`}
         >
           {threads.map((thread) => (
-            <ThreadListItem key={thread.id} thread={thread} onRefresh={refresh} />
+            <ThreadListItem key={thread.id} thread={thread} onRefresh={refresh} onThreadRemoved={removeThread} />
           ))}
         </List.Section>
       )}
@@ -344,7 +354,15 @@ function inboxFilterTitle(value: InboxFilterValue, teams: Team[]): string {
   return "All Accessible Threads";
 }
 
-function ThreadListItem({ thread, onRefresh }: { thread: ListedThread; onRefresh: () => void }) {
+function ThreadListItem({
+  onRefresh,
+  onThreadRemoved,
+  thread,
+}: {
+  onRefresh: () => void;
+  onThreadRemoved: (threadId: string) => void;
+  thread: ListedThread;
+}) {
   return (
     <List.Item
       id={thread.id}
@@ -354,7 +372,7 @@ function ThreadListItem({ thread, onRefresh }: { thread: ListedThread; onRefresh
       detail={
         <List.Item.Detail markdown={threadListMarkdown(thread)} metadata={<ThreadListMetadata thread={thread} />} />
       }
-      actions={<ThreadActions thread={thread} onRefresh={onRefresh} />}
+      actions={<ThreadActions thread={thread} onRefresh={onRefresh} onThreadRemoved={onThreadRemoved} />}
     />
   );
 }
@@ -528,7 +546,15 @@ function MessagePreviewDetail({ isSelected, message }: { isSelected: boolean; me
   );
 }
 
-function ThreadActions({ thread, onRefresh }: { thread: ListedThread; onRefresh: () => void }) {
+function ThreadActions({
+  onRefresh,
+  onThreadRemoved,
+  thread,
+}: {
+  onRefresh: () => void;
+  onThreadRemoved: (threadId: string) => void;
+  thread: ListedThread;
+}) {
   const threadUrl = safeDashboardThreadUrl(thread.id);
 
   return (
@@ -549,6 +575,18 @@ function ThreadActions({ thread, onRefresh }: { thread: ListedThread; onRefresh:
           icon={Icon.Message}
           target={<PostMessage initialThreadId={thread.id} />}
           shortcut={{ modifiers: ["cmd"], key: "return" }}
+        />
+        <Action.Push
+          title="Manage Visibility"
+          icon={Icon.Eye}
+          target={
+            <ManageVisibility
+              threadId={thread.id}
+              threadTitle={thread.title}
+              onChanged={onRefresh}
+              onSelfRevoked={onThreadRemoved}
+            />
+          }
         />
         <Action.OpenInBrowser title="Open in Dashboard" icon={Icon.Globe} url={threadUrl} />
         <Action
