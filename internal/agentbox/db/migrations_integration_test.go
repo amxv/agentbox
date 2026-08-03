@@ -2678,6 +2678,9 @@ func openPostgresTestRepository(t *testing.T) (*Repository, context.Context) {
 	t.Helper()
 	databaseURL := strings.TrimSpace(os.Getenv("TEST_DATABASE_URL"))
 	if databaseURL == "" {
+		if strings.TrimSpace(os.Getenv("AGENTBOX_REQUIRE_POSTGRES_TESTS")) == "1" {
+			t.Fatal("TEST_DATABASE_URL is required because AGENTBOX_REQUIRE_POSTGRES_TESTS=1")
+		}
 		t.Skip("TEST_DATABASE_URL is not set; PostgreSQL integration test runs in CI")
 	}
 

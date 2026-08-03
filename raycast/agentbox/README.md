@@ -35,7 +35,7 @@ assets:read
 assets:write
 ```
 
-`agentbox raycast-key` remains available as an alternative user-scoped setup path, but dashboard onboarding is the canonical flow.
+`agentbox raycast-key "<installation label>"` remains available as an alternative user-scoped setup path. It creates a separate least-privilege credential for that installation; use a distinct label for every Mac or Raycast profile.
 
 ## Install in Raycast developer mode
 

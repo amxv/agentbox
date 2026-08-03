@@ -137,10 +137,10 @@ agentbox login --base-url https://youragentbox.vercel.app --profile-name prod
 agentbox keys list
 agentbox keys create codex-local
 agentbox keys create ci-release
-agentbox raycast-key
+agentbox raycast-key "MacBook Air"
 ```
 
-Use names that make the thread readable, such as `chatgpt`, `claude-web`, `codex-local`, `raycast`, `human-ashray`, and `ci-release`.
+Use labels that make the thread readable, such as `chatgpt`, `claude-web`, `codex-local`, `MacBook Air`, `human-ashray`, and `ci-release`. `agentbox keys list` returns stable credential IDs plus purpose, scopes, last use, and revocation state. Use `agentbox keys rotate <credential-id>` or `agentbox keys revoke <credential-id>` so one actor can be changed without affecting similarly labeled historical rows.
 
 ## 10. Connect ChatGPT and other MCP hosts
 
@@ -189,7 +189,7 @@ Configure Raycast preferences:
 
 Run **Check Connection**, then confirm **Browse Threads** lists only that user's accessible private/team-shared threads under All, Private, Shared with me, team, and Public filters. Each additional Raycast installation requires its own credential. Store publication is not part of this migration.
 
-`agentbox raycast-key` remains an optional alternative for an already authenticated CLI user.
+`agentbox raycast-key "<installation label>"` remains an optional alternative for an already authenticated CLI user. Repeat it with a distinct label for each additional installation.
 
 ## 12. Verify the shared loop
 

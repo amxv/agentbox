@@ -1806,6 +1806,23 @@ returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_
 	return created, nil
 }
 
+func (r *Repository) CreateRaycastAPIKey(ctx context.Context, userID string, name string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string) (types.APIKey, error) {
+	id := "key_" + uuid.NewString()
+	created, err := scanAPIKey(r.pool.QueryRow(ctx, `
+insert into api_keys (id, user_id, name, purpose, token_prefix, token_hash, scopes, setup_base_url)
+values ($1, $2, $3, 'raycast', $4, $5, $6, $7)
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+`, id, strings.TrimSpace(userID), strings.TrimSpace(name), tokenPrefix, tokenHash, scopes, strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")))
+	if err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+			return types.APIKey{}, types.ErrCredentialLabelConflict
+		}
+		return types.APIKey{}, err
+	}
+	return created, nil
+}
+
 func (r *Repository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -2011,6 +2028,34 @@ order by name asc
 	return keys, rows.Err()
 }
 
+func (r *Repository) ListAPIKeysPage(ctx context.Context, userID string, pageRequest types.PageRequest) (types.APIKeyPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
+	rows, err := r.pool.Query(ctx, `
+select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+from api_keys
+where user_id = $1
+order by created_at desc, id desc
+limit $2 offset $3
+`, strings.TrimSpace(userID), pageRequest.Limit+1, pageRequest.Offset)
+	if err != nil {
+		return types.APIKeyPage{}, err
+	}
+	defer rows.Close()
+	keys := []types.APIKey{}
+	for rows.Next() {
+		key, err := scanAPIKey(rows)
+		if err != nil {
+			return types.APIKeyPage{}, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return types.APIKeyPage{}, err
+	}
+	visible, pageInfo := types.PageWindow(pageRequest, len(keys))
+	return types.APIKeyPage{Credentials: keys[:visible], Page: pageInfo}, nil
+}
+
 func (r *Repository) ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error) {
 	page, err := r.ListAllAPIKeysPage(ctx, types.PageRequest{})
 	return page.Credentials, err
@@ -2051,6 +2096,18 @@ func (r *Repository) RevokeAPIKey(ctx context.Context, userID string, name strin
 	return tag.RowsAffected() > 0, nil
 }
 
+func (r *Repository) RevokeAPIKeyForUserByID(ctx context.Context, userID string, keyID string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+update api_keys
+set revoked_at = coalesce(revoked_at, now()), updated_at = now()
+where user_id = $1 and id = $2
+`, strings.TrimSpace(userID), strings.TrimSpace(keyID))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (r *Repository) RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error) {
 	tag, err := r.pool.Exec(ctx, `
 update api_keys
@@ -2061,6 +2118,53 @@ where id = $1
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+func (r *Repository) RotateAPIKeyForUserByID(ctx context.Context, userID string, keyID string, tokenHash string, tokenPrefix string) (*types.APIKey, error) {
+	key, err := scanAPIKey(r.pool.QueryRow(ctx, `
+update api_keys
+set token_hash = $3,
+    token_prefix = $4,
+    updated_at = now(),
+    last_used_at = null
+where user_id = $1 and id = $2 and revoked_at is null
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+`, strings.TrimSpace(userID), strings.TrimSpace(keyID), tokenHash, tokenPrefix))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &key, nil
+}
+
+func (r *Repository) GetAPIKeySetup(ctx context.Context, userID string, keyID string) (*types.APIKey, string, error) {
+	row := r.pool.QueryRow(ctx, `
+select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at,
+       coalesce(setup_base_url, '')
+from api_keys
+where user_id = $1 and id = $2
+`, strings.TrimSpace(userID), strings.TrimSpace(keyID))
+	var createdAt time.Time
+	var updatedAt time.Time
+	var lastUsedAt *time.Time
+	var revokedAt *time.Time
+	var setupBaseURL string
+	key := types.APIKey{}
+	err := row.Scan(&key.ID, &key.UserID, &key.Name, &key.Purpose, &key.TokenPrefix, &key.TokenHash, &key.Scopes, &createdAt, &updatedAt, &lastUsedAt, &revokedAt, &setupBaseURL)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	key.KeyMasked = maskSecret(key.TokenPrefix)
+	key.CreatedAt = isoMillis(createdAt)
+	key.UpdatedAt = isoMillis(updatedAt)
+	key.LastUsedAt = optionalISOTime(lastUsedAt)
+	key.RevokedAt = optionalISOTime(revokedAt)
+	return &key, setupBaseURL, nil
 }
 
 func (r *Repository) FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error) {

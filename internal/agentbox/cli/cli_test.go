@@ -90,10 +90,11 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "user-owned credential"}},
 		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "user and actor diagnostics"}},
 		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "user-owned ChatGPT credential"}},
-		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key", "Raycast"}},
+		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key <installation-label>", "Raycast"}},
 		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "signed-in profile's user"}},
 		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "signed-in profile's user"}},
-		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "signed-in profile's user"}},
+		{[]string{"keys", "rotate", "--help"}, []string{"Usage: agentbox keys rotate <credential-id>", "stable ID"}},
+		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <credential-id>", "stable ID"}},
 		{[]string{"search", "--help"}, []string{"Usage: agentbox search <query>", "message counts"}},
 		{[]string{"create", "--help"}, []string{"--message <body>", "first message"}},
 		{[]string{"visibility", "--help"}, []string{"Usage: agentbox visibility <thread-id>", "atomically change", "--share-team"}},
@@ -683,21 +684,34 @@ func TestCLIRaycastKeyPrintsPreferences(t *testing.T) {
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"raycast-key"}); code != 0 {
+	if code := runner.Run([]string{"raycast-key", "MacBook Air"}); code != 0 {
 		t.Fatalf("raycast-key failed: code=%d stderr=%s", code, stderr.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, `Created Raycast API key "raycast"`) || !strings.Contains(output, "Agentbox URL: "+server.URL) || !strings.Contains(output, "Agentbox API Key: ") {
+	if !strings.Contains(output, `Created Raycast installation "MacBook Air"`) || !strings.Contains(output, "Repository: https://github.com/amxv/agentbox.git") || !strings.Contains(output, "Agentbox URL: "+server.URL) || !strings.Contains(output, "Agentbox API Key: ") || !strings.Contains(output, "Browse Threads") {
 		t.Fatalf("raycast-key output = %s", output)
 	}
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"keys", "create", "raycast", "--json"}); code != 0 {
-		t.Fatalf("keys create raycast failed: code=%d stderr=%s", code, stderr.String())
+	if code := runner.Run([]string{"raycast-key", "Studio Mac", "--json"}); code != 0 {
+		t.Fatalf("second raycast-key failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), `"raycast_base_url": "`+server.URL+`"`) || !strings.Contains(out.String(), `"raycast_api_key": "`) {
-		t.Fatalf("keys create raycast json = %s", out.String())
+	var second struct {
+		Credential remoteAPIKey       `json:"credential"`
+		Setup      remoteRaycastSetup `json:"raycast_setup"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &second); err != nil {
+		t.Fatalf("second raycast output is not JSON: %v output=%s", err, out.String())
+	}
+	if second.Credential.ID == "" || second.Credential.Name != "Studio Mac" || second.Credential.Purpose != "raycast" || second.Credential.Secret == "" || second.Setup.APIKey != second.Credential.Secret || second.Setup.BaseURL != server.URL {
+		t.Fatalf("second Raycast installation=%#v", second)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"keys", "create", "raycast", "--json"}); code == 0 || !strings.Contains(stderr.String(), "raycast-key <installation-label>") {
+		t.Fatalf("ambiguous keys create raycast was not rejected: code=%d stdout=%s stderr=%s", code, out.String(), stderr.String())
 	}
 }
 
@@ -796,8 +810,12 @@ func TestCLIKeysListAndRevokeUseUserProfile(t *testing.T) {
 	var stderr bytes.Buffer
 	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
 
-	if code := runner.Run([]string{"--profile", "user", "keys", "create", "user-managed"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "create", "user-managed", "--json"}); code != 0 {
 		t.Fatalf("profile keys create failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var created remoteAPIKey
+	if err := json.Unmarshal(out.Bytes(), &created); err != nil || created.ID == "" {
+		t.Fatalf("create output is not a credential: err=%v output=%s", err, out.String())
 	}
 	out.Reset()
 	stderr.Reset()
@@ -805,27 +823,39 @@ func TestCLIKeysListAndRevokeUseUserProfile(t *testing.T) {
 		t.Fatalf("profile keys list failed: code=%d stderr=%s", code, stderr.String())
 	}
 	var listed struct {
-		Keys []remoteAPIKey `json:"keys"`
+		Credentials []remoteAPIKey `json:"credentials"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &listed); err != nil {
 		t.Fatalf("list output is not JSON: %v output=%s", err, out.String())
 	}
 	found := false
-	for _, key := range listed.Keys {
+	for _, key := range listed.Credentials {
 		if key.Name == "user-managed" {
 			found = true
-			if key.UserID != "usr_seed" {
+			if key.UserID != "usr_seed" || key.ID != created.ID || key.Purpose != "custom" || key.RevokedAt != nil {
 				t.Fatalf("user-managed key user_id=%q", key.UserID)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("user-managed key missing from user list: %#v", listed.Keys)
+		t.Fatalf("user-managed key missing from user list: %#v", listed.Credentials)
 	}
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"--profile", "user", "keys", "revoke", "user-managed", "--json"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "rotate", created.ID, "--json"}); code != 0 {
+		t.Fatalf("profile keys rotate failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var rotated struct {
+		Credential remoteAPIKey `json:"credential"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rotated); err != nil || rotated.Credential.ID != created.ID || rotated.Credential.Secret == "" || rotated.Credential.Secret == created.Secret {
+		t.Fatalf("rotate output invalid: err=%v output=%s", err, out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "user", "keys", "revoke", created.ID, "--json"}); code != 0 {
 		t.Fatalf("profile keys revoke failed: code=%d stderr=%s", code, stderr.String())
 	}
 	var revoked struct {
@@ -834,8 +864,27 @@ func TestCLIKeysListAndRevokeUseUserProfile(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &revoked); err != nil {
 		t.Fatalf("revoke output is not JSON: %v output=%s", err, out.String())
 	}
-	if revoked.Revoked != "user-managed" {
+	if revoked.Revoked != created.ID {
 		t.Fatalf("revoked payload = %#v", revoked)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "user", "keys", "list", "--limit", "100", "--json"}); code != 0 {
+		t.Fatalf("post-revoke list failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var history remoteCredentialPage
+	if err := json.Unmarshal(out.Bytes(), &history); err != nil {
+		t.Fatalf("history output is not JSON: %v output=%s", err, out.String())
+	}
+	var revokedHistory bool
+	for _, credential := range history.Credentials {
+		if credential.ID == created.ID {
+			revokedHistory = credential.RevokedAt != nil
+		}
+	}
+	if !revokedHistory {
+		t.Fatalf("revoked credential disappeared from CLI history: %#v", history.Credentials)
 	}
 }
 

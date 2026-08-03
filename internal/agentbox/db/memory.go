@@ -50,6 +50,7 @@ type MemoryRepository struct {
 	ThreadTeamShares  []types.ThreadTeamShare
 	ThreadPublicLinks []types.ThreadPublicLink
 	Onboarding        []types.OnboardingState
+	RaycastSetupURLs  map[string]string
 }
 
 type memoryOwnerSetupToken struct {
@@ -1098,6 +1099,30 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, userID string, name s
 	return created, nil
 }
 
+func (m *MemoryRepository) CreateRaycastAPIKey(ctx context.Context, userID string, name string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string) (types.APIKey, error) {
+	for _, key := range m.APIKeys {
+		if key.UserID == strings.TrimSpace(userID) && strings.EqualFold(key.Name, strings.TrimSpace(name)) && key.RevokedAt == nil {
+			return types.APIKey{}, types.ErrCredentialLabelConflict
+		}
+	}
+	created, err := m.CreateAPIKey(ctx, userID, name, "raycast", tokenHash, tokenPrefix, scopes)
+	if err != nil {
+		return types.APIKey{}, err
+	}
+	if m.RaycastSetupURLs == nil {
+		m.RaycastSetupURLs = map[string]string{}
+	}
+	m.RaycastSetupURLs[created.ID] = strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")
+	return created, nil
+}
+
+func (m *MemoryRepository) raycastSetupBaseURL(keyID string) string {
+	if m.RaycastSetupURLs == nil {
+		return ""
+	}
+	return m.RaycastSetupURLs[keyID]
+}
+
 func (m *MemoryRepository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error) {
 	if !rotate {
 		state, err := m.GetOnboardingState(ctx, userID)
@@ -1226,6 +1251,33 @@ func (m *MemoryRepository) ListAPIKeys(_ context.Context, userID string) ([]type
 	return keys, nil
 }
 
+func (m *MemoryRepository) ListAPIKeysPage(_ context.Context, userID string, pageRequest types.PageRequest) (types.APIKeyPage, error) {
+	pageRequest = types.NormalizePageRequest(pageRequest)
+	keys := []types.APIKey{}
+	for _, key := range m.APIKeys {
+		if key.UserID == strings.TrimSpace(userID) {
+			keys = append(keys, key)
+		}
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		if keys[i].CreatedAt != keys[j].CreatedAt {
+			return keys[i].CreatedAt > keys[j].CreatedAt
+		}
+		return keys[i].ID > keys[j].ID
+	})
+	start := pageRequest.Offset
+	if start > len(keys) {
+		start = len(keys)
+	}
+	end := start + pageRequest.Limit + 1
+	if end > len(keys) {
+		end = len(keys)
+	}
+	window := keys[start:end]
+	visible, pageInfo := types.PageWindow(pageRequest, len(window))
+	return types.APIKeyPage{Credentials: window[:visible], Page: pageInfo}, nil
+}
+
 func (m *MemoryRepository) ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error) {
 	page, err := m.ListAllAPIKeysPage(ctx, types.PageRequest{})
 	return page.Credentials, err
@@ -1265,6 +1317,21 @@ func (m *MemoryRepository) RevokeAPIKey(_ context.Context, userID string, name s
 	return false, nil
 }
 
+func (m *MemoryRepository) RevokeAPIKeyForUserByID(_ context.Context, userID string, keyID string) (bool, error) {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.APIKeys {
+		if m.APIKeys[index].UserID != strings.TrimSpace(userID) || m.APIKeys[index].ID != strings.TrimSpace(keyID) {
+			continue
+		}
+		if m.APIKeys[index].RevokedAt == nil {
+			m.APIKeys[index].RevokedAt = &now
+		}
+		m.APIKeys[index].UpdatedAt = now
+		return true, nil
+	}
+	return false, nil
+}
+
 func (m *MemoryRepository) RevokeAPIKeyByID(_ context.Context, keyID string) (bool, error) {
 	now := isoMillis(time.Now().UTC())
 	for index := range m.APIKeys {
@@ -1278,6 +1345,34 @@ func (m *MemoryRepository) RevokeAPIKeyByID(_ context.Context, keyID string) (bo
 		return true, nil
 	}
 	return false, nil
+}
+
+func (m *MemoryRepository) RotateAPIKeyForUserByID(_ context.Context, userID string, keyID string, tokenHash string, tokenPrefix string) (*types.APIKey, error) {
+	now := isoMillis(time.Now().UTC())
+	for index := range m.APIKeys {
+		key := &m.APIKeys[index]
+		if key.UserID != strings.TrimSpace(userID) || key.ID != strings.TrimSpace(keyID) || key.RevokedAt != nil {
+			continue
+		}
+		key.TokenHash = tokenHash
+		key.TokenPrefix = tokenPrefix
+		key.KeyMasked = maskSecret(tokenPrefix)
+		key.UpdatedAt = now
+		key.LastUsedAt = nil
+		copyKey := *key
+		return &copyKey, nil
+	}
+	return nil, nil
+}
+
+func (m *MemoryRepository) GetAPIKeySetup(_ context.Context, userID string, keyID string) (*types.APIKey, string, error) {
+	for _, key := range m.APIKeys {
+		if key.UserID == strings.TrimSpace(userID) && key.ID == strings.TrimSpace(keyID) {
+			copyKey := key
+			return &copyKey, m.raycastSetupBaseURL(key.ID), nil
+		}
+	}
+	return nil, "", nil
 }
 
 func (m *MemoryRepository) FindAPIKeyBySecret(_ context.Context, secret string) (*types.APIKey, *types.User, error) {

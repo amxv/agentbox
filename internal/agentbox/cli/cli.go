@@ -237,7 +237,7 @@ Commands:
   mcp-url                 print the full MCP URL for the selected profile
   owner                   issue one-time owner bootstrap or recovery links
   connect                 print ChatGPT MCP setup instructions
-  raycast-key             create a Raycast API key and print preferences
+  raycast-key <label>     create an independent Raycast installation credential
   deploy                  print self-hosting deployment guidance
   keys                    manage credentials owned by the signed-in user
   list                    list recent threads
@@ -281,9 +281,9 @@ Issue a short-lived, one-time browser link that creates the permanent deployment
 		"connect": `Usage: agentbox connect chatgpt [--json]
 
 Create a user-owned ChatGPT credential, then print the MCP URL and ChatGPT app setup steps. Store the printed MCP URL securely because it includes the key.`,
-		"raycast-key": `Usage: agentbox raycast-key [--json]
+		"raycast-key": `Usage: agentbox raycast-key <installation-label> [--json]
 
-Create a user-owned Raycast credential and print the Agentbox URL and API key preferences.`,
+Create an independently labeled user-owned Raycast credential and print the complete developer-mode setup bundle.`,
 		"deploy": `Usage: agentbox deploy vercel
 
 Print the Vercel commands for deploying the backend and optional dashboard. This command does not mutate Vercel projects or env vars.`,
@@ -292,9 +292,10 @@ Print the Vercel commands for deploying the backend and optional dashboard. This
 Manage credentials owned by the signed-in profile's user.
 
 Commands:
-  create <name>           create or replace a named API key; use "raycast" for Raycast preferences
-  list                    show configured key names
-  revoke <name>           revoke a named API key`,
+  create <name>           create or replace a named custom API key
+  list                    page through active and revoked credential metadata
+  rotate <credential-id>  rotate one active credential by stable ID
+  revoke <credential-id>  revoke one credential by stable ID`,
 		"list": `Usage: agentbox list [-n <limit>] [--json]
 
 List recent Agentbox threads.`,

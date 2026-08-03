@@ -23,6 +23,7 @@ var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
 var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
 var ErrThreadVisibilityConflict = errors.New("the same team cannot be added and removed in one visibility change")
 var ErrPendingUploadUnavailable = errors.New("pending upload is unavailable, expired, or already consumed")
+var ErrCredentialLabelConflict = errors.New("an active credential already uses that label")
 
 type Actor struct {
 	Name    string `json:"name"`
@@ -144,8 +145,10 @@ type RaycastSetupPreference struct {
 }
 
 type RaycastSetupMaterial struct {
+	CredentialID    string                   `json:"credential_id"`
+	Label           string                   `json:"label"`
 	BaseURL         string                   `json:"base_url"`
-	APIKey          string                   `json:"api_key"`
+	APIKey          string                   `json:"api_key,omitempty"`
 	RepositoryURL   string                   `json:"repository_url"`
 	ExtensionPath   string                   `json:"extension_path"`
 	InstallCommands []string                 `json:"install_commands"`

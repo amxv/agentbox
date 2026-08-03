@@ -15,7 +15,7 @@ Browse Thread actions also manage team shares and the revocable read-only public
 
 ## 1. Create a dedicated installation credential
 
-Sign in to the AgentBox dashboard as the user who will run Raycast. Open **Onboarding** or **Credentials**, choose **Connect Raycast**, and copy the one-time setup material.
+Sign in to the AgentBox dashboard as the user who will run Raycast. Use **Onboarding** for the convenient first installation, or open **Credentials** and create a distinctly labeled Raycast installation. Copy the one-time setup material.
 
 Every Raycast installation needs its own credential. Do not reuse a ChatGPT, Claude, CLI, or another Raycast installation's key.
 
@@ -28,7 +28,7 @@ assets:read
 assets:write
 ```
 
-`agentbox raycast-key` remains an optional alternative for an already authenticated CLI user, but dashboard onboarding is the primary setup path.
+`agentbox raycast-key "<installation label>"` remains an optional alternative for an already authenticated CLI user. It creates the same independent least-privilege inventory record as the dashboard flow.
 
 ## 2. Load the extension in developer mode
 
@@ -64,7 +64,7 @@ For the production migration, follow [`docs/raycast-developer-mode-smoke.md`](..
 
 ## Rotation and recovery
 
-Reconnect the Raycast card in Onboarding or Credentials to create a replacement key, then update `apiKey` in this installation's preferences. The previous Raycast key is revoked immediately; browser, ChatGPT, Claude, CLI, and other Raycast credentials are unaffected.
+Open **Credentials**, locate the exact installation by label and stable credential ID, and choose **Rotate**. Copy the replacement key into that installation's `apiKey` preference. The previous secret stops working immediately; browser, ChatGPT, Claude, CLI, and other Raycast installations are unaffected. **Revoke** disables only the selected installation and preserves its metadata in the audit history. The non-secret developer-mode setup bundle can be reopened after refresh without redisplaying the API key.
 
 Disabling the owning user invalidates this installation together with every other credential owned by that user while preserving thread history and attribution.
 

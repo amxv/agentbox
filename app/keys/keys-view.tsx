@@ -7,18 +7,57 @@ import { CopyButton } from "../components/copy-button";
 import { AuthContext, fetchSession, signOutSession } from "../components/session";
 import { ThemeSwitcher } from "../components/theme-switcher";
 
-type APIKey = {
+type Credential = {
+  id: string;
+  user_id: string;
   name: string;
+  purpose: string;
   key_masked: string;
+  token_prefix: string;
+  scopes: string[];
   created_at: string;
   updated_at: string;
+  last_used_at?: string | null;
+  revoked_at?: string | null;
 };
 
-type CreatedAPIKey = APIKey & {
+type CreatedCredential = Credential & {
   key: string;
 };
 
-function formatDate(value: string) {
+type PageInfo = {
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_cursor?: string | null;
+};
+
+type RaycastSetupPreference = {
+  name: string;
+  title: string;
+  value: string;
+  secret?: boolean;
+};
+
+type RaycastSetup = {
+  credential_id: string;
+  label: string;
+  base_url: string;
+  api_key?: string;
+  repository_url: string;
+  extension_path: string;
+  install_commands: string[];
+  preferences: RaycastSetupPreference[];
+  final_check: string;
+};
+
+type SecretReveal = {
+  credential: CreatedCredential;
+  raycastSetup?: RaycastSetup | null;
+};
+
+function formatDate(value?: string | null) {
+  if (!value) return "Never";
   return new Date(value).toLocaleString(undefined, {
     dateStyle: "medium",
     timeStyle: "short"
@@ -30,20 +69,31 @@ function getMCPURL(secret: string) {
   return `${window.location.origin}/api/mcp?key=${encodeURIComponent(secret)}`;
 }
 
+function setupPreferenceValue(preference: RaycastSetupPreference, setup: RaycastSetup) {
+  if (preference.name === "apiKey" && !preference.value) return "Secret is not stored. Rotate this credential to reveal a replacement once.";
+  return preference.value || (preference.name === "baseUrl" ? setup.base_url : "Not stored");
+}
+
 export function KeysView() {
   const router = useRouter();
   const [auth, setAuth] = useState<AuthContext | null>(null);
-  const [keys, setKeys] = useState<APIKey[]>([]);
+  const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [page, setPage] = useState<PageInfo | null>(null);
   const [newKeyName, setNewKeyName] = useState("");
-  const [createdKey, setCreatedKey] = useState<CreatedAPIKey | null>(null);
+  const [raycastLabel, setRaycastLabel] = useState("");
+  const [secretReveal, setSecretReveal] = useState<SecretReveal | null>(null);
+  const [setupPreview, setSetupPreview] = useState<RaycastSetup | null>(null);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [creating, setCreating] = useState<"custom" | "raycast" | null>(null);
+  const [actingCredentialID, setActingCredentialID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loadKeys = useCallback(async function loadKeys() {
-    setLoading(true);
+  const loadCredentials = useCallback(async function loadCredentials(cursor?: string) {
+    const firstPage = !cursor;
+    if (firstPage) setLoading(true);
+    else setLoadingMore(true);
     setError(null);
     try {
       const session = await fetchSession();
@@ -52,31 +102,31 @@ export function KeysView() {
         return;
       }
       setAuth(session);
-      const response = await fetch("/api/keys", { cache: "no-store" });
+      const query = new URLSearchParams({ limit: "25" });
+      if (cursor) query.set("cursor", cursor);
+      const response = await fetch(`/api/keys?${query.toString()}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      setKeys(data.keys ?? []);
+      const next = (data.credentials ?? data.keys ?? []) as Credential[];
+      setCredentials((current) => firstPage ? next : [...current, ...next.filter((item) => !current.some((existing) => existing.id === item.id))]);
+      setPage(data.page ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (firstPage) setLoading(false);
+      else setLoadingMore(false);
     }
   }, [router]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      void loadKeys();
+      void loadCredentials();
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [loadKeys]);
+  }, [loadCredentials]);
 
-  const latestUpdatedAt = useMemo(() => {
-    if (keys.length === 0) return null;
-    return keys.reduce((latest, item) => {
-      const current = new Date(item.updated_at).getTime();
-      return current > latest ? current : latest;
-    }, 0);
-  }, [keys]);
+  const activeCount = useMemo(() => credentials.filter((item) => !item.revoked_at).length, [credentials]);
+  const revokedCount = credentials.length - activeCount;
 
   async function signOut() {
     try {
@@ -86,49 +136,115 @@ export function KeysView() {
     }
   }
 
-  async function createKey(event: FormEvent<HTMLFormElement>) {
+  async function createCustomKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newKeyName.trim();
     if (!name) return;
-    setCreating(true);
+    setCreating("custom");
     setError(null);
     setNotice(null);
+    setSetupPreview(null);
     try {
       const response = await fetch("/api/keys", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, purpose: "custom" })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      setCreatedKey(data.key);
+      setSecretReveal({ credential: data.key });
       setNewKeyName("");
-      setNotice(`Created API key "${data.key.name}". Store the secret now; it will not appear in the key list.`);
-      await loadKeys();
+      setNotice(`Created credential “${data.key.name}”. Store the secret now; it will not appear in the inventory.`);
+      await loadCredentials();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCreating(false);
+      setCreating(null);
     }
   }
 
-  async function deleteKey(name: string) {
-    const confirmed = window.confirm(`Delete API key "${name}"? Anything using this key will lose access immediately.`);
-    if (!confirmed) return;
-    setDeletingName(name);
+  async function createRaycastInstallation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const label = raycastLabel.trim();
+    if (!label) return;
+    setCreating("raycast");
     setError(null);
     setNotice(null);
+    setSetupPreview(null);
     try {
-      const response = await fetch(`/api/keys/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const response = await fetch("/api/raycast-installations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ label })
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      setNotice(`Deleted API key "${data.revoked ?? name}".`);
-      if (createdKey?.name === name) setCreatedKey(null);
-      await loadKeys();
+      setSecretReveal({ credential: data.credential, raycastSetup: data.raycast_setup });
+      setRaycastLabel("");
+      setNotice(`Created independent Raycast installation “${data.credential.name}”. The API key is shown only once.`);
+      await loadCredentials();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setDeletingName(null);
+      setCreating(null);
+    }
+  }
+
+  async function rotateCredential(credential: Credential) {
+    const confirmed = window.confirm(`Rotate “${credential.name}” (${credential.id})? Its current secret will stop working immediately.`);
+    if (!confirmed) return;
+    setActingCredentialID(credential.id);
+    setError(null);
+    setNotice(null);
+    setSetupPreview(null);
+    try {
+      const response = await fetch(`/api/keys/${encodeURIComponent(credential.id)}`, { method: "PATCH" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setSecretReveal({ credential: data.credential, raycastSetup: data.raycast_setup });
+      setNotice(`Rotated “${credential.name}”. Store the replacement secret now.`);
+      await loadCredentials();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActingCredentialID(null);
+    }
+  }
+
+  async function revokeCredential(credential: Credential) {
+    const confirmed = window.confirm(`Revoke “${credential.name}” (${credential.id})? This credential will stop working immediately, but its audit row will remain visible.`);
+    if (!confirmed) return;
+    setActingCredentialID(credential.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/keys/${encodeURIComponent(credential.id)}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setNotice(`Revoked credential ${data.revoked ?? credential.id}.`);
+      if (secretReveal?.credential.id === credential.id) setSecretReveal(null);
+      await loadCredentials();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActingCredentialID(null);
+    }
+  }
+
+  async function openRaycastSetup(credential: Credential) {
+    setActingCredentialID(credential.id);
+    setError(null);
+    setNotice(null);
+    setSecretReveal(null);
+    try {
+      const response = await fetch(`/api/keys/${encodeURIComponent(credential.id)}/setup`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setSetupPreview(data.raycast_setup);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActingCredentialID(null);
     }
   }
 
@@ -138,9 +254,9 @@ export function KeysView() {
         <div className="shell site-header__inner">
           <Link className="brand" href="/">
             <span className="brand__eyebrow">Agentbox</span>
-            <span className="brand__title">Key management</span>
+            <span className="brand__title">Credential management</span>
           </Link>
-          <nav className="site-nav" aria-label="Key management navigation">
+          <nav className="site-nav" aria-label="Credential management navigation">
             <Link className="site-nav__link" href="/threads">Inbox</Link>
             <Link className="site-nav__link" href="/onboarding">Connect agents</Link>
             <Link className="site-nav__link" href="/">Home</Link>
@@ -156,126 +272,195 @@ export function KeysView() {
           <div className="dashboard-header__row">
             <div>
               <p className="section-label">User credentials</p>
-              <h1 className="dashboard-title">API keys</h1>
-              <p className="dashboard-copy">Create credentials for your account, review active actor keys, and revoke each integration independently.</p>
+              <h1 className="dashboard-title">Credentials and installations</h1>
+              <p className="dashboard-copy">Create independent credentials for each actor surface, inspect safe usage metadata, and retain revoked rows as audit history.</p>
             </div>
             {auth && (
-              <div className="card">
-                <p className="stat-label">Active keys</p>
-                <h2 className="card-title">{keys.length}</h2>
-                <p className="copy">{latestUpdatedAt ? `Last changed ${formatDate(new Date(latestUpdatedAt).toISOString())}` : "No keys yet."}</p>
+              <div className="credential-stats" aria-label="Credential totals">
+                <div className="card">
+                  <p className="stat-label">Active</p>
+                  <h2 className="card-title">{activeCount}</h2>
+                </div>
+                <div className="card">
+                  <p className="stat-label">Revoked history</p>
+                  <h2 className="card-title">{revokedCount}</h2>
+                </div>
               </div>
             )}
           </div>
         </section>
 
         <div className="key-management-grid">
-          <section className="sign-in-card key-create-card" aria-labelledby="create-key-title">
-            <div>
-              <p className="section-label">Create</p>
-              <h2 id="create-key-title" className="card-title">New API key</h2>
-              <p className="copy">Use clear names like local, chatgpt, codex, claude, or worker-prod. Reusing a name rotates that credential for your user.</p>
-            </div>
-            <form className="key-create-form" onSubmit={createKey}>
-              <input
-                className="form-input"
-                value={newKeyName}
-                onChange={(event) => setNewKeyName(event.target.value)}
-                placeholder="key-name"
-                type="text"
-              />
-              <button className="button button--solid" type="submit" disabled={creating || !newKeyName.trim()}>
-                {creating ? "Creating..." : "Create key"}
-              </button>
-            </form>
-          </section>
+          <div className="credential-create-stack">
+            <section className="sign-in-card key-create-card" aria-labelledby="create-key-title">
+              <div>
+                <p className="section-label">Custom actor</p>
+                <h2 id="create-key-title" className="card-title">New API key</h2>
+                <p className="copy">Use a clear label for a local agent, worker, or another supported client. Reusing an active custom label rotates that credential.</p>
+              </div>
+              <form className="key-create-form" onSubmit={createCustomKey}>
+                <input className="form-input" value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} placeholder="Codex on MacBook" type="text" />
+                <button className="button button--solid" type="submit" disabled={creating !== null || !newKeyName.trim()}>
+                  {creating === "custom" ? "Creating..." : "Create API key"}
+                </button>
+              </form>
+            </section>
 
-          <section className="key-list-card" aria-labelledby="active-keys-title">
+            <section className="sign-in-card key-create-card" aria-labelledby="create-raycast-title">
+              <div>
+                <p className="section-label">Raycast</p>
+                <h2 id="create-raycast-title" className="card-title">New installation</h2>
+                <p className="copy">Every Raycast installation receives its own label, secret, least-privilege scopes, and developer-mode setup bundle.</p>
+              </div>
+              <form className="key-create-form" onSubmit={createRaycastInstallation}>
+                <input className="form-input" value={raycastLabel} onChange={(event) => setRaycastLabel(event.target.value)} placeholder="MacBook Air" type="text" />
+                <button className="button button--solid" type="submit" disabled={creating !== null || !raycastLabel.trim()}>
+                  {creating === "raycast" ? "Creating..." : "Create Raycast installation"}
+                </button>
+              </form>
+            </section>
+          </div>
+
+          <section className="key-list-card" aria-labelledby="credential-inventory-title">
             <div className="key-list-card__header">
               <div>
-                <p className="section-label">Current</p>
-                <h2 id="active-keys-title" className="card-title">Active keys</h2>
+                <p className="section-label">Inventory</p>
+                <h2 id="credential-inventory-title" className="card-title">Active and revoked credentials</h2>
               </div>
-              <button className="button button--ghost" type="button" onClick={() => void loadKeys()} disabled={loading}>Refresh</button>
+              <button className="button button--ghost" type="button" onClick={() => void loadCredentials()} disabled={loading}>Refresh</button>
             </div>
 
             {notice && <div className="notice-card">{notice}</div>}
             {error && (
               <div className="error-card">
-                <strong>Could not manage keys.</strong>
+                <strong>Could not manage credentials.</strong>
                 <span>{error}</span>
               </div>
             )}
 
-            {createdKey && (
+            {secretReveal && (
               <div className="secret-card">
                 <div>
                   <p className="section-label">Secret shown once</p>
-                  <h3>{createdKey.name}</h3>
-                  <p className="copy">Copy this now. The key list only shows the masked value.</p>
+                  <h3>{secretReveal.credential.name}</h3>
+                  <p className="copy">Credential ID: <code>{secretReveal.credential.id}</code>. Copy the secret now; the inventory stores only its hash and safe prefix.</p>
                 </div>
                 <div className="secret-row">
-                  <code>{createdKey.key}</code>
-                  <CopyButton value={createdKey.key} label="Copy API key" />
+                  <code>{secretReveal.credential.key}</code>
+                  <CopyButton value={secretReveal.credential.key} label="Copy API key" />
                 </div>
-                <div className="secret-row">
-                  <code>{getMCPURL(createdKey.key)}</code>
-                  <CopyButton value={getMCPURL(createdKey.key)} label="Copy MCP URL" />
-                </div>
+                {secretReveal.raycastSetup ? (
+                  <RaycastSetupPanel setup={secretReveal.raycastSetup} />
+                ) : (
+                  <div className="secret-row">
+                    <code>{getMCPURL(secretReveal.credential.key)}</code>
+                    <CopyButton value={getMCPURL(secretReveal.credential.key)} label="Copy MCP URL" />
+                  </div>
+                )}
               </div>
             )}
 
-            {loading && (
-              <div className="skeleton-list" aria-label="Loading keys" aria-busy="true">
-                <div className="skeleton-key-table" aria-hidden="true">
-                  <div className="skeleton-key-row skeleton-key-row--head">
-                    <span className="skeleton-line skeleton-line--short" />
-                    <span className="skeleton-line skeleton-line--medium" />
-                    <span className="skeleton-line skeleton-line--medium" />
-                    <span className="skeleton-line skeleton-line--tiny" />
+            {setupPreview && (
+              <div className="secret-card">
+                <div className="key-list-card__header">
+                  <div>
+                    <p className="section-label">Saved setup</p>
+                    <h3>{setupPreview.label}</h3>
+                    <p className="copy">These non-secret instructions remain available after refresh. Agentbox never redisplays the stored API key.</p>
                   </div>
-                  {Array.from({ length: 3 }).map((_, index) => (
-                    <div className="skeleton-key-row" key={index}>
-                      <span className="skeleton-line skeleton-line--medium" />
-                      <span className="skeleton-line skeleton-line--long" />
-                      <span className="skeleton-line skeleton-line--medium" />
-                      <span className="skeleton-pill" />
-                    </div>
-                  ))}
+                  <button className="mini-button" type="button" onClick={() => setSetupPreview(null)}>Close</button>
                 </div>
+                <RaycastSetupPanel setup={setupPreview} />
               </div>
             )}
-            {!loading && keys.length === 0 && <p className="empty-state">No API keys found.</p>}
-            {!loading && keys.length > 0 && (
-              <div className="key-table" role="table" aria-label="Active API keys">
-                <div className="key-table__row key-table__row--head" role="row">
-                  <span role="columnheader">Name</span>
-                  <span role="columnheader">Masked key</span>
-                  <span role="columnheader">Updated</span>
-                  <span role="columnheader">Actions</span>
-                </div>
-                {keys.map((item) => (
-                  <div className="key-table__row" role="row" key={item.name}>
-                    <span className="key-name" role="cell">{item.name}</span>
-                    <span className="mono key-masked" role="cell">{item.key_masked}</span>
-                    <span className="thread-meta" role="cell">{formatDate(item.updated_at)}</span>
-                    <span className="key-actions" role="cell">
-                      <button
-                        className="mini-button mini-button--danger"
-                        type="button"
-                        onClick={() => void deleteKey(item.name)}
-                        disabled={deletingName === item.name}
-                      >
-                        {deletingName === item.name ? "Deleting..." : "Delete"}
-                      </button>
-                    </span>
-                  </div>
-                ))}
+
+            {loading && <p className="empty-state" aria-busy="true">Loading credential inventory…</p>}
+            {!loading && credentials.length === 0 && <p className="empty-state">No credentials found.</p>}
+            {!loading && credentials.length > 0 && (
+              <div className="credential-inventory" aria-label="Credential inventory">
+                {credentials.map((credential) => {
+                  const revoked = Boolean(credential.revoked_at);
+                  const acting = actingCredentialID === credential.id;
+                  return (
+                    <article className="credential-card" key={credential.id}>
+                      <div className="credential-card__header">
+                        <div>
+                          <div className="credential-card__title-row">
+                            <h3>{credential.name}</h3>
+                            <span className={`credential-state ${revoked ? "credential-state--revoked" : "credential-state--active"}`}>{revoked ? "Revoked" : "Active"}</span>
+                          </div>
+                          <code className="credential-id">{credential.id}</code>
+                        </div>
+                        <div className="key-actions">
+                          {credential.purpose === "raycast" && <button className="mini-button" type="button" onClick={() => void openRaycastSetup(credential)} disabled={acting}>Setup</button>}
+                          {!revoked && <button className="mini-button" type="button" onClick={() => void rotateCredential(credential)} disabled={acting}>{acting ? "Working..." : "Rotate"}</button>}
+                          {!revoked && <button className="mini-button mini-button--danger" type="button" onClick={() => void revokeCredential(credential)} disabled={acting}>Revoke</button>}
+                        </div>
+                      </div>
+                      <dl className="credential-metadata">
+                        <div><dt>Purpose</dt><dd>{credential.purpose || "custom"}</dd></div>
+                        <div><dt>Masked token</dt><dd className="mono">{credential.key_masked || credential.token_prefix}</dd></div>
+                        <div><dt>Scopes</dt><dd>{credential.scopes.length > 0 ? credential.scopes.join(", ") : "Legacy/default"}</dd></div>
+                        <div><dt>Created</dt><dd>{formatDate(credential.created_at)}</dd></div>
+                        <div><dt>Last used</dt><dd>{formatDate(credential.last_used_at)}</dd></div>
+                        <div><dt>Revoked</dt><dd>{credential.revoked_at ? formatDate(credential.revoked_at) : "No"}</dd></div>
+                      </dl>
+                    </article>
+                  );
+                })}
               </div>
+            )}
+
+            {page?.has_more && page.next_cursor && (
+              <button className="button button--ghost" type="button" onClick={() => void loadCredentials(page.next_cursor ?? undefined)} disabled={loadingMore}>
+                {loadingMore ? "Loading…" : "Load more credentials"}
+              </button>
             )}
           </section>
         </div>
       </main>
+    </div>
+  );
+}
+
+function RaycastSetupPanel({ setup }: { setup: RaycastSetup }) {
+  return (
+    <div className="raycast-setup-panel">
+      <div className="credential-metadata">
+        <div><dt>Repository</dt><dd><code>{setup.repository_url}</code></dd></div>
+        <div><dt>Extension path</dt><dd><code>{setup.extension_path}</code></dd></div>
+        <div><dt>Agentbox URL</dt><dd><code>{setup.base_url}</code></dd></div>
+      </div>
+      <div>
+        <p className="section-label">Install commands</p>
+        <div className="setup-command-list">
+          {setup.install_commands.map((command) => (
+            <div className="secret-row" key={command}>
+              <code>{command}</code>
+              <CopyButton value={command} label="Copy command" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="section-label">Raycast preferences</p>
+        <div className="setup-command-list">
+          {setup.preferences.map((preference) => {
+            const value = setupPreferenceValue(preference, setup);
+            const copyable = Boolean(preference.value);
+            return (
+              <div className="secret-row" key={preference.name}>
+                <div>
+                  <strong>{preference.title}</strong>
+                  <code>{value}</code>
+                </div>
+                {copyable && <CopyButton value={preference.value} label={`Copy ${preference.title}`} />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <p className="copy"><strong>Final check:</strong> {setup.final_check}</p>
     </div>
   );
 }

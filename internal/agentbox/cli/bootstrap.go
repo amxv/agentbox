@@ -186,19 +186,50 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 }
 
 type remoteAPIKey struct {
-	ID        string `json:"id"`
-	UserID    string `json:"user_id"`
-	Name      string `json:"name"`
-	Purpose   string `json:"purpose"`
-	Secret    string `json:"key"`
-	KeyMasked string `json:"key_masked"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string   `json:"id"`
+	UserID      string   `json:"user_id"`
+	Name        string   `json:"name"`
+	Purpose     string   `json:"purpose"`
+	Secret      string   `json:"key,omitempty"`
+	KeyMasked   string   `json:"key_masked"`
+	TokenPrefix string   `json:"token_prefix"`
+	Scopes      []string `json:"scopes"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+	LastUsedAt  *string  `json:"last_used_at,omitempty"`
+	RevokedAt   *string  `json:"revoked_at,omitempty"`
+}
+
+type remoteCredentialPage struct {
+	Credentials []remoteAPIKey `json:"credentials"`
+	Page        struct {
+		Limit      int     `json:"limit"`
+		Offset     int     `json:"offset"`
+		HasMore    bool    `json:"has_more"`
+		NextCursor *string `json:"next_cursor,omitempty"`
+	} `json:"page"`
+}
+
+type remoteRaycastSetup struct {
+	CredentialID    string   `json:"credential_id"`
+	Label           string   `json:"label"`
+	BaseURL         string   `json:"base_url"`
+	APIKey          string   `json:"api_key,omitempty"`
+	RepositoryURL   string   `json:"repository_url"`
+	ExtensionPath   string   `json:"extension_path"`
+	InstallCommands []string `json:"install_commands"`
+	Preferences     []struct {
+		Name   string `json:"name"`
+		Title  string `json:"title"`
+		Value  string `json:"value"`
+		Secret bool   `json:"secret,omitempty"`
+	} `json:"preferences"`
+	FinalCheck string `json:"final_check"`
 }
 
 func (r *Runner) runKeys(args []string, profileName string) error {
 	if len(args) == 0 {
-		return errors.New(`Usage: agentbox keys [create|list|revoke]`)
+		return errors.New(`Usage: agentbox keys [create|list|rotate|revoke]`)
 	}
 	if isHelpArg(args[0]) {
 		r.printCommandHelp("keys")
@@ -215,6 +246,8 @@ func (r *Runner) runKeys(args []string, profileName string) error {
 		return r.runKeysList(args[1:], profileName)
 	case "revoke":
 		return r.runKeysRevoke(args[1:], profileName)
+	case "rotate":
+		return r.runKeysRotate(args[1:], profileName)
 	default:
 		return fmt.Errorf("Unknown keys command %q.", args[0])
 	}
@@ -236,16 +269,22 @@ func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	}
 	name := strings.TrimSpace(fs.Arg(0))
 	if strings.EqualFold(name, "raycast") {
-		return r.printRaycastKey(profileName, *jsonOut)
+		return errors.New(`Use "agentbox raycast-key <installation-label>" so each Raycast installation has an independent least-privilege credential.`)
 	}
 	key, err := r.createProfileAPIKey(profileName, name, "custom")
 	if err != nil {
 		return err
 	}
 	result := map[string]any{
+		"id":         key.ID,
+		"user_id":    key.UserID,
 		"name":       key.Name,
+		"purpose":    key.Purpose,
 		"key":        key.Secret,
 		"key_masked": key.KeyMasked,
+		"scopes":     key.Scopes,
+		"created_at": key.CreatedAt,
+		"updated_at": key.UpdatedAt,
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, result)
@@ -262,40 +301,39 @@ func (r *Runner) runRaycastKey(args []string, profileName string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return errors.New("Usage: agentbox raycast-key [--json]")
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox raycast-key <installation-label> [--json]")
 	}
-	return r.printRaycastKey(profileName, *jsonOut)
+	return r.printRaycastKey(profileName, strings.TrimSpace(fs.Arg(0)), *jsonOut)
 }
 
-func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
-	cfg, err := r.runtimeConfig(profileName)
-	if err != nil {
-		return err
+func (r *Runner) printRaycastKey(profileName string, label string, jsonOut bool) error {
+	if strings.TrimSpace(label) == "" {
+		return errors.New("Raycast installation label is required.")
 	}
-	key, err := r.createProfileAPIKey(profileName, "raycast", "raycast")
-	if err != nil {
-		return err
+	payload, _ := json.Marshal(map[string]string{"label": label})
+	var result struct {
+		Credential remoteAPIKey       `json:"credential"`
+		Setup      remoteRaycastSetup `json:"raycast_setup"`
 	}
-	result := map[string]any{
-		"profile":             cfg.ProfileName,
-		"source":              cfg.Source,
-		"key_name":            key.Name,
-		"key":                 key.Secret,
-		"key_masked":          key.KeyMasked,
-		"raycast_base_url":    strings.TrimRight(cfg.BaseURL, "/"),
-		"raycast_api_key":     key.Secret,
-		"preference_base_url": "Agentbox URL",
-		"preference_api_key":  "Agentbox API Key",
+	if err := r.request("/api/raycast-installations", http.MethodPost, bytes.NewReader(payload), map[string]string{"content-type": "application/json"}, profileName, &result); err != nil {
+		return err
 	}
 	if jsonOut {
 		return printJSON(r.Stdout, result)
 	}
-	fmt.Fprintf(r.Stdout, "Created Raycast API key %q.\n", key.Name)
-
+	fmt.Fprintf(r.Stdout, "Created Raycast installation %q (%s).\n", result.Credential.Name, result.Credential.ID)
+	fmt.Fprintf(r.Stdout, "Repository: %s\n", result.Setup.RepositoryURL)
+	fmt.Fprintf(r.Stdout, "Extension path: %s\n", result.Setup.ExtensionPath)
+	fmt.Fprintln(r.Stdout, "Install commands:")
+	for _, command := range result.Setup.InstallCommands {
+		fmt.Fprintf(r.Stdout, "  %s\n", command)
+	}
 	fmt.Fprintln(r.Stdout, "Raycast preferences:")
-	fmt.Fprintf(r.Stdout, "Agentbox URL: %s\n", strings.TrimRight(cfg.BaseURL, "/"))
-	fmt.Fprintf(r.Stdout, "Agentbox API Key: %s\n", key.Secret)
+	for _, preference := range result.Setup.Preferences {
+		fmt.Fprintf(r.Stdout, "%s: %s\n", preference.Title, preference.Value)
+	}
+	fmt.Fprintf(r.Stdout, "Check: %s\n", result.Setup.FinalCheck)
 	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
 	return nil
 }
@@ -305,27 +343,42 @@ func (r *Runner) runKeysList(args []string, profileName string) error {
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
 	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
+	limit := fs.Int("limit", 25, "maximum credentials to return (1-100)")
+	cursor := fs.String("cursor", "", "continuation cursor from a previous page")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
 		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
 	}
-	var data struct {
-		Keys []remoteAPIKey `json:"keys"`
+	path := fmt.Sprintf("/api/keys?limit=%d", *limit)
+	if strings.TrimSpace(*cursor) != "" {
+		path += "&cursor=" + url.QueryEscape(strings.TrimSpace(*cursor))
 	}
-	if err := r.request("/api/keys", http.MethodGet, nil, nil, profileName, &data); err != nil {
+	var data remoteCredentialPage
+	if err := r.request(path, http.MethodGet, nil, nil, profileName, &data); err != nil {
 		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
 	}
-	if len(data.Keys) == 0 {
+	if len(data.Credentials) == 0 {
 		fmt.Fprintln(r.Stdout, "No Agentbox API keys found.")
 		return nil
 	}
-	for _, key := range data.Keys {
-		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\n", key.Name, key.KeyMasked, key.UpdatedAt)
+	for _, key := range data.Credentials {
+		state := "active"
+		if key.RevokedAt != nil {
+			state = "revoked " + *key.RevokedAt
+		}
+		lastUsed := "never"
+		if key.LastUsedAt != nil {
+			lastUsed = *key.LastUsedAt
+		}
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\t%s\tlast-used=%s\n", key.ID, key.Name, key.Purpose, key.KeyMasked, state, lastUsed)
+	}
+	if data.Page.NextCursor != nil {
+		fmt.Fprintf(r.Stdout, "Next cursor: %s\n", *data.Page.NextCursor)
 	}
 	return nil
 }
@@ -339,22 +392,51 @@ func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys revoke <name> [--json]")
+		return errors.New("Usage: agentbox keys revoke <credential-id> [--json]")
 	}
 	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
 		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
 	}
-	name := strings.TrimSpace(fs.Arg(0))
+	credentialID := strings.TrimSpace(fs.Arg(0))
 	var data struct {
 		Revoked string `json:"revoked"`
 	}
-	if err := r.request("/api/keys/"+url.PathEscape(name), http.MethodDelete, nil, nil, profileName, &data); err != nil {
+	if err := r.request("/api/keys/"+url.PathEscape(credentialID), http.MethodDelete, nil, nil, profileName, &data); err != nil {
 		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
 	}
-	fmt.Fprintf(r.Stdout, "Revoked API key %q.\n", data.Revoked)
+	fmt.Fprintf(r.Stdout, "Revoked credential %s.\n", data.Revoked)
+	return nil
+}
+
+func (r *Runner) runKeysRotate(args []string, profileName string) error {
+	fs := newFlagSet("keys rotate")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox keys rotate <credential-id> [--json]")
+	}
+	credentialID := strings.TrimSpace(fs.Arg(0))
+	var data struct {
+		Credential remoteAPIKey        `json:"credential"`
+		Setup      *remoteRaycastSetup `json:"raycast_setup,omitempty"`
+	}
+	if err := r.request("/api/keys/"+url.PathEscape(credentialID), http.MethodPatch, nil, nil, profileName, &data); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(r.Stdout, data)
+	}
+	fmt.Fprintf(r.Stdout, "Rotated credential %q (%s).\n", data.Credential.Name, data.Credential.ID)
+	fmt.Fprintf(r.Stdout, "Secret: %s\n", data.Credential.Secret)
+	if data.Setup != nil {
+		fmt.Fprintf(r.Stdout, "Raycast URL: %s\n", data.Setup.BaseURL)
+	}
+	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
 	return nil
 }
 
@@ -455,13 +537,16 @@ func (r *Runner) printKeysSubcommandHelp(command string) {
 	usage := map[string]string{
 		"create": `Usage: agentbox keys create <name> [--json]
 
-Create or rotate a named credential for the signed-in profile's user. Use "raycast" to print Raycast preference values.`,
-		"list": `Usage: agentbox keys list [--json]
+Create or rotate a named custom credential for the signed-in profile's user. Use "agentbox raycast-key <installation-label>" for Raycast.`,
+		"list": `Usage: agentbox keys list [--limit <n>] [--cursor <cursor>] [--json]
 
-List credential names and masked values for the signed-in profile's user.`,
-		"revoke": `Usage: agentbox keys revoke <name> [--json]
+List active and revoked credential metadata for the signed-in profile's user.`,
+		"rotate": `Usage: agentbox keys rotate <credential-id> [--json]
 
-Revoke a credential by name for the signed-in profile's user.`,
+Rotate one active credential by stable ID and print the replacement secret once.`,
+		"revoke": `Usage: agentbox keys revoke <credential-id> [--json]
+
+Revoke one credential by stable ID while retaining its audit row.`,
 	}
 	if text, ok := usage[command]; ok {
 		fmt.Fprintln(r.Stdout, text)

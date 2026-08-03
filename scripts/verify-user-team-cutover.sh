@@ -77,7 +77,10 @@ echo 'Running clean Raycast package verification...'
 echo 'Checking patch hygiene...'
 git diff --check
 
-if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
+if [[ "${AGENTBOX_REQUIRE_POSTGRES_TESTS:-}" == "1" && -z "${TEST_DATABASE_URL:-}" ]]; then
+  echo 'TEST_DATABASE_URL is required because AGENTBOX_REQUIRE_POSTGRES_TESTS=1.' >&2
+  exit 1
+elif [[ -n "${TEST_DATABASE_URL:-}" ]]; then
   echo 'PostgreSQL integration tests ran through go test ./... using TEST_DATABASE_URL.'
 else
   echo 'TEST_DATABASE_URL is not set; PostgreSQL integration tests were compiled and discovered but require CI or local verification.'

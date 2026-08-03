@@ -150,10 +150,16 @@ func TestOpenContentSnapshotExcludesExpiredConsumedAndAssetBackedPendingRows(t *
 func TestPGDumpCreatesReadableArchiveFromExportedSnapshot(t *testing.T) {
 	pgDumpPath, err := exec.LookPath("pg_dump")
 	if err != nil {
+		if strings.TrimSpace(os.Getenv("AGENTBOX_REQUIRE_POSTGRES_TESTS")) == "1" {
+			t.Fatal("pg_dump is required because AGENTBOX_REQUIRE_POSTGRES_TESTS=1")
+		}
 		t.Skip("pg_dump is not installed; PostgreSQL backup integration runs in CI")
 	}
 	pgRestorePath, err := exec.LookPath("pg_restore")
 	if err != nil {
+		if strings.TrimSpace(os.Getenv("AGENTBOX_REQUIRE_POSTGRES_TESTS")) == "1" {
+			t.Fatal("pg_restore is required because AGENTBOX_REQUIRE_POSTGRES_TESTS=1")
+		}
 		t.Skip("pg_restore is not installed; PostgreSQL backup integration runs in CI")
 	}
 

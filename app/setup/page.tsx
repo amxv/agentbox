@@ -80,7 +80,7 @@ const chapters = [
       {
         title: "Add named identities",
         body: "Use browser-assisted login on additional machines, then create distinct keys for agents, scripts, CI, and Raycast. Names become attribution in the thread history.",
-        code: "agentbox login --base-url https://youragentbox.vercel.app --profile-name prod\nagentbox keys list\nagentbox keys create codex-local\nagentbox keys create ci-release\nagentbox raycast-key"
+        code: "agentbox login --base-url https://youragentbox.vercel.app --profile-name prod\nagentbox keys list\nagentbox keys create codex-local\nagentbox keys create ci-release\nagentbox raycast-key \"MacBook Air\""
       },
       {
         title: "Connect MCP participants",
@@ -90,7 +90,7 @@ const chapters = [
       {
         title: "Connect Raycast",
         body: "The macOS extension talks directly to the existing HTTP API and participates under its own actor key.",
-        code: "cd raycast/agentbox\nnpm install\nnpm run dev\n\n# Raycast preferences:\n# Agentbox URL: https://youragentbox.vercel.app\n# Agentbox API Key: <output from agentbox raycast-key>"
+        code: "cd raycast/agentbox\nnpm install\nnpm run dev\n\n# Raycast preferences:\n# Agentbox URL: https://youragentbox.vercel.app\n# Agentbox API Key: <output from agentbox raycast-key \"MacBook Air\">"
       }
     ]
   }

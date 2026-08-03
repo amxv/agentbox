@@ -57,14 +57,19 @@ type Repository interface {
 	PostMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
 	PostMessageWithPendingUploads(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset, pendingUploadIDs []string) (types.Message, error)
 	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
+	CreateRaycastAPIKey(ctx context.Context, userID string, name string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string) (types.APIKey, error)
 	CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error)
 	GetOnboardingState(ctx context.Context, userID string) (types.OnboardingState, error)
 	DismissOnboarding(ctx context.Context, userID string) (types.OnboardingState, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
+	ListAPIKeysPage(ctx context.Context, userID string, page types.PageRequest) (types.APIKeyPage, error)
 	ListAllAPIKeys(ctx context.Context) ([]types.APIKey, error)
 	ListAllAPIKeysPage(ctx context.Context, page types.PageRequest) (types.APIKeyPage, error)
 	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
+	RevokeAPIKeyForUserByID(ctx context.Context, userID string, keyID string) (bool, error)
 	RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error)
+	RotateAPIKeyForUserByID(ctx context.Context, userID string, keyID string, tokenHash string, tokenPrefix string) (*types.APIKey, error)
+	GetAPIKeySetup(ctx context.Context, userID string, keyID string) (*types.APIKey, string, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
 	BootstrapOwner(ctx context.Context, email string, displayName string, passwordHash string) (types.User, error)
@@ -812,13 +817,13 @@ func (s *Service) CreateOnboardingConnection(ctx context.Context, auth types.Aut
 			"Use a separate credential later for each additional machine.",
 		}
 	case "raycast":
-		setup := raycastSetupMaterial(baseURL, secret)
+		setup := raycastSetupMaterial(baseURL, secret, credential.ID, credential.Name)
 		result.RaycastSetup = &setup
 		result.Instructions = []string{
 			"Clone or update the AgentBox repository on the Mac where Raycast is installed.",
 			"Install the extension dependencies and run it in Raycast developer mode with the commands below.",
 			"Enter the generated Agentbox URL and Agentbox API Key in the required extension preferences.",
-			"Run List Threads in Raycast and confirm it shows only the threads currently accessible to your user.",
+			"Run Browse Threads in Raycast and confirm it shows only the threads currently accessible to your user.",
 			"Create a separate Raycast credential for every additional Mac or local Raycast installation.",
 		}
 	}
@@ -833,6 +838,121 @@ func (s *Service) ListAPIKeys(ctx context.Context, auth types.AuthContext) ([]ty
 		return nil, err
 	}
 	return s.repo.ListAPIKeys(ctx, auth.UserID)
+}
+
+func (s *Service) ListAPIKeysPage(ctx context.Context, auth types.AuthContext, pageRequest types.PageRequest) (types.APIKeyPage, error) {
+	if err := requireUserAuthContext(auth); err != nil {
+		return types.APIKeyPage{}, err
+	}
+	return s.repo.ListAPIKeysPage(ctx, auth.UserID, pageRequest)
+}
+
+type RaycastInstallationResult struct {
+	Credential types.APIKey               `json:"credential"`
+	Setup      types.RaycastSetupMaterial `json:"raycast_setup"`
+}
+
+func (s *Service) CreateRaycastInstallation(ctx context.Context, auth types.AuthContext, label string, baseURL string) (RaycastInstallationResult, error) {
+	if err := requireUserAuthContext(auth); err != nil {
+		return RaycastInstallationResult{}, err
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return RaycastInstallationResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "A distinct Raycast installation label is required."}
+	}
+	if len(label) > 120 {
+		return RaycastInstallationResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "Raycast installation labels must be at most 120 characters."}
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return RaycastInstallationResult{}, CodedError{Code: "INVALID_ARGUMENT", Message: "deployment base URL is required."}
+	}
+	secret, err := generateSecret()
+	if err != nil {
+		return RaycastInstallationResult{}, err
+	}
+	credential, err := s.repo.CreateRaycastAPIKey(ctx, auth.UserID, label, hashSecret(secret), tokenPrefix(secret), ConnectorAPIKeyScopes("raycast"), baseURL)
+	if errors.Is(err, types.ErrCredentialLabelConflict) {
+		return RaycastInstallationResult{}, CodedError{Code: "CREDENTIAL_LABEL_CONFLICT", Message: "An active credential already uses that label. Choose a distinct installation label or rotate that exact credential.", Err: err}
+	}
+	if err != nil {
+		return RaycastInstallationResult{}, err
+	}
+	credential.Key = secret
+	return RaycastInstallationResult{
+		Credential: credential,
+		Setup:      raycastSetupMaterial(baseURL, secret, credential.ID, credential.Name),
+	}, nil
+}
+
+func (s *Service) RotateAPIKeyByID(ctx context.Context, auth types.AuthContext, keyID string) (types.APIKey, *types.RaycastSetupMaterial, error) {
+	if err := requireUserAuthContext(auth); err != nil {
+		return types.APIKey{}, nil, err
+	}
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return types.APIKey{}, nil, CodedError{Code: "INVALID_ARGUMENT", Message: "credential_id is required."}
+	}
+	secret, err := generateSecret()
+	if err != nil {
+		return types.APIKey{}, nil, err
+	}
+	rotated, err := s.repo.RotateAPIKeyForUserByID(ctx, auth.UserID, keyID, hashSecret(secret), tokenPrefix(secret))
+	if err != nil {
+		return types.APIKey{}, nil, err
+	}
+	if rotated == nil {
+		return types.APIKey{}, nil, CodedError{Code: "CREDENTIAL_NOT_FOUND", Message: "Credential not found.", Err: ErrAPIKeyNotFound}
+	}
+	rotated.Key = secret
+	var setup *types.RaycastSetupMaterial
+	if rotated.Purpose == "raycast" {
+		metadata, baseURL, err := s.repo.GetAPIKeySetup(ctx, auth.UserID, rotated.ID)
+		if err != nil {
+			return types.APIKey{}, nil, err
+		}
+		if metadata == nil || strings.TrimSpace(baseURL) == "" {
+			return types.APIKey{}, nil, CodedError{Code: "RAYCAST_SETUP_UNAVAILABLE", Message: "Raycast setup metadata is unavailable for this credential."}
+		}
+		material := raycastSetupMaterial(baseURL, secret, rotated.ID, rotated.Name)
+		setup = &material
+	}
+	return *rotated, setup, nil
+}
+
+func (s *Service) RevokeAPIKeyByID(ctx context.Context, auth types.AuthContext, keyID string) error {
+	if err := requireUserAuthContext(auth); err != nil {
+		return err
+	}
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "credential_id is required."}
+	}
+	revoked, err := s.repo.RevokeAPIKeyForUserByID(ctx, auth.UserID, keyID)
+	if err != nil {
+		return err
+	}
+	if !revoked {
+		return CodedError{Code: "CREDENTIAL_NOT_FOUND", Message: "Credential not found.", Err: ErrAPIKeyNotFound}
+	}
+	return nil
+}
+
+func (s *Service) RaycastInstallationSetup(ctx context.Context, auth types.AuthContext, keyID string) (types.RaycastSetupMaterial, error) {
+	if err := requireUserAuthContext(auth); err != nil {
+		return types.RaycastSetupMaterial{}, err
+	}
+	key, baseURL, err := s.repo.GetAPIKeySetup(ctx, auth.UserID, strings.TrimSpace(keyID))
+	if err != nil {
+		return types.RaycastSetupMaterial{}, err
+	}
+	if key == nil || key.Purpose != "raycast" {
+		return types.RaycastSetupMaterial{}, CodedError{Code: "CREDENTIAL_NOT_FOUND", Message: "Raycast installation credential not found.", Err: ErrAPIKeyNotFound}
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return types.RaycastSetupMaterial{}, CodedError{Code: "RAYCAST_SETUP_UNAVAILABLE", Message: "Raycast setup metadata is unavailable for this credential."}
+	}
+	return raycastSetupMaterial(baseURL, "", key.ID, key.Name), nil
 }
 
 func (s *Service) RevokeAPIKey(ctx context.Context, auth types.AuthContext, name string) error {
@@ -1849,10 +1969,12 @@ func onboardingCredentialSpec(value string) (connector string, name string, purp
 	}
 }
 
-func raycastSetupMaterial(baseURL string, secret string) types.RaycastSetupMaterial {
+func raycastSetupMaterial(baseURL string, secret string, credentialID string, label string) types.RaycastSetupMaterial {
 	const repositoryURL = "https://github.com/amxv/agentbox.git"
 	const extensionPath = "raycast/agentbox"
 	return types.RaycastSetupMaterial{
+		CredentialID:  credentialID,
+		Label:         label,
 		BaseURL:       baseURL,
 		APIKey:        secret,
 		RepositoryURL: repositoryURL,
@@ -1867,7 +1989,7 @@ func raycastSetupMaterial(baseURL string, secret string) types.RaycastSetupMater
 			{Name: "baseUrl", Title: "Agentbox URL", Value: baseURL},
 			{Name: "apiKey", Title: "Agentbox API Key", Value: secret, Secret: true},
 		},
-		FinalCheck: "In Raycast, run Agentbox: List Threads and confirm it lists only the threads currently accessible to your user.",
+		FinalCheck: "In Raycast, run Agentbox: Browse Threads and confirm it lists only the threads currently accessible to your user.",
 	}
 }
 

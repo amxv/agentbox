@@ -101,6 +101,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/owner/teams/", s.ownerTeam)
 	s.mux.HandleFunc("/api/keys", s.keys)
 	s.mux.HandleFunc("/api/keys/", s.key)
+	s.mux.HandleFunc("/api/raycast-installations", s.raycastInstallations)
 	s.mux.HandleFunc("/api/onboarding", s.onboarding)
 	s.mux.HandleFunc("/api/onboarding/skip", s.onboardingSkip)
 	s.mux.HandleFunc("/api/onboarding/connectors/", s.onboardingConnector)
@@ -845,12 +846,18 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:read scope is required.")
 			return
 		}
-		keys, err := s.service.ListAPIKeys(r.Context(), *authContext)
+		pageRequest, err := ownerPageRequest(r)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
+		page, err := s.service.ListAPIKeysPage(r.Context(), *authContext, pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		credentials := apiKeyResponses(page.Credentials)
+		writeJSON(w, http.StatusOK, map[string]any{"credentials": credentials, "keys": credentials, "page": page.Page})
 	case http.MethodPost:
 		if !canManageKeys(*authContext) {
 			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
@@ -863,6 +870,10 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := parseJSON(r, &input); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(input.Purpose), "raycast") {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "Use the dedicated Raycast installation flow so purpose and scopes are fixed safely.")
 			return
 		}
 		scopes := input.Scopes
@@ -880,6 +891,36 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) raycastInstallations(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !canManageKeys(*authContext) {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Label string `json:"label"`
+	}
+	if err := parseJSONStrict(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.service.CreateRaycastInstallation(r.Context(), *authContext, input.Label, s.requestBaseURL(r))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"credential":    apiKeyResponse(result.Credential),
+		"raycast_setup": result.Setup,
+	})
 }
 
 func (s *Server) onboarding(w http.ResponseWriter, r *http.Request) {
@@ -962,22 +1003,48 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
 		return
 	}
-	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
-	if name == "" || strings.Contains(name, "/") {
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
+	parts := strings.Split(remainder, "/")
+	if remainder == "" || len(parts) > 2 || strings.TrimSpace(parts[0]) == "" {
 		http.NotFound(w, r)
+		return
+	}
+	credentialID := parts[0]
+	if len(parts) == 2 {
+		if parts[1] != "setup" || !method(w, r, http.MethodGet) {
+			return
+		}
+		setup, err := s.service.RaycastInstallationSetup(r.Context(), *authContext, credentialID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"raycast_setup": setup})
 		return
 	}
 	switch r.Method {
 	case http.MethodDelete:
-		if err := s.service.RevokeAPIKey(r.Context(), *authContext, name); err != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(err, service.ErrAPIKeyNotFound) {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
+		var err error
+		if strings.HasPrefix(credentialID, "key_") {
+			err = s.service.RevokeAPIKeyByID(r.Context(), *authContext, credentialID)
+		} else {
+			// Compatibility for pre-inventory clients. Maintained clients use
+			// stable credential IDs so similarly named historical rows remain
+			// individually addressable.
+			err = s.service.RevokeAPIKey(r.Context(), *authContext, credentialID)
+		}
+		if err != nil {
+			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"revoked": name})
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": credentialID})
+	case http.MethodPatch:
+		rotated, setup, err := s.service.RotateAPIKeyByID(r.Context(), *authContext, credentialID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"credential": apiKeyResponse(rotated), "raycast_setup": setup})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1442,16 +1509,31 @@ func authSecretFromRequest(r *http.Request) string {
 }
 
 func apiKeyResponse(key types.APIKey) map[string]any {
-	return map[string]any{
-		"id":         key.ID,
-		"user_id":    key.UserID,
-		"name":       key.Name,
-		"purpose":    key.Purpose,
-		"key":        key.Key,
-		"key_masked": key.KeyMasked,
-		"created_at": key.CreatedAt,
-		"updated_at": key.UpdatedAt,
+	result := map[string]any{
+		"id":           key.ID,
+		"user_id":      key.UserID,
+		"name":         key.Name,
+		"purpose":      key.Purpose,
+		"key_masked":   key.KeyMasked,
+		"token_prefix": key.TokenPrefix,
+		"scopes":       key.Scopes,
+		"created_at":   key.CreatedAt,
+		"updated_at":   key.UpdatedAt,
+		"last_used_at": key.LastUsedAt,
+		"revoked_at":   key.RevokedAt,
 	}
+	if key.Key != "" {
+		result["key"] = key.Key
+	}
+	return result
+}
+
+func apiKeyResponses(keys []types.APIKey) []map[string]any {
+	result := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, apiKeyResponse(key))
+	}
+	return result
 }
 
 func browserUser(authContext types.AuthContext) bool {
@@ -1498,11 +1580,11 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		code = coded.Code
 		message = coded.Message
 		switch coded.Code {
-		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND", "PUBLIC_LINK_NOT_FOUND", "PUBLIC_ASSET_NOT_FOUND":
+		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND", "PUBLIC_LINK_NOT_FOUND", "PUBLIC_ASSET_NOT_FOUND", "CREDENTIAL_NOT_FOUND":
 			status = http.StatusNotFound
 		case "PERMISSION_DENIED", "BROWSER_SESSION_REQUIRED", "OWNER_BROWSER_REQUIRED":
 			status = http.StatusForbidden
-		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS":
+		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS", "CREDENTIAL_LABEL_CONFLICT":
 			status = http.StatusConflict
 		case "ATTACHMENT_PURGED", "ATTACHMENT_UNAVAILABLE":
 			status = http.StatusGone
