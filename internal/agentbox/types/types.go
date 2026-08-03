@@ -194,6 +194,7 @@ type ThreadListParams struct {
 	Limit   int
 	Filter  string
 	TeamRef string
+	Cursor  *ThreadPageCursor
 }
 
 type ThreadAccess struct {
@@ -467,6 +468,7 @@ type SearchThreadParams struct {
 	UpdatedAfter *string
 	Filter       string
 	TeamRef      string
+	Cursor       *ThreadPageCursor
 }
 
 type APIKey struct {

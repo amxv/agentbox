@@ -322,6 +322,11 @@ func (m *MemoryRepository) ListThreads(_ context.Context, userID string, limit i
 }
 
 func (m *MemoryRepository) ListThreadsFiltered(_ context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error) {
+	page, err := m.ListThreadsPage(context.Background(), userID, params)
+	return page.Threads, err
+}
+
+func (m *MemoryRepository) ListThreadsPage(_ context.Context, userID string, params types.ThreadListParams) (types.ThreadPage, error) {
 	if params.Limit <= 0 {
 		params.Limit = 50
 	}
@@ -332,19 +337,44 @@ func (m *MemoryRepository) ListThreadsFiltered(_ context.Context, userID string,
 		}
 		thread.VisibilitySummary = m.threadVisibilitySummary(thread, userID)
 		if matchesThreadFilter(thread.VisibilitySummary, params.Filter, params.TeamRef) {
+			if !threadAfterPageCursor(thread, params.Cursor) {
+				continue
+			}
 			threads = append(threads, thread)
 		}
 	}
 	sort.Slice(threads, func(i, j int) bool {
-		return threads[i].UpdatedAt > threads[j].UpdatedAt
+		if threads[i].UpdatedAt != threads[j].UpdatedAt {
+			return threads[i].UpdatedAt > threads[j].UpdatedAt
+		}
+		return threads[i].ID < threads[j].ID
 	})
-	if params.Limit < len(threads) {
-		threads = threads[:params.Limit]
+	visible := len(threads)
+	hasMore := visible > params.Limit
+	if hasMore {
+		visible = params.Limit
 	}
-	return threads, nil
+	pageInfo := types.ThreadPageInfo{Limit: params.Limit, HasMore: hasMore}
+	if hasMore && visible > 0 {
+		updatedAt, err := time.Parse(time.RFC3339Nano, threads[visible-1].UpdatedAt)
+		if err != nil {
+			return types.ThreadPage{}, err
+		}
+		next, err := types.EncodeThreadPageCursor(types.ThreadPageCursor{UpdatedAt: updatedAt, ID: threads[visible-1].ID})
+		if err != nil {
+			return types.ThreadPage{}, err
+		}
+		pageInfo.NextCursor = &next
+	}
+	return types.ThreadPage{Threads: threads[:visible], Page: pageInfo}, nil
 }
 
 func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	page, err := m.SearchThreadsPage(context.Background(), userID, params)
+	return page.Threads, err
+}
+
+func (m *MemoryRepository) SearchThreadsPage(_ context.Context, userID string, params types.SearchThreadParams) (types.SearchThreadPage, error) {
 	if params.Limit <= 0 {
 		params.Limit = 20
 	}
@@ -352,7 +382,10 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 	results := []types.SearchThreadResult{}
 	threads := append([]types.Thread(nil), m.Threads...)
 	sort.Slice(threads, func(i, j int) bool {
-		return threads[i].UpdatedAt > threads[j].UpdatedAt
+		if threads[i].UpdatedAt != threads[j].UpdatedAt {
+			return threads[i].UpdatedAt > threads[j].UpdatedAt
+		}
+		return threads[i].ID < threads[j].ID
 	})
 	for _, thread := range threads {
 		if m.normalThreadAccess(thread, userID) == nil {
@@ -366,6 +399,9 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 			continue
 		}
 		if params.UpdatedAfter != nil && *params.UpdatedAfter != "" && thread.UpdatedAt <= *params.UpdatedAfter {
+			continue
+		}
+		if !threadAfterPageCursor(thread, params.Cursor) {
 			continue
 		}
 		messageCount := 0
@@ -403,11 +439,39 @@ func (m *MemoryRepository) SearchThreads(_ context.Context, userID string, param
 			MatchedSnippets:          matchedSnippets(params.Query, thread.Title, matchedBody),
 			VisibilitySummary:        visibilitySummary,
 		})
-		if len(results) >= params.Limit {
+		if len(results) > params.Limit {
 			break
 		}
 	}
-	return results, nil
+	visible := len(results)
+	hasMore := visible > params.Limit
+	if hasMore {
+		visible = params.Limit
+	}
+	pageInfo := types.ThreadPageInfo{Limit: params.Limit, HasMore: hasMore}
+	if hasMore && visible > 0 {
+		updatedAt, err := time.Parse(time.RFC3339Nano, results[visible-1].UpdatedAt)
+		if err != nil {
+			return types.SearchThreadPage{}, err
+		}
+		next, err := types.EncodeThreadPageCursor(types.ThreadPageCursor{UpdatedAt: updatedAt, ID: results[visible-1].ID})
+		if err != nil {
+			return types.SearchThreadPage{}, err
+		}
+		pageInfo.NextCursor = &next
+	}
+	return types.SearchThreadPage{Threads: results[:visible], Page: pageInfo}, nil
+}
+
+func threadAfterPageCursor(thread types.Thread, cursor *types.ThreadPageCursor) bool {
+	if cursor == nil {
+		return true
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, thread.UpdatedAt)
+	if err != nil {
+		return false
+	}
+	return updatedAt.Before(cursor.UpdatedAt) || (updatedAt.Equal(cursor.UpdatedAt) && thread.ID > cursor.ID)
 }
 
 func (m *MemoryRepository) ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {

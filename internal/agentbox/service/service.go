@@ -33,8 +33,8 @@ type Repository interface {
 	AcquirePublicThreadLease(ctx context.Context, tokenHash string) (types.PublicThreadAuthorizationLease, error)
 	AcquirePublicAssetSigningLease(ctx context.Context, tokenHash string, assetID string) (types.AssetAuthorizationLease, error)
 	AcquireAssetSigningLease(ctx context.Context, userID string, assetID string) (types.AssetAuthorizationLease, error)
-	ListThreadsFiltered(ctx context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error)
-	SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error)
+	ListThreadsPage(ctx context.Context, userID string, params types.ThreadListParams) (types.ThreadPage, error)
+	SearchThreadsPage(ctx context.Context, userID string, params types.SearchThreadParams) (types.SearchThreadPage, error)
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
@@ -138,8 +138,13 @@ func (s *Service) ListThreads(ctx context.Context, auth types.AuthContext, limit
 }
 
 func (s *Service) ListThreadsFiltered(ctx context.Context, auth types.AuthContext, params types.ThreadListParams) ([]types.Thread, error) {
+	page, err := s.ListThreadsPage(ctx, auth, params)
+	return page.Threads, err
+}
+
+func (s *Service) ListThreadsPage(ctx context.Context, auth types.AuthContext, params types.ThreadListParams) (types.ThreadPage, error) {
 	if err := requireScope(auth, "threads:read"); err != nil {
-		return nil, err
+		return types.ThreadPage{}, err
 	}
 	if params.Limit == 0 {
 		params.Limit = 50
@@ -151,18 +156,26 @@ func (s *Service) ListThreadsFiltered(ctx context.Context, auth types.AuthContex
 		params.Limit = 200
 	}
 	if err := normalizeThreadFilter(&params.Filter, &params.TeamRef); err != nil {
-		return nil, err
+		return types.ThreadPage{}, err
 	}
-	return s.repo.ListThreadsFiltered(ctx, auth.UserID, params)
+	if err := validateThreadPageCursor(params.Cursor); err != nil {
+		return types.ThreadPage{}, err
+	}
+	return s.repo.ListThreadsPage(ctx, auth.UserID, params)
 }
 
 func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	page, err := s.SearchThreadsPage(ctx, auth, params)
+	return page.Threads, err
+}
+
+func (s *Service) SearchThreadsPage(ctx context.Context, auth types.AuthContext, params types.SearchThreadParams) (types.SearchThreadPage, error) {
 	if err := requireScope(auth, "threads:read"); err != nil {
-		return nil, err
+		return types.SearchThreadPage{}, err
 	}
 	params.Query = strings.TrimSpace(params.Query)
 	if params.Query == "" {
-		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "query is required."}
+		return types.SearchThreadPage{}, CodedError{Code: "INVALID_ARGUMENT", Message: "query is required."}
 	}
 	if params.Limit == 0 {
 		params.Limit = 20
@@ -183,13 +196,26 @@ func (s *Service) SearchThreads(ctx context.Context, auth types.AuthContext, par
 	}
 	if params.UpdatedAfter != nil && *params.UpdatedAfter != "" {
 		if _, err := time.Parse(time.RFC3339, *params.UpdatedAfter); err != nil {
-			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "updated_after must be an RFC3339 timestamp."}
+			return types.SearchThreadPage{}, CodedError{Code: "INVALID_ARGUMENT", Message: "updated_after must be an RFC3339 timestamp."}
 		}
 	}
 	if err := normalizeThreadFilter(&params.Filter, &params.TeamRef); err != nil {
-		return nil, err
+		return types.SearchThreadPage{}, err
 	}
-	return s.repo.SearchThreads(ctx, auth.UserID, params)
+	if err := validateThreadPageCursor(params.Cursor); err != nil {
+		return types.SearchThreadPage{}, err
+	}
+	return s.repo.SearchThreadsPage(ctx, auth.UserID, params)
+}
+
+func validateThreadPageCursor(cursor *types.ThreadPageCursor) error {
+	if cursor == nil {
+		return nil
+	}
+	if cursor.UpdatedAt.IsZero() || strings.TrimSpace(cursor.ID) == "" {
+		return CodedError{Code: "INVALID_ARGUMENT", Message: "cursor is invalid."}
+	}
+	return nil
 }
 
 func normalizeThreadFilter(filter *string, teamRef *string) error {

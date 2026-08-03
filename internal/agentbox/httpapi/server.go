@@ -766,34 +766,41 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 		limit := numberQuery(r, "limit", 50)
 		filter := strings.TrimSpace(r.URL.Query().Get("filter"))
 		teamRef := strings.TrimSpace(r.URL.Query().Get("team"))
+		cursor, err := types.DecodeThreadPageCursor(r.URL.Query().Get("cursor"))
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cursor is invalid.")
+			return
+		}
 		if query := strings.TrimSpace(r.URL.Query().Get("query")); query != "" {
 			createdBy := optionalQuery(r, "created_by")
 			updatedAfter := optionalQuery(r, "updated_after")
-			threads, err := s.service.SearchThreads(r.Context(), *authContext, types.SearchThreadParams{
+			page, err := s.service.SearchThreadsPage(r.Context(), *authContext, types.SearchThreadParams{
 				Query:        query,
 				Limit:        limit,
 				CreatedBy:    createdBy,
 				UpdatedAfter: updatedAfter,
 				Filter:       filter,
 				TeamRef:      teamRef,
+				Cursor:       cursor,
 			})
 			if err != nil {
 				writeServiceError(w, err)
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+			writeJSON(w, http.StatusOK, page)
 			return
 		}
-		threads, err := s.service.ListThreadsFiltered(r.Context(), *authContext, types.ThreadListParams{
+		page, err := s.service.ListThreadsPage(r.Context(), *authContext, types.ThreadListParams{
 			Limit:   limit,
 			Filter:  filter,
 			TeamRef: teamRef,
+			Cursor:  cursor,
 		})
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+		writeJSON(w, http.StatusOK, page)
 	case http.MethodPost:
 		authContext, ok := s.requireAuth(w, r)
 		if !ok {

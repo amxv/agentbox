@@ -834,7 +834,7 @@ explain (format text)
 select t.id
 from threads t
 where `+normalThreadAccessPredicate+`
-order by t.updated_at desc
+order by t.updated_at desc, t.id
 limit 50
 `, member.ID)
 	if err != nil {
@@ -854,7 +854,8 @@ limit 50
 		t.Fatal(err)
 	}
 	shareIndexUsed := strings.Contains(plan.String(), "thread_team_shares_team_thread_idx") || strings.Contains(plan.String(), "thread_team_shares_pkey")
-	if !shareIndexUsed || !strings.Contains(plan.String(), "team_memberships_user_team_idx") || !strings.Contains(plan.String(), "threads_updated_at_idx") {
+	threadOrderIndexUsed := strings.Contains(plan.String(), "threads_updated_id_idx") || strings.Contains(plan.String(), "threads_updated_at_idx")
+	if !shareIndexUsed || !strings.Contains(plan.String(), "team_memberships_user_team_idx") || !threadOrderIndexUsed {
 		t.Fatalf("team access plan missed indexes:\n%s", plan.String())
 	}
 }
@@ -2418,6 +2419,183 @@ values ($1, 'unknown')
 	}
 	if migrationName != "0018_raycast_onboarding.sql" {
 		t.Fatalf("migration 0018 name = %q", migrationName)
+	}
+}
+
+func TestThreadContinuationPagesTraverseEveryEffectiveAccessFilter(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "page-owner@example.com", "Page Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := repository.CreateUser(ctx, "page-member@example.com", "Page Member", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := repository.CreateTeam(ctx, "page-team", "Page Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, userID := range []string{owner.ID, member.ID} {
+		if _, err := repository.AddTeamMember(ctx, team.ID, userID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ownerAuth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
+	memberAuth := types.AuthContext{UserID: member.ID, UserDisplayName: member.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard"}
+
+	createdIDs := []string{}
+	for _, suffix := range []string{"private-a", "private-b", "private-c"} {
+		thread, err := repository.CreateThread(ctx, member.ID, "pagination marker "+suffix, memberAuth)
+		if err != nil {
+			t.Fatal(err)
+		}
+		createdIDs = append(createdIDs, thread.ID)
+	}
+	for _, suffix := range []string{"shared-a", "shared-b", "shared-c"} {
+		thread, err := repository.CreateThread(ctx, owner.ID, "pagination marker "+suffix, ownerAuth)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := setThreadVisibilityForTest(ctx, repository, owner.ID, thread.ID, []string{team.ID}); err != nil {
+			t.Fatal(err)
+		}
+		createdIDs = append(createdIDs, thread.ID)
+	}
+	for _, suffix := range []string{"public-a", "public-b", "public-c"} {
+		thread, err := repository.CreateThread(ctx, member.ID, "pagination marker "+suffix, memberAuth)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publish := true
+		if _, err := repository.ManageThreadVisibility(ctx, member.ID, thread.ID, types.ManageThreadVisibilityInput{
+			Public:            &publish,
+			PublicToken:       "agpub_" + thread.ID,
+			PublicTokenHash:   "hash_" + thread.ID,
+			PublicTokenPrefix: "agpub_page",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		createdIDs = append(createdIDs, thread.ID)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+update threads
+set updated_at = '2026-08-03T12:34:56.123456Z'::timestamptz
+where id = any($1)
+`, createdIDs); err != nil {
+		t.Fatal(err)
+	}
+	var indexDefinition string
+	if err := repository.pool.QueryRow(ctx, `
+select indexdef from pg_indexes
+where schemaname = current_schema() and indexname = 'threads_updated_id_idx'
+`).Scan(&indexDefinition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexDefinition, "updated_at DESC") || !strings.Contains(indexDefinition, "id") {
+		t.Fatalf("continuation index definition=%q", indexDefinition)
+	}
+
+	type filterCase struct {
+		name    string
+		filter  string
+		teamRef string
+	}
+	filters := []filterCase{
+		{name: "all", filter: types.ThreadFilterAll},
+		{name: "private", filter: types.ThreadFilterPrivate},
+		{name: "shared", filter: types.ThreadFilterShared},
+		{name: "team", filter: types.ThreadFilterTeam, teamRef: team.Slug},
+		{name: "public", filter: types.ThreadFilterPublic},
+	}
+	threadIDs := func(threads []types.Thread) []string {
+		ids := make([]string, 0, len(threads))
+		for _, thread := range threads {
+			ids = append(ids, thread.ID)
+		}
+		return ids
+	}
+	searchIDs := func(threads []types.SearchThreadResult) []string {
+		ids := make([]string, 0, len(threads))
+		for _, thread := range threads {
+			ids = append(ids, thread.ID)
+		}
+		return ids
+	}
+	for _, testCase := range filters {
+		t.Run(testCase.name, func(t *testing.T) {
+			expectedList, err := repository.ListThreadsFiltered(ctx, member.ID, types.ThreadListParams{Limit: 100, Filter: testCase.filter, TeamRef: testCase.teamRef})
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedSearch, err := repository.SearchThreads(ctx, member.ID, types.SearchThreadParams{Query: "pagination marker", Limit: 100, Filter: testCase.filter, TeamRef: testCase.teamRef})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			listIDs := []string{}
+			listSeen := map[string]bool{}
+			var listCursor *types.ThreadPageCursor
+			for pageNumber := 0; pageNumber < 20; pageNumber++ {
+				page, err := repository.ListThreadsPage(ctx, member.ID, types.ThreadListParams{Limit: 2, Filter: testCase.filter, TeamRef: testCase.teamRef, Cursor: listCursor})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, thread := range page.Threads {
+					if listSeen[thread.ID] {
+						t.Fatalf("duplicate list thread %s", thread.ID)
+					}
+					listSeen[thread.ID] = true
+					listIDs = append(listIDs, thread.ID)
+				}
+				if !page.Page.HasMore {
+					break
+				}
+				if page.Page.NextCursor == nil {
+					t.Fatalf("list page omitted cursor: %#v", page.Page)
+				}
+				listCursor, err = types.DecodeThreadPageCursor(*page.Page.NextCursor)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if want := threadIDs(expectedList); !reflect.DeepEqual(listIDs, want) {
+				t.Fatalf("list IDs=%v, want %v", listIDs, want)
+			}
+
+			pagedSearchIDs := []string{}
+			searchSeen := map[string]bool{}
+			var searchCursor *types.ThreadPageCursor
+			for pageNumber := 0; pageNumber < 20; pageNumber++ {
+				page, err := repository.SearchThreadsPage(ctx, member.ID, types.SearchThreadParams{Query: "pagination marker", Limit: 2, Filter: testCase.filter, TeamRef: testCase.teamRef, Cursor: searchCursor})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, thread := range page.Threads {
+					if searchSeen[thread.ID] {
+						t.Fatalf("duplicate search thread %s", thread.ID)
+					}
+					searchSeen[thread.ID] = true
+					pagedSearchIDs = append(pagedSearchIDs, thread.ID)
+				}
+				if !page.Page.HasMore {
+					break
+				}
+				if page.Page.NextCursor == nil {
+					t.Fatalf("search page omitted cursor: %#v", page.Page)
+				}
+				searchCursor, err = types.DecodeThreadPageCursor(*page.Page.NextCursor)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if want := searchIDs(expectedSearch); !reflect.DeepEqual(pagedSearchIDs, want) {
+				t.Fatalf("search IDs=%v, want %v", pagedSearchIDs, want)
+			}
+		})
 	}
 }
 

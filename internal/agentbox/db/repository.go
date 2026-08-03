@@ -844,11 +844,22 @@ func (r *Repository) ListThreads(ctx context.Context, userID string, limit int) 
 }
 
 func (r *Repository) ListThreadsFiltered(ctx context.Context, userID string, params types.ThreadListParams) ([]types.Thread, error) {
+	page, err := r.ListThreadsPage(ctx, userID, params)
+	return page.Threads, err
+}
+
+func (r *Repository) ListThreadsPage(ctx context.Context, userID string, params types.ThreadListParams) (types.ThreadPage, error) {
 	if strings.TrimSpace(params.Filter) == "" {
 		params.Filter = types.ThreadFilterAll
 	}
 	if params.Limit <= 0 {
 		params.Limit = 50
+	}
+	var cursorUpdatedAt any
+	cursorID := ""
+	if params.Cursor != nil {
+		cursorUpdatedAt = params.Cursor.UpdatedAt
+		cursorID = params.Cursor.ID
 	}
 	rows, err := r.pool.Query(ctx, `
 select
@@ -866,26 +877,50 @@ select
 from threads t
 where `+normalThreadAccessPredicate+`
   and `+threadFilterPredicate("$2", "$3")+`
+  and ($4::timestamptz is null or t.updated_at < $4 or (t.updated_at = $4 and t.id > $5))
 order by t.updated_at desc, t.id
-limit $4
-`, userID, params.Filter, params.TeamRef, params.Limit)
+limit $6
+`, userID, params.Filter, params.TeamRef, cursorUpdatedAt, cursorID, params.Limit+1)
 	if err != nil {
-		return nil, err
+		return types.ThreadPage{}, err
 	}
 	defer rows.Close()
 
 	threads := []types.Thread{}
+	positions := []types.ThreadPageCursor{}
 	for rows.Next() {
-		thread, err := scanThreadWithVisibility(rows)
+		thread, updatedAt, err := scanThreadWithVisibilityPosition(rows)
 		if err != nil {
-			return nil, err
+			return types.ThreadPage{}, err
 		}
 		threads = append(threads, thread)
+		positions = append(positions, types.ThreadPageCursor{UpdatedAt: updatedAt, ID: thread.ID})
 	}
-	return threads, rows.Err()
+	if err := rows.Err(); err != nil {
+		return types.ThreadPage{}, err
+	}
+	visible := len(threads)
+	hasMore := visible > params.Limit
+	if hasMore {
+		visible = params.Limit
+	}
+	pageInfo := types.ThreadPageInfo{Limit: params.Limit, HasMore: hasMore}
+	if hasMore && visible > 0 {
+		next, err := types.EncodeThreadPageCursor(positions[visible-1])
+		if err != nil {
+			return types.ThreadPage{}, err
+		}
+		pageInfo.NextCursor = &next
+	}
+	return types.ThreadPage{Threads: threads[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) SearchThreads(ctx context.Context, userID string, params types.SearchThreadParams) ([]types.SearchThreadResult, error) {
+	page, err := r.SearchThreadsPage(ctx, userID, params)
+	return page.Threads, err
+}
+
+func (r *Repository) SearchThreadsPage(ctx context.Context, userID string, params types.SearchThreadParams) (types.SearchThreadPage, error) {
 	if strings.TrimSpace(params.Filter) == "" {
 		params.Filter = types.ThreadFilterAll
 	}
@@ -900,11 +935,17 @@ func (r *Repository) SearchThreads(ctx context.Context, userID string, params ty
 	if params.UpdatedAfter != nil && *params.UpdatedAfter != "" {
 		parsed, err := time.Parse(time.RFC3339, *params.UpdatedAfter)
 		if err != nil {
-			return nil, err
+			return types.SearchThreadPage{}, err
 		}
 		updatedAfter = parsed
 	}
 	pattern := "%" + params.Query + "%"
+	var cursorUpdatedAt any
+	cursorID := ""
+	if params.Cursor != nil {
+		cursorUpdatedAt = params.Cursor.UpdatedAt
+		cursorID = params.Cursor.ID
+	}
 	rows, err := r.pool.Query(ctx, `
 select
   t.id,
@@ -928,15 +969,17 @@ where `+normalThreadAccessPredicate+`
     or exists (select 1 from messages sm where sm.thread_id = t.id and sm.body ilike $2)
   )
   and `+threadFilterPredicate("$5", "$6")+`
-order by t.updated_at desc
-limit $7
-`, userID, pattern, createdBy, updatedAfter, params.Filter, params.TeamRef, params.Limit)
+  and ($7::timestamptz is null or t.updated_at < $7 or (t.updated_at = $7 and t.id > $8))
+order by t.updated_at desc, t.id
+limit $9
+`, userID, pattern, createdBy, updatedAfter, params.Filter, params.TeamRef, cursorUpdatedAt, cursorID, params.Limit+1)
 	if err != nil {
-		return nil, err
+		return types.SearchThreadPage{}, err
 	}
 	defer rows.Close()
 
 	results := []types.SearchThreadResult{}
+	positions := []types.ThreadPageCursor{}
 	for rows.Next() {
 		var createdAt time.Time
 		var updatedAt time.Time
@@ -964,19 +1007,36 @@ limit $7
 			&matchedTeamsJSON,
 			&isPublic,
 		); err != nil {
-			return nil, err
+			return types.SearchThreadPage{}, err
 		}
 		result.VisibilitySummary, err = decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
 		if err != nil {
-			return nil, err
+			return types.SearchThreadPage{}, err
 		}
 		result.CreatedAt = isoMillis(createdAt)
 		result.UpdatedAt = isoMillis(updatedAt)
 		result.LastMessagePreview = previewText(lastBody, 180)
 		result.MatchedSnippets = matchedSnippets(params.Query, result.Title, matchedBody)
 		results = append(results, result)
+		positions = append(positions, types.ThreadPageCursor{UpdatedAt: updatedAt, ID: result.ID})
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return types.SearchThreadPage{}, err
+	}
+	visible := len(results)
+	hasMore := visible > params.Limit
+	if hasMore {
+		visible = params.Limit
+	}
+	pageInfo := types.ThreadPageInfo{Limit: params.Limit, HasMore: hasMore}
+	if hasMore && visible > 0 {
+		next, err := types.EncodeThreadPageCursor(positions[visible-1])
+		if err != nil {
+			return types.SearchThreadPage{}, err
+		}
+		pageInfo.NextCursor = &next
+	}
+	return types.SearchThreadPage{Threads: results[:visible], Page: pageInfo}, nil
 }
 
 func (r *Repository) ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error) {
@@ -3026,6 +3086,11 @@ func scanThread(row threadScanner) (types.Thread, error) {
 }
 
 func scanThreadWithVisibility(row threadScanner) (types.Thread, error) {
+	thread, _, err := scanThreadWithVisibilityPosition(row)
+	return thread, err
+}
+
+func scanThreadWithVisibilityPosition(row threadScanner) (types.Thread, time.Time, error) {
 	var createdAt time.Time
 	var updatedAt time.Time
 	var thread types.Thread
@@ -3036,16 +3101,16 @@ func scanThreadWithVisibility(row threadScanner) (types.Thread, error) {
 	dest := threadScanDest(&thread, &createdAt, &updatedAt)
 	dest = append(dest, &ownedByMe, &sharedTeamsJSON, &matchedTeamsJSON, &isPublic)
 	if err := row.Scan(dest...); err != nil {
-		return types.Thread{}, err
+		return types.Thread{}, time.Time{}, err
 	}
 	thread.CreatedAt = isoMillis(createdAt)
 	thread.UpdatedAt = isoMillis(updatedAt)
 	visibility, err := decodeThreadVisibilitySummary(ownedByMe, sharedTeamsJSON, matchedTeamsJSON, isPublic)
 	if err != nil {
-		return types.Thread{}, err
+		return types.Thread{}, time.Time{}, err
 	}
 	thread.VisibilitySummary = visibility
-	return thread, nil
+	return thread, updatedAt, nil
 }
 
 func threadScanDest(thread *types.Thread, createdAt *time.Time, updatedAt *time.Time) []any {
@@ -3053,8 +3118,8 @@ func threadScanDest(thread *types.Thread, createdAt *time.Time, updatedAt *time.
 		&thread.ID,
 		&thread.OwnerUserID,
 		&thread.Title,
-		&createdAt,
-		&updatedAt,
+		createdAt,
+		updatedAt,
 		&thread.CreatedBy,
 		&thread.CreatedByUserID,
 		&thread.CreatedByKeyID,

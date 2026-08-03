@@ -2302,6 +2302,101 @@ func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
 	}
 }
 
+func TestThreadListAndSearchExposeStableContinuationPages(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	user := types.User{ID: "usr_http_page", Email: "page@example.com", DisplayName: "Page User"}
+	repo.Users = append(repo.Users, user)
+	browser := types.AuthContext{UserID: user.ID, UserDisplayName: user.DisplayName, SubjectType: types.AuthSubjectUserSession, SessionID: "sess_http_page", ActorName: "Web dashboard"}
+	key, err := svc.CreateAPIKey(t.Context(), browser, "page-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"alpha", "bravo", "charlie", "delta", "echo"} {
+		if _, err := svc.CreateThread(t.Context(), browser, "cursor marker "+suffix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range repo.Threads {
+		repo.Threads[index].UpdatedAt = "2026-08-03T12:34:56.123Z"
+	}
+	server := NewServer(config.Config{}, svc)
+
+	type pagePayload struct {
+		Threads []types.Thread       `json:"threads"`
+		Page    types.ThreadPageInfo `json:"page"`
+	}
+	requestPage := func(extraQuery string, cursor string) pagePayload {
+		t.Helper()
+		path := "/api/threads?key=" + url.QueryEscape(key.Key) + "&limit=2" + extraQuery
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("page status=%d body=%s", response.Code, response.Body.String())
+		}
+		var payload pagePayload
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Page.Limit != 2 || len(payload.Threads) > 2 {
+			t.Fatalf("page=%#v", payload)
+		}
+		return payload
+	}
+	traverse := func(extraQuery string) []string {
+		t.Helper()
+		ids := []string{}
+		seen := map[string]bool{}
+		cursor := ""
+		for pageNumber := 0; pageNumber < 10; pageNumber++ {
+			page := requestPage(extraQuery, cursor)
+			for _, thread := range page.Threads {
+				if seen[thread.ID] {
+					t.Fatalf("duplicate thread %s across continuation pages", thread.ID)
+				}
+				seen[thread.ID] = true
+				ids = append(ids, thread.ID)
+			}
+			if !page.Page.HasMore {
+				if page.Page.NextCursor != nil {
+					t.Fatalf("terminal page exposed next cursor: %#v", page.Page)
+				}
+				return ids
+			}
+			if page.Page.NextCursor == nil || *page.Page.NextCursor == "" {
+				t.Fatalf("continuation page omitted cursor: %#v", page.Page)
+			}
+			cursor = *page.Page.NextCursor
+		}
+		t.Fatal("continuation traversal did not terminate")
+		return nil
+	}
+
+	expected, err := svc.ListThreadsFiltered(t.Context(), browser, types.ThreadListParams{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedIDs := make([]string, 0, len(expected))
+	for _, thread := range expected {
+		expectedIDs = append(expectedIDs, thread.ID)
+	}
+	if got := traverse(""); !reflect.DeepEqual(got, expectedIDs) {
+		t.Fatalf("list traversal IDs=%v, want %v", got, expectedIDs)
+	}
+	if got := traverse("&query=cursor%20marker"); !reflect.DeepEqual(got, expectedIDs) {
+		t.Fatalf("search traversal IDs=%v, want %v", got, expectedIDs)
+	}
+
+	invalid := httptest.NewRecorder()
+	server.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/threads?key="+url.QueryEscape(key.Key)+"&cursor=not-valid!", nil))
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"INVALID_ARGUMENT"`) || !strings.Contains(invalid.Body.String(), "cursor is invalid") {
+		t.Fatalf("invalid cursor status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func authContext(_ string, actorName string) types.AuthContext {
 	return types.AuthContext{
 		UserID:      "usr_" + actorName,

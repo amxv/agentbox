@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageComposer } from "../components/message-composer";
 import { AuthContext, fetchSession, signOutSession } from "../components/session";
 import { ThemeSwitcher } from "../components/theme-switcher";
@@ -34,6 +34,31 @@ type Team = {
 
 type InboxFilter = "all" | "private" | "shared" | "public" | `team:${string}`;
 
+type ThreadPageInfo = {
+  limit: number;
+  has_more: boolean;
+  next_cursor?: string;
+};
+
+const initialThreadPage: ThreadPageInfo = { limit: 50, has_more: false };
+
+function threadQuery(filter: InboxFilter, cursor?: string) {
+  const query = new URLSearchParams({ limit: "50" });
+  if (filter.startsWith("team:")) {
+    query.set("filter", "team");
+    query.set("team", filter.slice("team:".length));
+  } else if (filter !== "all") {
+    query.set("filter", filter);
+  }
+  if (cursor) query.set("cursor", cursor);
+  return query;
+}
+
+function appendUniqueThreads(current: Thread[], incoming: Thread[]) {
+  const seen = new Set(current.map((thread) => thread.id));
+  return [...current, ...incoming.filter((thread) => !seen.has(thread.id))];
+}
+
 function visibilityLabels(thread: Thread) {
   const labels: string[] = [];
   if (thread.visibility_summary.private) labels.push("Private");
@@ -53,16 +78,19 @@ export function InboxView() {
   const router = useRouter();
   const [auth, setAuth] = useState<AuthContext | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [threadPage, setThreadPage] = useState<ThreadPageInfo>(initialThreadPage);
   const [teams, setTeams] = useState<Team[]>([]);
   const [activeFilter, setActiveFilter] = useState<InboxFilter>("all");
   const [newThreadTitle, setNewThreadTitle] = useState("");
   const [showCreateComposer, setShowCreateComposer] = useState(false);
   const [creatingEmpty, setCreatingEmpty] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
 
-  const loadThreads = useCallback(async function loadThreads(signal: AbortSignal) {
+  const loadThreads = useCallback(async function loadThreads(signal: AbortSignal, generation: number) {
     setLoading(true);
     setError(null);
     try {
@@ -72,41 +100,68 @@ export function InboxView() {
         return;
       }
       setAuth(session);
-      const query = new URLSearchParams();
-      if (activeFilter.startsWith("team:")) {
-        query.set("filter", "team");
-        query.set("team", activeFilter.slice("team:".length));
-      } else if (activeFilter !== "all") {
-        query.set("filter", activeFilter);
-      }
-      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      const query = threadQuery(activeFilter);
       const [response, teamsResponse] = await Promise.all([
-        fetch(`/api/threads${suffix}`, { cache: "no-store", signal }),
+        fetch(`/api/threads?${query.toString()}`, { cache: "no-store", signal }),
         fetch("/api/me/teams", { cache: "no-store", signal })
       ]);
       const [data, teamsData] = await Promise.all([response.json(), teamsResponse.json()]);
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       if (!teamsResponse.ok) throw new Error(teamsData.error ?? `HTTP ${teamsResponse.status}`);
+      if (generation !== requestGeneration.current) return;
       setThreads(data.threads ?? []);
+      setThreadPage(data.page ?? initialThreadPage);
       setTeams(teamsData.teams ?? []);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setError(err instanceof Error ? err.message : String(err));
+      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (!signal.aborted) setLoading(false);
+      if (!signal.aborted && generation === requestGeneration.current) setLoading(false);
     }
   }, [activeFilter, router]);
 
   useEffect(() => {
     const controller = new AbortController();
+    const generation = requestGeneration.current + 1;
+    requestGeneration.current = generation;
     const timeout = window.setTimeout(() => {
-      void loadThreads(controller.signal);
+      void loadThreads(controller.signal, generation);
     }, 0);
     return () => {
       window.clearTimeout(timeout);
       controller.abort();
     };
   }, [loadThreads]);
+
+  async function loadMoreThreads() {
+    const cursor = threadPage.next_cursor;
+    if (!cursor || loadingMore) return;
+    const generation = requestGeneration.current;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const query = threadQuery(activeFilter, cursor);
+      const response = await fetch(`/api/threads?${query.toString()}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (generation !== requestGeneration.current) return;
+      setThreads((current) => appendUniqueThreads(current, data.threads ?? []));
+      setThreadPage(data.page ?? initialThreadPage);
+    } catch (err) {
+      if (generation === requestGeneration.current) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (generation === requestGeneration.current) setLoadingMore(false);
+    }
+  }
+
+  function selectFilter(filter: InboxFilter) {
+    if (filter === activeFilter) return;
+    requestGeneration.current += 1;
+    setLoadingMore(false);
+    setThreads([]);
+    setThreadPage(initialThreadPage);
+    setActiveFilter(filter);
+  }
 
   const latestUpdatedAt = useMemo(() => {
     if (threads.length === 0) return null;
@@ -244,7 +299,7 @@ export function InboxView() {
                   key={value}
                   type="button"
                   aria-pressed={activeFilter === value}
-                  onClick={() => setActiveFilter(value)}
+                  onClick={() => selectFilter(value)}
                 >
                   {label}
                 </button>
@@ -257,7 +312,7 @@ export function InboxView() {
                     key={team.id}
                     type="button"
                     aria-pressed={activeFilter === value}
-                    onClick={() => setActiveFilter(value)}
+                    onClick={() => selectFilter(value)}
                   >
                     {team.name}
                   </button>
@@ -303,6 +358,13 @@ export function InboxView() {
                 </div>
               </Link>
             ))}
+            {!loading && !error && threadPage.next_cursor && (
+              <div className="composer-toggle-row">
+                <button className="button button--ghost" disabled={loadingMore} type="button" onClick={() => void loadMoreThreads()}>
+                  {loadingMore ? "Loading…" : "Load more threads"}
+                </button>
+              </div>
+            )}
           </section>
         </div>
       </main>
