@@ -9,7 +9,7 @@
 - **Code inspected:** `cmd/api`, `cmd/migrate`, `internal/agentbox/{types,db,service,httpapi,mcpserver,assets,auth,config,profiles,cli}`, the Next.js routes and dashboard under `app/`, the SQL files under `migrations/`, the complete Raycast package under `raycast/agentbox`, the Raycast setup pages/docs, and the existing Go/TypeScript tests.
 - **Verified baseline:** `go test ./...` passed on the cloned repository before these documentation-only commits.
 - **Not verified from production:** actual PostgreSQL row counts, actual R2 object counts and missing-object state, provider-specific backup facilities, current production environment variables, and whether anything outside this repository calls the legacy admin/tenant endpoints. The rollout phases treat these as pre-cutover facts that must be measured rather than assumed.
-- **Execution model:** Phases 1-18 are the shared Zodex implementation track. Phases 1-14 are complete; Phases 15-18 add Raycast as a first-class user credential and ordinary participant surface. Agents working across ChatGPT sessions on `feat/user-team-sharing` must complete and push all code, migrations, tests, dashboard/Raycast UI, CLI, MCP, documentation, credential-free tooling, and production runbooks. Phase 19 is reserved exclusively for a credentialed local agent to perform the real PostgreSQL/R2 backup, Vercel deployment, live migration, per-user Raycast developer-mode setup, and final production verification.
+- **Execution model:** Phases 1-19 are the shared Zodex implementation track. Phases 1-14 are complete; Phases 15-18 add Raycast as a first-class user credential and ordinary participant surface, and Phase 19 repairs ChatGPT-native MCP artifact attachments. Agents working across ChatGPT sessions on `feat/user-team-sharing` must complete and push all code, migrations, tests, dashboard/Raycast UI, CLI, MCP, documentation, credential-free tooling, and production runbooks. Phase 20 is reserved exclusively for a credentialed local agent to perform the real PostgreSQL/R2 backup, Vercel deployment, live migration, per-user Raycast developer-mode setup, ChatGPT host-level file-attachment verification, and final production verification.
 
 ## State of Current System
 
@@ -224,7 +224,7 @@ The public page reuses the existing message renderer rather than maintaining a s
 
 Before production authorization changes, a verified PostgreSQL backup and R2 backup/inventory exist with matching manifests and counts. A dry run reports missing or orphaned content. Cutover creates the permanent owner account and assigns every legacy thread to it privately while preserving IDs, message ordering, bodies, attachment rows, storage keys, and free-form author snapshots.
 
-Credentials, sessions, tenant records, and CLI profile metadata are deliberately reset. Phase 14 removes the old application path. Phases 15-18 complete the Raycast credential, onboarding, extension, parity, and validation work so the branch is code-complete with no permanent compatibility fallback. Phase 19 applies and verifies that finished system against production and on real macOS Raycast developer installations.
+Credentials, sessions, tenant records, and CLI profile metadata are deliberately reset. Phase 14 removes the old application path. Phases 15-18 complete the Raycast credential, onboarding, extension, parity, and validation work. Phase 19 fixes the ChatGPT file-parameter contract, removes the string/URL compatibility path, and adds scanner-ready tests and a hardened downloader so the branch is code-complete with no permanent compatibility fallback. Phase 20 applies and verifies that finished system against production, real macOS Raycast developer installations, and the ChatGPT host.
 
 ## Decisions and Assumptions
 
@@ -299,12 +299,15 @@ Credentials, sessions, tenant records, and CLI profile metadata are deliberately
 31. Disabling a user immediately invalidates sessions and credentials, removes effective team access, prevents login, and preserves all content and attribution.
 32. Purging a disabled user's attachments deletes only objects uploaded by that user, is safe to retry, and leaves readable tombstones.
 33. PostgreSQL-backed tests prove migrations, access predicates, uniqueness, transactions, onboarding connector isolation, and public/owner authorization; memory-only tests are not the sole evidence.
-34. Raycast package lint/build and contract tests are mandatory in CI and in the cutover verifier; the repository contains a local macOS developer-mode smoke runbook for Phase 19.
+34. Raycast package lint/build and contract tests are mandatory in CI and in the cutover verifier; the repository contains a local macOS developer-mode smoke runbook for Phase 20.
 35. Runtime repository calls no longer execute schema DDL, and the finished codebase has one authorization model with legacy tenant routes, fields, profile metadata, and compatibility paths removed.
+36. `post_message.file` is a strict OpenAI file object with all four documented properties, exactly `download_url` and `file_id` required, closed additional properties, and no string alternative or manual file-ID instruction.
+37. ChatGPT file ingestion uses an SSRF-safe, redirect-revalidating, timeout- and size-bounded downloader and leaves no partial message, asset, or R2 object on any failure.
+38. CI proves the exact MCP descriptor and storage path, and the Phase 20 runbook proves ChatGPT can attach “the file I just created” after connector rediscovery without the agent discovering an opaque file ID.
 
 ## Cross-Session Execution Protocol
 
-This blueprint is also the durable handoff record for agents implementing the track across separate ChatGPT sessions. Zodex agents execute Phases 1-18. The credentialed local agent executes Phase 19 only after the shared branch is code-complete. Every implementation agent must follow the relevant protocol before and during work.
+This blueprint is also the durable handoff record for agents implementing the track across separate ChatGPT sessions. Zodex agents execute Phases 1-19. The credentialed local agent executes Phase 20 only after the shared branch is code-complete. Every implementation agent must follow the relevant protocol before and during work.
 
 ### Start-of-session procedure
 
@@ -327,12 +330,12 @@ This blueprint is also the durable handoff record for agents implementing the tr
 
 ### Remote-machine boundary
 
-Shared Zodex agents are responsible for completing every code-bearing part of Phases 1-18, including:
+Shared Zodex agents are responsible for completing every code-bearing part of Phases 1-19, including:
 
 - canonical migrations and dry-run/backup tooling;
 - PostgreSQL-backed tests using a credential-free local or CI test database where available;
 - R2 behavior behind fakes or test doubles, plus production-safe commands and runbooks;
-- all Go backend, Next.js dashboard, MCP, CLI, Raycast extension, npm package, and documentation changes;
+- all Go backend, Next.js dashboard, MCP, ChatGPT file-parameter integration, CLI, Raycast extension, npm package, and documentation changes;
 - final removal of tenant-era code from the feature branch once the replacement path is proven by tests.
 
 Shared Zodex agents must not attempt or claim completion of:
@@ -342,13 +345,14 @@ Shared Zodex agents must not attempt or claim completion of:
 - production Vercel deployment or environment-variable changes;
 - creation or rotation of real production owner, ChatGPT, Claude, local, or Raycast credentials;
 - importing/configuring the extension in a real local Raycast installation;
+- running a real ChatGPT host attachment flow or plugin Scan Tools against production;
 - the live maintenance window and production cutover.
 
-Those live actions belong only to Phase 19. When every code-bearing task is complete, the Zodex agents must mark Phases 1-18 `Complete`, leave Phase 19 `Reserved for local agent`, and stop. The exact production and Raycast developer-mode runbooks, commands, expected evidence, and rollback procedure must already be committed for the credentialed local agent.
+Those live actions belong only to Phase 20. When every code-bearing task is complete, the Zodex agents must mark Phases 1-19 `Complete`, leave Phase 20 `Reserved for local agent`, and stop. The exact production, Raycast developer-mode, and ChatGPT host-attachment runbooks, commands, expected evidence, and rollback procedure must already be committed for the credentialed local agent.
 
 ### Credentialed local-agent boundary
 
-The local agent starts only after Phases 1-18 are complete on the branch. It must read the full specification, this blueprint, all progress checkpoints, and all amendments before executing Phase 19. It may make and push narrowly scoped fixes discovered during real backup, deployment, migration, or production verification, but it must not redesign the approved architecture during cutover. Any discovery that changes later work belongs in `Amendments` immediately.
+The local agent starts only after Phases 1-19 are complete on the branch. It must read the full specification, this blueprint, all progress checkpoints, and all amendments before executing Phase 20. It may make and push narrowly scoped fixes discovered during real backup, deployment, migration, or production verification, but it must not redesign the approved architecture during cutover. Any discovery that changes later work belongs in `Amendments` immediately.
 
 ### Shared-branch safety
 
@@ -379,17 +383,18 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 | 10. Unified inbox and attribution UX | Complete | `cda8603` | Caller-relative summaries plus SQL-backed All, Private, Shared with me, per-team, and Public filters power dashboard controls and thread cards. Authenticated/public views render stable `User · Actor` snapshots with exact legacy fallback, while CLI JSON/plain and MCP list/search/get expose the same safe metadata. |
 | 11. Owner user and credential administration | Complete | `a6ea63d` | The owner browser lists every user's active and revoked credential metadata and can idempotently force-revoke by credential ID without receiving secrets. Disablement atomically revokes sessions/credentials/pending CLI codes and removes all team memberships; enablement restores none of them, disabled users cannot be re-added, and preserved shared content remains available to still-qualified members. |
 | 12. Disabled-user attachment purge | Complete | `8850e92` | Owner-browser-only bounded purge selects exact asset keys by stable uploader user ID for disabled non-owner users, tolerates missing objects, records resumable tombstones/failures, preserves rows/filenames/attribution, excludes purged keys from backup object expectations, and renders authenticated/public tombstones without storage keys or signed URLs. |
-| 13. Owner-only web content viewer | Complete | `2deb1f4` | Separate owner-browser-only list, search, detail, and attachment-signing paths power a clearly labeled read-only `/owner/content` dashboard with user/team filters. Normal dashboard, API, MCP, CLI, and owner credentials remain on the ordinary effective-access predicate; live production review remains Phase 19 verification. |
+| 13. Owner-only web content viewer | Complete | `2deb1f4` | Separate owner-browser-only list, search, detail, and attachment-signing paths power a clearly labeled read-only `/owner/content` dashboard with user/team filters. Normal dashboard, API, MCP, CLI, and owner credentials remain on the ordinary effective-access predicate; live production review remains Phase 20 verification. |
 | 14. Final code cutover and tenant removal | Complete | `86e381f` | Final migration `0017`, domain/runtime cleanup, removed compatibility routes and CLI commands, maintenance and bounded-migration controls, schema postcheck, CI-backed `verify:cutover`, and the production/rollback runbook leave one schema runner, one user/team authorization model, and one public contract. |
 | 15. Raycast credential and onboarding integration | Pending | — | Add the fourth user-owned connector, additive onboarding schema support, one-time developer-mode setup bundle, dashboard re-entry, and independent rotation/revocation. |
 | 16. Raycast API-contract migration | Pending | — | Replace tenant-era extension DTOs and API assumptions with the final user/team/visibility/attribution/attachment contracts and client methods. |
 | 17. Raycast dashboard-parity workflows | Pending | — | Implement effective-access filters, full thread workflows, attachment states, and canonical team/public visibility management in Raycast. |
-| 18. Raycast hardening, docs, CI, and local handoff | Pending | — | Remove private-team-store assumptions, update all setup surfaces, add contract/CI gates, and commit the exact macOS developer-mode smoke runbook. |
-| 19. Credentialed production and Raycast cutover | Reserved for local agent | — | Pull the pushed Phase 18 checkpoint, confirm exact-head CI, then execute the production and local Raycast runbooks with real credentials. |
+| 18. Raycast hardening, docs, CI, and runbook | Pending | — | Remove private-team-store assumptions, update all setup surfaces, add contract/CI gates, and commit the exact macOS developer-mode smoke runbook. |
+| 19. ChatGPT-native MCP file attachments | Pending | — | Replace the object/string union with the strict OpenAI file-object contract, remove arbitrary URL-string ingestion, harden remote downloads, add Scan Tools/schema checks, and prepare the host-level smoke test. |
+| 20. Credentialed production, Raycast, and ChatGPT cutover | Reserved for local agent | — | Pull the pushed Phase 19 checkpoint, confirm exact-head CI, then execute the production, local Raycast, and ChatGPT host runbooks with real credentials. |
 
 ### Checkpoint log
 
-Checkpoint entries written before the 2026-08-03 Raycast scope extension retain the phase numbers that were current when they were recorded. Any historical reference to the former local-only Phase 15 now maps to current Phase 19; it does not mean the new Raycast Phases 15-18 are complete.
+Checkpoint entries written before the 2026-08-03 Raycast scope extension retain the phase numbers that were current when they were recorded. Any historical reference to the former local-only Phase 15 now maps to current Phase 20; it does not mean the new code-bearing Phases 15-19 are complete.
 
 Append one entry immediately after every pushed slice or phase using this shape:
 
@@ -660,7 +665,7 @@ This trace was produced by reading the complete extension under `raycast/agentbo
 - Keep extension-level required `baseUrl` and password `apiKey` preferences. Do not ship a real deployment URL as a universal default; onboarding provides the deployment-specific value.
 - `app/raycast/page.tsx`, `public/raycast.md`, and `public/setup-self-host.md` still direct users through the CLI and private-team publishing language. Rewrite them around the signed-in dashboard Raycast card, unique per-installation credentials, `npm install`, and `npm run dev`.
 - Add Raycast contract tests or fixture-driven tests for URL construction, DTO decoding, filters, visibility patches, attribution fallback, attachment tombstones, and error mapping. Add `npm ci`, `npm run lint`, and `npm run build` for `raycast/agentbox` to CI and `verify:cutover`.
-- Zodex can prove package build/lint and backend integration without production credentials. The real `ray develop` import, preference entry, hot reload, and macOS interaction smoke test belong only to Phase 19.
+- Zodex can prove package build/lint and backend integration without production credentials. The real `ray develop` import, preference entry, hot reload, and macOS interaction smoke test belong only to Phase 20.
 
 ### External Raycast constraints verified for this plan
 
@@ -669,9 +674,35 @@ This trace was produced by reading the complete extension under `raycast/agentbo
 - [CLI](https://developers.raycast.com/information/developer-tools/cli) - `ray develop` imports a local extension, enables hot reload, and is the supported developer-mode workflow; `ray build` and `ray lint` are the package validation commands.
 - [Manifest](https://developers.raycast.com/information/manifest) and [List](https://developers.raycast.com/api-reference/user-interface/list) - extension-level required password preferences, additional view commands, `List.Dropdown`, and built-in list pagination support the approved setup and effective-access inbox design.
 
+
+## ChatGPT Attachment Trace
+
+This trace is based on AgentBox thread `thr_c03fb8a0-4cd9-4148-b361-9e440ad44d79`, the exact current branch at `7d42d5e`, the connected ChatGPT tool projection, and OpenAI's current plugin documentation for file parameters.
+
+### Confirmed current-branch mismatch
+
+- `internal/agentbox/mcpserver/mcpserver.go` correctly declares `_meta["openai/fileParams"] = ["file"]`, but the `file` input is an `anyOf` union between the supported object and a plain string. The connected ChatGPT tool projection exposes this as `file?: string`, which is the user-visible failure the thread described.
+- The tool description explicitly tells the model to pass an uploaded `file_...` ID and warns about local paths. That leaks transport details and causes agents to search for an opaque identifier instead of selecting the conversation artifact.
+- `parseFileInput` accepts a string and stores it as `ChatGPTFileInput.RawString`. `NormalizeChatGPTFileInput` then accepts arbitrary HTTP/HTTPS strings, synthesizes a file ID, and fetches the URL through the normal remote-file path. This conflates a ChatGPT host-supplied artifact with generic URL ingestion.
+- `ChatGPTFileInput`, `assets.FakeStore`, `R2Store.UploadChatGPTFile`, and unit tests all preserve that compatibility path. The normal HTTP post-message route already accepts the structured `{download_url, file_id, mime_type?, file_name?}` form and therefore does not require the string union.
+- The current test checks only that `openai/fileParams` names `file`; it does not validate the exact file-object schema or how ChatGPT projects the tool after discovery.
+
+### Authoritative host contract
+
+OpenAI's current file-parameter documentation requires every field named in `_meta["openai/fileParams"]` to resolve to a file object or an array of file objects. The object schema must declare `download_url`, `file_id`, `mime_type`, and `file_name`; only `download_url` and `file_id` are required. The documented closed schema uses `additionalProperties: false`, and the Scan Tools/submission path rejects malformed file schemas.
+
+Official reference: `https://developers.openai.com/plugins/llms-full.txt` under **Define file inputs**.
+
+### Security and portability boundary
+
+- Removing the string union is necessary but not sufficient. An authenticated caller can still submit a structured object with an attacker-controlled `download_url`, so the downloader must reject loopback, private, link-local, multicast, reserved, and metadata-service destinations; revalidate DNS and every redirect; use explicit connect/header/body timeouts; cap response bytes before and during streaming; and avoid forwarding credentials or sensitive headers.
+- The ChatGPT-specific `file` parameter must not double as a general "fetch this URL" feature. If arbitrary URL attachment is ever desired, it requires a separate explicitly named API/tool and its own security contract.
+- Generic MCP hosts that do not implement OpenAI file parameters should use AgentBox's existing direct/presigned upload architecture or a future dedicated upload tool. They must not regain filesystem paths, `sandbox:` URIs, or opaque file-ID strings through `post_message`.
+- The code-bearing phase can prove strict schemas, structured decoding, download security, R2 persistence, and tool-scan fixtures without production credentials. The real ChatGPT instruction "attach the file I just created" and tool rediscovery/Scan Tools smoke belong to Phase 20.
+
 ## Plan Phases
 
-The sequence intentionally adds and proves the new path before changing production semantics. Every phase ends with a buildable, testable system. Phases 1-14 completed the core user/team architecture. Phases 15-18 migrate Raycast onto that architecture and end with a code-complete branch. Phase 19 is the separate credentialed local production and Raycast cutover.
+The sequence intentionally adds and proves the new path before changing production semantics. Every phase ends with a buildable, testable system. Phases 1-14 completed the core user/team architecture. Phases 15-18 migrate Raycast onto that architecture. Phase 19 repairs ChatGPT-native MCP file attachments and completes the shared branch. Phase 20 is the separate credentialed local production, Raycast, and ChatGPT host cutover.
 
 ### Phase 1: Make migrations canonical and produce a verified content backup workflow
 
@@ -709,7 +740,7 @@ Create a production preflight/backup command under `cmd/` or the CLI's deploymen
 
 Do not rename existing R2 keys. Do not mutate production content in this phase. The output must be repeatable, timestamped, and safe to rerun.
 
-On the shared Zodex branch, implement and test this workflow without production credentials. Use test databases, `assets.FakeStore`, and credential-free fixtures to prove the manifest, failure, retry, and idempotency behavior. Do not run or claim a real production backup from Zodex; Phase 19 is the only phase that gathers and records that production evidence.
+On the shared Zodex branch, implement and test this workflow without production credentials. Use test databases, `assets.FakeStore`, and credential-free fixtures to prove the manifest, failure, retry, and idempotency behavior. Do not run or claim a real production backup from Zodex; Phase 20 is the only phase that gathers and records that production evidence.
 
 Add PostgreSQL-backed migration tests that start from representative legacy schemas, apply migrations once and twice, and verify the ledger and content are unchanged on retry. Add CI capable of running those tests against a real PostgreSQL service.
 
@@ -1357,9 +1388,9 @@ Complete the feature branch's final code cutover. Implement the final content mi
 
 Delete all legacy tenant authorization and compatibility code from the feature branch once the replacement path is proven. Remove tenant selectors, tenant DTO fields, tenant provisioning/admin endpoints, `agentbox init`, `agentbox provision tenant`, admin-key key creation, old profile metadata, direct `R2_PUBLIC_BASE_URL` behavior, and tests/docs that assert the old model.
 
-Retain `AGENTBOX_ADMIN_KEY` only if the final owner-bootstrap/recovery design still requires it; document its narrow role. End with one schema runner, one user/team authorization model, and one set of public contracts. Phases 15-18 must extend that finished architecture rather than reintroduce compatibility paths, and Phase 19 must be able to execute the combined production/Raycast procedure without inventing missing commands or decisions.
+Retain `AGENTBOX_ADMIN_KEY` only if the final owner-bootstrap/recovery design still requires it; document its narrow role. End with one schema runner, one user/team authorization model, and one set of public contracts. Phases 15-19 must extend that finished architecture rather than reintroduce compatibility paths, and Phase 20 must be able to execute the combined production/Raycast/ChatGPT procedure without inventing missing commands or decisions.
 
-When this phase is complete, Zodex agents mark Phases 1-14 `Complete` and continue into the approved Raycast Phases 15-18. They stop only after those phases are complete, the combined runbooks are committed, and Phase 19 remains `Reserved for local agent`. They must not run the production backup, pause writes, migrate the live database, access live R2, deploy Vercel, import the extension into a real Raycast installation, or create real production credentials.
+When this phase is complete, Zodex agents mark Phases 1-14 `Complete` and continue into the approved Raycast Phases 15-18 and ChatGPT attachment Phase 19. They stop only after those phases are complete, the combined runbooks are committed, and Phase 20 remains `Reserved for local agent`. They must not run the production backup, pause writes, migrate the live database, access live R2, deploy Vercel, import the extension into a real Raycast installation, or create real production credentials.
 
 #### Validation strategy
 
@@ -1373,7 +1404,7 @@ When this phase is complete, Zodex agents mark Phases 1-14 `Complete` and contin
 #### What must not break
 
 - No legacy fixture thread, message, attachment row, historical attribution snapshot, or stored R2 key may be lost.
-- The branch must remain deployable at every commit and must be code-complete through Phase 18 before the local agent begins Phase 19.
+- The branch must remain deployable at every commit and must be code-complete through Phase 19 before the local agent begins Phase 20.
 - The final system must not retain two authorization models.
 
 ### Phase 15: Add Raycast as a user-owned onboarding connector
@@ -1511,7 +1542,7 @@ Use the freedom of local developer-mode installation to expose the useful comman
 - No Raycast action can invoke the owner-only web view or owner administration.
 - Existing dashboard, MCP, CLI, public page, and normal API behavior remain unchanged except for shared contract hardening.
 
-### Phase 18: Harden developer-mode distribution, documentation, CI, and the local handoff
+### Phase 18: Harden developer-mode distribution, documentation, CI, and the Raycast runbook
 
 #### Files to read before starting
 
@@ -1536,9 +1567,9 @@ Update the public Raycast page, raw Markdown guide, self-host guide, onboarding 
 
 Add Raycast gates to CI and `verify:cutover`: package `npm ci`, contract tests, lint, and production build. Add source scans for retired tenant/storage/public assumptions. Extend backend HTTP/PostgreSQL tests with a Raycast-scoped credential proving effective-access parity, attribution, visibility, attachment authorization, revocation, disablement, and owner non-bypass.
 
-Commit a macOS developer-mode smoke runbook for Phase 19. It must include clone/update, dependency install, `npm run dev`, preference entry, extension diagnostics, each user workflow, visibility/self-revocation, credential rotation, disablement, and cleanup. It must specify expected evidence without asking the Zodex agent to claim a real Raycast import.
+Commit a macOS developer-mode smoke runbook for Phase 20. It must include clone/update, dependency install, `npm run dev`, preference entry, extension diagnostics, each user workflow, visibility/self-revocation, credential rotation, disablement, and cleanup. It must specify expected evidence without asking the Zodex agent to claim a real Raycast import.
 
-When complete, update the progress ledger, mark Phases 15-18 `Complete`, leave Phase 19 `Reserved for local agent`, push the exact code-complete checkpoint, wait for exact-head CI success, and stop.
+When complete, update the progress ledger, mark Phase 18 `Complete`, and continue directly to Phase 19. Do not hand off to the local agent yet.
 
 #### Validation strategy
 
@@ -1552,26 +1583,80 @@ When complete, update the progress ledger, mark Phases 15-18 `Complete`, leave P
 
 - No secrets, real setup bundles, signed URLs, or production thread content enter source, fixtures, screenshots, CI logs, or docs.
 - Store publication remains deferred rather than silently removed as a future option.
-- The branch remains deployable and code-complete before Phase 19 begins.
+- The branch remains deployable and ready for Phase 19 without requiring production or ChatGPT-host access.
 
-### Phase 19: Credentialed local production and Raycast cutover
+### Phase 19: Fix ChatGPT-native MCP file attachments and remote-file security
 
-**Execution environment: local machine with production PostgreSQL, Cloudflare R2, Vercel, AgentBox, macOS, and Raycast credentials only. Zodex agents must not start this phase.**
+#### Files to read before starting
+
+**Authoritative behavior and host contract:**
+
+- AgentBox thread `thr_c03fb8a0-4cd9-4148-b361-9e440ad44d79` - the observed agent failure, current-branch investigation, and recommended strict file-parameter direction.
+- OpenAI plugin documentation `https://developers.openai.com/plugins/llms-full.txt`, section **Define file inputs** - exact `_meta["openai/fileParams"]`, schema, runtime object, and Scan Tools requirements.
+- The connected AgentBox tool schema captured in `ChatGPT Attachment Trace` - treat the current `file?: string` projection as host evidence; do not claim the post-fix projection is corrected until Phase 20 rediscovery.
+
+**MCP, service, and storage path:**
+
+- `internal/agentbox/mcpserver/mcpserver.go` (`post_message`, `parseFileInput`, tool metadata/input schema) and `mcpserver_test.go`.
+- `internal/agentbox/assets/assets.go` (`ChatGPTFileInput`, `UploadChatGPTFile`, `NormalizeChatGPTFileInput`, R2 HTTP client) plus `fake.go` and asset tests.
+- `internal/agentbox/service/service.go` (`PostMessage`, `PostMessageParams`) and the transactional message/asset creation path.
+- `internal/agentbox/httpapi/server.go` structured `file` decoding and `internal/agentbox/validate` file-reference validation.
+- Existing R2 upload, compensation, attachment authorization, and unavailable-object tests from the Crucible remediation.
+
+**Validation and release surfaces:**
+
+- `.github/workflows/*`, `scripts/verify-user-team-cutover.sh`, plugin/connector setup documentation, and any tool-schema snapshot tests.
+- The Phase 20 production/host runbook - add the exact ChatGPT rediscovery and natural-language artifact smoke sequence.
+
+#### What to do
+
+Make `post_message.file` a strict optional OpenAI file object, not a string union. Its schema must declare exactly the four supported properties, require only `download_url` and `file_id`, set `additionalProperties: false`, and remain listed in `_meta["openai/fileParams"]`. Keep the top-level field optional so text-only messages continue to work. Do not tell the model to discover or pass `file_...`, sandbox paths, download URLs, or conversion details; describe only that it may attach the ChatGPT file artifact.
+
+Delete `RawString`, the string branch in `parseFileInput`, and the URL-string compatibility behavior in `NormalizeChatGPTFileInput`. Reject strings deterministically at decoding/schema validation. Remove the structured ChatGPT `file` field from the ordinary public HTTP post-message contract unless a separate host-authenticated boundary is introduced. Normal HTTP clients already have multipart and direct/presigned uploads. Keep the structured host file object inside the MCP adapter/service path and do not expose arbitrary URL attachment through it.
+
+Harden the structured remote-file downloader against SSRF and resource abuse. Use an injectable client/resolver so tests can cover public endpoints without weakening production rules. Require an allowed web scheme, reject non-public destination IP ranges and ambiguous hostnames, re-resolve/revalidate every redirect target, set bounded connect/TLS/header/overall timeouts, cap `Content-Length` when present and streamed bytes always, stop oversized transfers early, and never forward AgentBox credentials or caller headers. Preserve filename/MIME inference, exact user/thread authorization, R2 compensation, and message/asset attribution.
+
+Add exact schema tests that parse the generated MCP descriptor rather than searching serialized substrings. They must prove the object-only shape, all four properties, the two required fields, closed properties, and absence of string alternatives or file-ID instructions. Add service/storage tests proving a valid structured host file reaches R2 and the message asset, strings and arbitrary internal URLs are rejected, redirects are revalidated, oversized responses fail without an asset, and failure compensation leaves no partial message/object state.
+
+Add a connector/tool-scan readiness check to CI and `verify:cutover` where it can run without live ChatGPT credentials. Commit a Phase 20 host smoke runbook that refreshes/reconnects the MCP connector, runs Scan Tools when available, creates a Markdown artifact in ChatGPT, asks to attach "the file I just created" without exposing an ID, and verifies the resulting AgentBox asset bytes and attribution.
+
+Do not add a generic URL-fetch tool, filesystem-path support, base64 transport, or manual conversation-file-ID workflow. Multiple file objects may be added only if the product deliberately changes `post_message` to support an array and tests the complete transactional behavior; it is not required merely to fix the current singular attachment path.
+
+#### Validation strategy
+
+- The generated MCP descriptor and scanner-readiness test exactly match OpenAI's documented file-object contract. Phase 20, not Zodex, verifies the real connected tool projection after rediscovery.
+- Text-only `post_message` remains unchanged; a structured file object is optional and creates one authorized asset attached to the posted message.
+- Plain strings, `file_...`, `sandbox:` URIs, local paths, and arbitrary URL strings are rejected before storage/network work.
+- SSRF tests cover loopback, RFC1918, link-local, IPv6 local/private ranges, metadata-service addresses, DNS rebinding/changed resolution, and public-to-private redirects.
+- Size, timeout, MIME, filename, R2 failure, and message-transaction tests prove no partial object or database record survives failure.
+- `go test ./...` with PostgreSQL required/no skips, `go vet ./...`, `go build ./...`, dashboard checks/build, Raycast package gates, and `verify:cutover` all pass.
+- The committed Phase 20 runbook makes the real ChatGPT host acceptance test executable without asking the local agent to infer file IDs or transport internals.
+
+#### What must not break
+
+- ChatGPT attachment bytes, filename, MIME type, user/actor attribution, and thread authorization remain correct after ingestion.
+- Generic API and MCP text posting, CLI, Raycast, dashboard, multipart/direct uploads, and public attachment behavior remain unchanged. The unsupported string attachment compatibility path is intentionally removed.
+- AgentBox never treats a sandbox link or opaque file ID as a remotely fetchable location.
+- The branch remains code-complete and exact-head CI green before Phase 20 begins.
+
+### Phase 20: Credentialed local production, Raycast, and ChatGPT host cutover
+
+**Execution environment: local machine with production PostgreSQL, Cloudflare R2, Vercel, AgentBox, macOS, Raycast, and ChatGPT connector access only. Zodex agents must not start this phase.**
 
 #### Files to read before starting
 
 **Authoritative scope and execution history:**
 
 - `docs/user-team-sharing-spec.md` (read in full) - including the Raycast scope extension.
-- This blueprint (read in full, especially `Implementation Progress`, `Raycast Migration Trace`, `Amendments`, Phase 14, and Phases 15-18).
+- This blueprint (read in full, especially `Implementation Progress`, `Raycast Migration Trace`, `ChatGPT Attachment Trace`, `Amendments`, Phase 14, and Phases 15-19).
 - `gg/raycast-extension-implementation-plan-2026-07-07.md` only as historical context; do not restore its tenant/private-store assumptions.
-- The production, rollback, and Raycast developer-mode runbooks committed by Phase 18.
+- The production, rollback, Raycast developer-mode, and ChatGPT host-attachment runbooks committed by Phase 19.
 
 **Credentialed commands and deployment:**
 
-- Canonical migrations, preflight/backup tooling, owner bootstrap/recovery tooling, smoke-check commands, and Raycast package completed in Phases 1-18.
+- Canonical migrations, preflight/backup tooling, owner bootstrap/recovery tooling, smoke-check commands, Raycast package, and strict ChatGPT file-parameter implementation completed in Phases 1-19.
 - `cmd/api/main.go`, `cmd/migrate/main.go`, deployment configuration under `deploy/`, `raycast/agentbox/package.json`, and `AGENTS.md`.
-- Latest branch history, exact-head CI, and outgoing diff; verify the checkout contains the pushed Phase 18 checkpoint before any live action.
+- Latest branch history, exact-head CI, and outgoing diff; verify the checkout contains the pushed Phase 19 checkpoint before any live action.
 
 #### What to do
 
@@ -1596,7 +1681,16 @@ Exercise the Raycast smoke matrix against production:
 
 Exercise the full non-Raycast production smoke matrix from the original cutover plan: login, list/search/get/post, uploads, downloads, invitations, zero-team users, overlapping teams, visibility/public links, onboarding, owner administration, disablement, purge, and owner-browser-only content access.
 
-Reopen writes only after every preservation, security, dashboard, client, and Raycast check passes. If production execution exposes a code defect, make the narrowest correct fix on `feat/user-team-sharing`, update `Implementation Progress` and `Amendments`, run all relevant checks, commit, push, and wait for exact-head CI before resuming the runbook. When production verification is complete, mark Phase 19 `Complete` and push the final progress update.
+Exercise the ChatGPT-native attachment smoke against the exact deployed MCP connector:
+
+- refresh or recreate the connector so ChatGPT discovers the Phase 19 schema, and run Scan Tools when the developer surface exposes it;
+- create a small Markdown artifact in ChatGPT's sandbox/conversation;
+- ask ChatGPT to post it to a test thread using natural language such as "attach the file I just created," without supplying or discussing a `file_...` ID;
+- inspect sanitized server evidence to confirm the tool received the structured file object, not a string, while keeping the temporary URL and file ID out of logs;
+- verify the exact bytes, filename, MIME type, `User · ChatGPT` attribution, R2 object, and message asset in AgentBox;
+- prove a text-only post still works and that an intentionally malformed string/path input is rejected without a network fetch or partial asset.
+
+Reopen writes only after every preservation, security, dashboard, client, and Raycast check passes. If production execution exposes a code defect, make the narrowest correct fix on `feat/user-team-sharing`, update `Implementation Progress` and `Amendments`, run all relevant checks, commit, push, and wait for exact-head CI before resuming the runbook. When production verification is complete, mark Phase 20 `Complete` and push the final progress update.
 
 #### Validation strategy
 
@@ -1604,13 +1698,14 @@ Reopen writes only after every preservation, security, dashboard, client, and Ra
 - Every migrated thread is private to the permanent owner until explicitly shared and remains readable with its attachments.
 - Old API keys, sessions, tenant-shaped CLI profiles, and stale Raycast preferences fail; newly created per-surface credentials work with independent actor attribution.
 - Dashboard and Raycast produce the same ordinary-user accessible thread IDs and visibility state for the same user.
+- ChatGPT discovers `post_message.file` as a structured artifact parameter, attaches a newly created conversation file without manual ID handling, and persists the exact bytes through the hardened path.
 - Production checks prove cross-user privacy, overlapping team access, removal after membership/share changes, public-token revocation, disabled-user invalidation, and owner API/CLI/MCP/Raycast non-bypass.
-- Backend/dashboard health, logs, migration ledger, R2 signing behavior, Raycast diagnostics, and exact-head CI remain clean through the maintenance window and after writes reopen.
+- Backend/dashboard health, logs, migration ledger, R2 signing behavior, Raycast diagnostics, ChatGPT connector diagnostics/Scan Tools, and exact-head CI remain clean through the maintenance window and after writes reopen.
 
 #### What must not break
 
 - No production thread, message, attachment row, historical attribution snapshot, or referenced R2 object may be lost or silently reassigned.
-- Writes must not reopen while backup, manifest, migration, security, dashboard, Raycast, or smoke checks are incomplete or failing.
+- Writes must not reopen while backup, manifest, migration, security, dashboard, Raycast, ChatGPT attachment, or smoke checks are incomplete or failing.
 - Do not reuse credentials across people, surfaces, or Raycast installations.
 - Do not force-push or bypass the shared progress ledger when production fixes are required; the final branch must contain the exact code and runbook state that reached production.
 
@@ -1618,10 +1713,16 @@ Reopen writes only after every preservation, security, dashboard, client, and Ra
 
 ### 2026-08-02 — Active public URLs must be redisplayable
 
-The Phase 8 implementation initially stored only a public-token hash and treated the generated URL as copy-once browser state. Full rereading of the approved specification and the Phase 9 output contract showed that this contradicted the required authenticated visibility response, which must return the current public URL whenever public sharing is active. Migration `0015_visibility_contract.sql` therefore adds retained token material for authenticated redisplay while preserving the hash as the anonymous lookup/index key; the token remains excluded from internal JSON DTOs and is exposed only as the constructed public URL to authorized thread participants. Any development database row created before migration `0015` has no reconstructable token and must be rotated once; this feature has not been cut over to production, so Phase 19 will apply the canonical migration before live public-link use.
+The Phase 8 implementation initially stored only a public-token hash and treated the generated URL as copy-once browser state. Full rereading of the approved specification and the Phase 9 output contract showed that this contradicted the required authenticated visibility response, which must return the current public URL whenever public sharing is active. Migration `0015_visibility_contract.sql` therefore adds retained token material for authenticated redisplay while preserving the hash as the anonymous lookup/index key; the token remains excluded from internal JSON DTOs and is exposed only as the constructed public URL to authorized thread participants. Any development database row created before migration `0015` has no reconstructable token and must be rotated once; this feature has not been cut over to production, so Phase 20 will apply the canonical migration before live public-link use.
 
 ### 2026-08-03 — Raycast is now part of the user/team migration
 
 The original specification and blueprint treated Raycast as a future credential and deferred extension redesign/distribution. The user explicitly changed that scope after the core user/team implementation was complete. Raycast must now behave as an ordinary user-owned surface over the same effective-access predicate and canonical visibility operation as the private dashboard, including create, reply, upload, view, download, team sharing, and public-link management.
 
-The accepted distribution model is intentionally narrow: every user loads the checked-in extension independently in Raycast developer mode and configures one dedicated credential for that installation. Public Store, private Store, and centrally managed team distribution remain deferred. The previous local-only Phase 15 is renumbered to Phase 19; new Phases 15-18 own all code, schema, onboarding, extension, documentation, CI, and runbook work. Historical checkpoint text is retained as evidence of the earlier execution state and must be interpreted through the numbering note in `Implementation Progress`.
+The accepted distribution model is intentionally narrow: every user loads the checked-in extension independently in Raycast developer mode and configures one dedicated credential for that installation. Public Store, private Store, and centrally managed team distribution remain deferred. The previous local-only Phase 15 is renumbered to Phase 20; new Phases 15-18 own Raycast code, schema, onboarding, extension, documentation, CI, and runbook work, while Phase 19 owns the ChatGPT-native file-attachment contract and security hardening. Historical checkpoint text is retained as evidence of the earlier execution state and must be interpreted through the numbering note in `Implementation Progress`.
+
+### 2026-08-03 — ChatGPT file artifacts must be host-expanded, not manually identified
+
+AgentBox thread `thr_c03fb8a0-4cd9-4148-b361-9e440ad44d79` documented a repeated agent failure: the model was told to discover and pass an opaque `file_...` value even though AgentBox already declared an OpenAI file parameter. Reinspection of exact branch `7d42d5e` confirmed the cause remained present: the schema used an object/string union, the tool description instructed manual file-ID handling, and the storage layer accepted arbitrary URL strings. The connected ChatGPT tool projection exposed `file` as a string, so the issue is observable at the host boundary rather than merely theoretical.
+
+OpenAI's current contract requires each field in `_meta["openai/fileParams"]` to be a file object or array with all four declared properties and exactly `download_url` and `file_id` required. Phase 19 is therefore added before the credentialed handoff. It owns the strict schema, removal of the string/URL compatibility path, SSRF-safe download behavior, exact descriptor tests, scan readiness, and the local host-smoke runbook. The former final local phase moves from Phase 19 to Phase 20 and now includes a real "attach the file I just created" acceptance test without manual file IDs.

@@ -1,6 +1,6 @@
 # AgentBox User, Team, and Public Sharing Specification
 
-Status: Approved for implementation planning; Raycast scope extended 2026-08-03
+Status: Approved for implementation planning; Raycast and ChatGPT attachment scope extended 2026-08-03
 
 Date: 2026-08-01
 
@@ -415,6 +415,26 @@ Raycast must expose the same caller-relative visibility information and controls
 
 Thread creation in Raycast remains private-only. Sharing happens only after creation through the canonical visibility operation.
 
+
+### 9.5 ChatGPT MCP file attachments
+
+The ChatGPT `post_message` tool may accept an optional top-level file parameter declared through `_meta["openai/fileParams"]`. That parameter must be a structured ChatGPT file object, not a string, path, URL, base64 payload, or manually supplied conversation file ID.
+
+The schema must declare:
+
+- `download_url` as a required string;
+- `file_id` as a required string;
+- `mime_type` as an optional string;
+- `file_name` as an optional string;
+- no undeclared properties.
+
+The tool description must let the model select the ChatGPT file artifact conceptually and must not instruct it to discover `file_...`, pass `sandbox:` links, or understand the temporary download transport. ChatGPT supplies the authorized structured value.
+
+AgentBox must download a structured host file only through an SSRF-safe, size-bounded, timeout-bounded path that revalidates redirects and rejects private, loopback, link-local, reserved, and metadata-service destinations. The file is authorized against the containing thread, stored in private R2, and attached transactionally with the message. Failure must leave no partial message or object.
+
+Generic MCP and HTTP clients that do not implement OpenAI file parameters use AgentBox's normal multipart or direct/presigned upload architecture. The ChatGPT file field is an MCP host adapter, not a generic public HTTP URL-fetch or filesystem-path feature.
+
+
 ## 10. Inbox, Search, and Thread Reads
 
 The default inbox remains one unified inbox. A user and all of their credentials see every thread they currently qualify to access:
@@ -593,3 +613,6 @@ Authorization must be expressed through stable IDs and relational constraints, n
 20. Disabling a user immediately revokes sessions and credentials while preserving ownership, messages, team-shared history, and attribution.
 21. The owner can idempotently purge only attachments uploaded by a disabled user, freeing R2 storage while preserving attachment tombstones in message history.
 22. The finished codebase has one centralized stable-ID-based authorization model and no permanent fallback to the old tenant-wide path.
+23. ChatGPT discovers `post_message.file` as the documented structured file object rather than a string, and an agent can attach a conversation artifact without discovering or typing its opaque file ID.
+24. ChatGPT file ingestion rejects strings, sandbox paths, arbitrary URL-string inputs, private/internal destinations, unsafe redirects, and oversized or timed-out responses without leaving a partial R2 object, asset row, or message.
+25. A valid host-supplied file object preserves exact bytes, safe filename/MIME metadata, thread authorization, and `User · ChatGPT` attribution, while text-only posting and every non-ChatGPT client surface remain functional.

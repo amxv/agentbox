@@ -1,15 +1,15 @@
 # User/team production cutover and rollback
 
-This is the credentialed Phase 19 procedure. Run it only from a trusted local
-machine with production PostgreSQL, Cloudflare R2, Vercel, AgentBox, macOS, and
-Raycast access. The shared Zodex implementation environment must not execute
-these steps.
+This is the credentialed Phase 20 procedure. Run it only from a trusted local
+machine with production PostgreSQL, Cloudflare R2, Vercel, AgentBox, macOS,
+Raycast, and ChatGPT connector access. The shared Zodex implementation
+environment must not execute these steps.
 
-Do not execute this document until blueprint Phases 15-18 are complete and Phase
-18 has updated this runbook, the postcheck, and the companion Raycast developer-
-mode smoke runbook for migration `0018_raycast_onboarding.sql` and the final
-extension package. The current text preserves the already-tested core cutover
-sequence; Phase 19 uses the combined reviewed version.
+Do not execute this document until blueprint Phases 15-19 are complete and Phase
+19 has updated this runbook, the postcheck, the companion Raycast developer-mode
+smoke runbook, and the ChatGPT host-attachment smoke procedure for the final
+extension, MCP schema, and migration set. The current text preserves the
+already-tested core cutover sequence; Phase 20 uses the combined reviewed version.
 
 The cutover is intentionally split around migration `0017`. Migrations through
 `0016` create the replacement identity, team, visibility, and purge structures
@@ -30,7 +30,7 @@ bun run verify:cutover
 
 Record the commit SHA in the maintenance log. Do not continue with local
 changes, a failing verification command, or a commit different from the final
-Phase 18 checkpoint.
+Phase 19 checkpoint.
 
 ## 2. Produce and restore-test the backup
 
@@ -183,6 +183,8 @@ new product paths:
    endpoints and prove they cannot read that same private thread.
 10. Confirm every timeline entry still shows stable `User · Actor` attribution.
 
+11. Run the ChatGPT artifact attachment smoke from the Phase 19 handoff: refresh the connector, run Scan Tools when available, create a Markdown artifact in ChatGPT, ask it to attach “the file I just created” without a manual file ID, and verify exact bytes, filename/MIME, `User · ChatGPT` attribution, R2 persistence, and rejection of a malformed string/path input.
+
 Useful trusted-shell checks include:
 
 ```bash
@@ -213,7 +215,7 @@ disablement, purge, and owner-browser checks pass:
 5. Verify health, ordinary browser login, one private create/post/download loop,
    and clean backend/dashboard logs.
 
-Update the blueprint's Phase 19 checkpoint with the production commit, backup
+Update the blueprint's Phase 20 checkpoint with the production commit, backup
 and manifest locations, pre/post counts, migration ledger, smoke evidence, and
 the time writes reopened.
 
