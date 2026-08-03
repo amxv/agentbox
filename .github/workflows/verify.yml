@@ -51,6 +51,9 @@ jobs:
       - name: Install dashboard dependencies
         run: bun install --frozen-lockfile
 
+      - name: Verify ChatGPT file attachment contract
+        run: bun run verify:chatgpt-files
+
       - name: Run final user/team cutover verification
         run: bun run verify:cutover
 

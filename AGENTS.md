@@ -31,6 +31,7 @@ Run the broad gate before shipping cross-runtime changes:
 bun run test:parity
 bun run typecheck
 bun run lint
+bun run verify:chatgpt-files
 go test ./...
 go vet ./...
 bun run build:api
@@ -184,6 +185,10 @@ That gate performs a clean Raycast package install and runs its contract tests,
 typecheck, native lint, and production build. Real developer-mode import and
 preference entry require a trusted macOS machine and follow
 `docs/raycast-developer-mode-smoke.md`; Zodex must not claim those live checks.
+The same gate runs the exact ChatGPT file-object descriptor, secure downloader,
+R2, HTTP-boundary, and compensation checks. Real connector refresh/Scan Tools
+and “attach the file I just created” verification require ChatGPT host access
+and follow `docs/chatgpt-file-attachment-smoke.md` during Phase 20.
 
 ## Invitation-backed Users
 

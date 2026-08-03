@@ -792,6 +792,8 @@ func (s *Service) CreateOnboardingConnection(ctx context.Context, auth types.Aut
 			"Create a custom remote MCP connector and paste the complete URL below.",
 			"Choose no authentication. The credential is already carried in the URL query string.",
 			"Save the connector, then ask ChatGPT to list your AgentBox threads as a connection test.",
+			"After connector schema changes, refresh or recreate the connector and run Scan Tools when available.",
+			"To test attachments, create a ChatGPT file artifact and ask it to attach the file you just created; do not supply a file ID, path, or URL.",
 		}
 	case "claude":
 		result.MCPURL, err = mcpURLWithSecret(baseURL, secret)

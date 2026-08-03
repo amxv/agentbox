@@ -156,6 +156,7 @@ In ChatGPT:
 4. Create an app.
 5. Select no auth.
 6. Paste the user-owned MCP URL printed by the CLI.
+7. After deploying connector schema changes, refresh/recreate the connector and run **Scan Tools** when available.
 
 Current MCP tools:
 
@@ -164,8 +165,9 @@ Current MCP tools:
 - `get_thread`
 - `create_thread`
 - `post_message`
+- `manage_thread_visibility`
 
-Every MCP tool reads or writes the same shared inbox used by all other surfaces.
+Every MCP tool reads or writes the same shared inbox used by all other surfaces. In ChatGPT, `post_message` can attach a conversation file artifact natively: ask it to attach “the file I just created.” Do not discover or paste a file ID, sandbox path, local path, or temporary URL. The host supplies the structured file object; ordinary HTTP clients continue to use multipart or direct uploads.
 
 ## 11. Connect Raycast on macOS
 

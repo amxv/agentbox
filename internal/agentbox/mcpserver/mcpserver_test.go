@@ -47,31 +47,7 @@ func setThreadVisibilityForTest(ctx context.Context, repository interface {
 }
 
 func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
-	ctx := context.Background()
-	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
-	server := New(testAuth(), svc)
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer serverSession.Close()
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clientSession.Close()
-
-	tools, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	byName := map[string]*mcp.Tool{}
-	for _, tool := range tools.Tools {
-		byName[tool.Name] = tool
-	}
+	byName := listToolsByName(t)
 	for _, name := range []string{"list_threads", "search_threads", "get_thread", "create_thread", "post_message", "manage_thread_visibility"} {
 		if byName[name] == nil {
 			t.Fatalf("missing tool %s in %#v", name, byName)
@@ -95,6 +71,67 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	if got := meta["openai/toolInvocation/invoked"]; got != "Posted to Agentbox" {
 		t.Fatalf("post_message meta = %#v", meta)
 	}
+	assertPostMessageFileDescriptor(t, post)
+	createSchemaJSON, err := json.Marshal(byName["create_thread"].InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"add_teams", "remove_teams", "public", "regenerate_public_link"} {
+		if strings.Contains(string(createSchemaJSON), forbidden) {
+			t.Fatalf("create_thread schema contains visibility field %q: %s", forbidden, createSchemaJSON)
+		}
+	}
+
+	visibilitySchemaJSON, err := json.Marshal(visibility.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"thread_id", "add_teams", "remove_teams", "public", "regenerate_public_link"} {
+		if !strings.Contains(string(visibilitySchemaJSON), required) {
+			t.Fatalf("manage_thread_visibility schema missing %q: %s", required, visibilitySchemaJSON)
+		}
+	}
+}
+
+func TestPostMessageFileDescriptorMatchesOpenAIContract(t *testing.T) {
+	post := listToolsByName(t)["post_message"]
+	if post == nil {
+		t.Fatal("post_message tool is missing")
+	}
+	assertPostMessageFileDescriptor(t, post)
+}
+
+func listToolsByName(t *testing.T) map[string]*mcp.Tool {
+	t.Helper()
+	ctx := t.Context()
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	server := New(testAuth(), svc)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+	tools, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*mcp.Tool{}
+	for _, tool := range tools.Tools {
+		byName[tool.Name] = tool
+	}
+	return byName
+}
+
+func assertPostMessageFileDescriptor(t *testing.T, post *mcp.Tool) {
+	t.Helper()
 	schemaJSON, err := json.Marshal(post.InputSchema)
 	if err != nil {
 		t.Fatal(err)
@@ -144,28 +181,10 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 			t.Fatalf("post_message description contains transport instruction %q: %s", forbidden, post.Description)
 		}
 	}
+	meta := post.Meta.GetMeta()
 	fileParams, ok := meta["openai/fileParams"].([]any)
 	if !ok || len(fileParams) != 1 || fileParams[0] != "file" {
 		t.Fatalf("file params meta = %#v", meta["openai/fileParams"])
-	}
-	createSchemaJSON, err := json.Marshal(byName["create_thread"].InputSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"add_teams", "remove_teams", "public", "regenerate_public_link"} {
-		if strings.Contains(string(createSchemaJSON), forbidden) {
-			t.Fatalf("create_thread schema contains visibility field %q: %s", forbidden, createSchemaJSON)
-		}
-	}
-
-	visibilitySchemaJSON, err := json.Marshal(visibility.InputSchema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"thread_id", "add_teams", "remove_teams", "public", "regenerate_public_link"} {
-		if !strings.Contains(string(visibilitySchemaJSON), required) {
-			t.Fatalf("manage_thread_visibility schema missing %q: %s", required, visibilitySchemaJSON)
-		}
 	}
 }
 

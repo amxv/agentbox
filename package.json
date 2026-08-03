@@ -23,6 +23,7 @@
     "build:cli:npm": "node ./scripts/prepare-agentbox-npm.mjs",
     "db:migrate": "go run ./cmd/migrate",
     "backup:preflight": "go run ./cmd/preflight",
+    "verify:chatgpt-files": "bash scripts/verify-chatgpt-file-attachments.sh",
     "verify:cutover": "bash scripts/verify-user-team-cutover.sh",
     "test:parity": "echo \"TypeScript parity oracle removed; use Go tests plus rollout smoke checks.\"",
     "build:all": "bun run build && bun run build:cli",

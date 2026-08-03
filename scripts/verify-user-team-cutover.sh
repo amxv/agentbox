@@ -53,6 +53,9 @@ if (!baseURL?.required || baseURL.default || !apiKey?.required || apiKey.type !=
 }
 NODE
 
+echo 'Checking ChatGPT file-attachment readiness...'
+bash scripts/verify-chatgpt-file-attachments.sh
+
 echo 'Running Go tests and static analysis...'
 go test ./...
 go vet ./...
