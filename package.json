@@ -25,7 +25,7 @@
     "backup:preflight": "go run ./cmd/preflight",
     "verify:chatgpt-files": "bash scripts/verify-chatgpt-file-attachments.sh",
     "verify:cutover": "bash scripts/verify-user-team-cutover.sh",
-    "test:parity": "echo \"TypeScript parity oracle removed; use Go tests plus rollout smoke checks.\"",
+    "test:parity": "bun test scripts/visibility-proxy.test.mjs",
     "build:all": "bun run build && bun run build:cli",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

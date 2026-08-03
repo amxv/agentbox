@@ -718,6 +718,15 @@ YYYY-MM-DD — Phase N / short slice name
 - Remaining: No shared/Zodex code-bearing work remains in Phases 1-19. Do not perform or claim the real production backup, R2 inventory/copy, maintenance window, owner bootstrap, migrations, Vercel deployment, credential recreation, macOS Raycast import, ChatGPT connector rediscovery/Scan Tools, or live smoke evidence from this environment. Those actions are Phase 20 only.
 - Next: The credentialed local agent must fast-forward `feat/user-team-sharing`, confirm the final ledger head is clean and exact-head CI is green, reread the full specification and blueprint, then execute `docs/user-team-sharing-production-cutover.md`. That procedure begins with the verified off-deployment PostgreSQL/R2 backup and restore test, applies the canonical migration/owner sequence under maintenance mode, deploys the exact reviewed commit, and invokes `docs/raycast-developer-mode-smoke.md` plus `docs/chatgpt-file-attachment-smoke.md` before writes reopen.
 
+
+2026-08-04 — Crucible follow-up / F1 dashboard-origin visibility mutation
+- Status: Complete
+- Commit: Recorded in the immediately following follow-up commit.
+- Implemented: Restored `PATCH` on `app/api/threads/[threadId]/visibility/route.ts` while keeping the obsolete `PUT` contract absent. Replaced the no-op parity script with a cross-runtime integration test that imports the real Next.js route and forwards requests to an actual Go `httpapi.Server` backed by the canonical visibility service/repository operation. The test proves team additions and removals, publish/unpublish, public-link regeneration, read-after-mutation state, and ordinary coded error/status propagation through the dashboard origin. Dashboard, CLI, and Raycast can therefore use the documented dashboard/base URL without a second visibility contract.
+- Validation: `bun run test:parity` passed 3 tests with 23 assertions against the real Go handler; focused `go test ./internal/agentbox/httpapi ./internal/agentbox/service ./internal/contracttest/visibilitybackend`, `bun run typecheck`, `bun run lint`, and `git diff --check` passed.
+- Remaining: F2-F6 remain open. No production or credentialed host action was performed.
+- Next: Implement the shared active-and-revoked credential inventory and dedicated independently labeled Raycast installation lifecycle, including stable-ID rotation/revocation and persisted non-secret setup metadata.
+
 ## Raycast Migration Trace
 
 This trace was produced by reading the complete extension under `raycast/agentbox`, the current onboarding/credential code, the final user/team DTOs and HTTP routes, the dashboard visibility implementation, setup documentation, and the historical Raycast plan. It is the implementation map for Phases 15-18.
