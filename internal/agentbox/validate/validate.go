@@ -41,7 +41,8 @@ func PostMessage(threadID string) error {
 }
 
 func FileReference(downloadURL string, fileID string) error {
-	if _, err := url.ParseRequestURI(downloadURL); err != nil {
+	parsed, err := url.Parse(downloadURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
 		return errors.New(zodIssue(map[string]any{
 			"code":    "invalid_format",
 			"format":  "url",

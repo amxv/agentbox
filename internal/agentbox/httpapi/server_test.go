@@ -148,7 +148,8 @@ func TestMaintenanceModeBlocksProductRoutesButAllowsCutoverPathsAndExplicitBypas
 
 func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
 	if _, err := svc.CreateAPIKey(t.Context(), authContext("global", "local"), "local"); err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +218,16 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 	if jsonPosted.Message.BodyContentType == nil || *jsonPosted.Message.BodyContentType != "text/markdown" {
 		t.Fatalf("json message content type = %#v", jsonPosted.Message.BodyContentType)
+	}
+
+	structuredHostFile := httptest.NewRecorder()
+	server.ServeHTTP(structuredHostFile, httptest.NewRequest(
+		http.MethodPost,
+		"/api/threads/"+created.Thread.ID+"/messages?key=dev-key",
+		strings.NewReader(`{"body":"must not fetch","file":{"download_url":"https://files.openai.example/download/token","file_id":"file_abc123"}}`),
+	))
+	if structuredHostFile.Code != http.StatusBadRequest || len(store.Uploads) != 0 {
+		t.Fatalf("ordinary HTTP accepted host file: status=%d body=%s uploads=%#v", structuredHostFile.Code, structuredHostFile.Body.String(), store.Uploads)
 	}
 
 	var body bytes.Buffer

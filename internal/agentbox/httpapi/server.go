@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"agentbox/internal/agentbox/assets"
 	"agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/mcpserver"
@@ -1164,30 +1163,16 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	var input struct {
 		Body            *string                        `json:"body"`
 		BodyContentType *string                        `json:"body_content_type"`
-		File            *types.ChatGPTFileReference    `json:"file"`
 		UploadedAssets  []types.UploadedAssetReference `json:"uploaded_assets"`
 		UploadIDs       []string                       `json:"upload_ids"`
 	}
-	if err := parseJSON(r, &input); err != nil {
+	if err := parseJSONStrict(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	body := ""
 	if input.Body != nil {
 		body = *input.Body
-	}
-	var file *assets.ChatGPTFileInput
-	if input.File != nil {
-		if err := validate.FileReference(input.File.DownloadURL, input.File.FileID); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		file = &assets.ChatGPTFileInput{
-			DownloadURL: input.File.DownloadURL,
-			FileID:      input.File.FileID,
-			MimeType:    input.File.MimeType,
-			FileName:    input.File.FileName,
-		}
 	}
 	for _, uploadID := range input.UploadIDs {
 		input.UploadedAssets = append(input.UploadedAssets, types.UploadedAssetReference{UploadID: uploadID})
@@ -1196,7 +1181,6 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 		ThreadID:        threadID,
 		Body:            body,
 		BodyContentType: input.BodyContentType,
-		File:            file,
 		UploadedAssets:  input.UploadedAssets,
 	})
 	if err != nil {
@@ -1570,6 +1554,16 @@ func parseJSON(r *http.Request, target any) error {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1_048_576))
 	if err := decoder.Decode(target); err != nil {
 		return errors.New("Expected a JSON request body.")
+	}
+	return nil
+}
+
+func parseJSONStrict(r *http.Request, target any) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1_048_576))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return errors.New("Expected a JSON request body with only supported fields.")
 	}
 	return nil
 }

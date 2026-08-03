@@ -148,7 +148,6 @@ type ChatGPTFileInput struct {
 	FileID      string
 	MimeType    *string
 	FileName    *string
-	RawString   string
 }
 
 type R2Store struct {
@@ -401,26 +400,32 @@ func MakeStorageKey(userID string, threadID string, messageHint string, fileName
 }
 
 func NormalizeChatGPTFileInput(input ChatGPTFileInput) (ChatGPTFileInput, error) {
-	if input.RawString == "" {
-		if input.DownloadURL == "" || input.FileID == "" {
-			return ChatGPTFileInput{}, errors.New("download_url and file_id are required")
-		}
-		return input, nil
+	input.DownloadURL = strings.TrimSpace(input.DownloadURL)
+	input.FileID = strings.TrimSpace(input.FileID)
+	if input.DownloadURL == "" || input.FileID == "" {
+		return ChatGPTFileInput{}, errors.New("download_url and file_id are required")
 	}
-	value := strings.TrimSpace(input.RawString)
-	parsed, err := url.Parse(value)
-	if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-		fileName := path.Base(parsed.Path)
-		if fileName == "." || fileName == "/" || fileName == "" {
-			fileName = "download.bin"
-		}
-		return ChatGPTFileInput{
-			DownloadURL: value,
-			FileID:      "url-" + uuid.NewString(),
-			FileName:    &fileName,
-		}, nil
+	parsed, err := url.Parse(input.DownloadURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
+		return ChatGPTFileInput{}, errors.New("download_url must be an absolute HTTP or HTTPS URL without embedded credentials")
 	}
-	return ChatGPTFileInput{}, errors.New("File was received as a plain string. Pass a ChatGPT uploaded file ID like file_... to the MCP tool so ChatGPT expands it into { download_url, file_id, mime_type?, file_name? }. Local filesystem paths and plain filenames cannot be fetched by the remote Agentbox server.")
+	if input.MimeType != nil {
+		value := strings.TrimSpace(*input.MimeType)
+		if value == "" {
+			input.MimeType = nil
+		} else {
+			input.MimeType = &value
+		}
+	}
+	if input.FileName != nil {
+		value := strings.TrimSpace(*input.FileName)
+		if value == "" {
+			input.FileName = nil
+		} else {
+			input.FileName = &value
+		}
+	}
+	return input, nil
 }
 
 func defaultString(value string, fallback string) string {

@@ -1,9 +1,11 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -108,26 +110,21 @@ func (s *Server) build() *mcp.Server {
 		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}, "openai/toolInvocation/invoking": "Posting to Agentbox…", "openai/toolInvocation/invoked": "Posted to Agentbox"},
 		Name:        "post_message",
 		Title:       "Post message",
-		Description: "Post a message to an Agentbox thread. Messages default to auto-detected Markdown/plain rendering; set body_content_type to text/markdown or text/plain when you know the format. To attach a file from ChatGPT, pass the uploaded conversation file ID, for example file_abc123. Do not pass a local filesystem path or plain filename.",
+		Description: "Post a message to an Agentbox thread. Messages default to auto-detected Markdown/plain rendering; set body_content_type to text/markdown or text/plain when you know the format. Optionally attach one ChatGPT file artifact using file.",
 		InputSchema: objectSchema(map[string]any{
 			"thread_id":         map[string]any{"type": "string", "minLength": 1},
 			"body":              map[string]any{"type": "string"},
 			"body_content_type": map[string]any{"type": "string", "enum": []string{"auto", "text/plain", "text/markdown"}},
 			"file": map[string]any{
-				"anyOf": []any{
-					map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"download_url": map[string]any{"type": "string", "format": "uri"},
-							"file_id":      map[string]any{"type": "string", "minLength": 1},
-							"mime_type":    map[string]any{"type": "string"},
-							"file_name":    map[string]any{"type": "string"},
-						},
-						"required":             []string{"download_url", "file_id"},
-						"additionalProperties": true,
-					},
-					map[string]any{"type": "string"},
+				"type": "object",
+				"properties": map[string]any{
+					"download_url": map[string]any{"type": "string"},
+					"file_id":      map[string]any{"type": "string"},
+					"mime_type":    map[string]any{"type": "string"},
+					"file_name":    map[string]any{"type": "string"},
 				},
+				"required":             []string{"download_url", "file_id"},
+				"additionalProperties": false,
 			},
 		}, []string{"thread_id"}),
 		OutputSchema: objectSchema(map[string]any{
@@ -308,13 +305,15 @@ func (s *Server) manageThreadVisibility(ctx context.Context, req *mcp.CallToolRe
 }
 
 func parseFileInput(raw json.RawMessage) (*assets.ChatGPTFileInput, error) {
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil {
-		return &assets.ChatGPTFileInput{RawString: asString}, nil
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errors.New("file must be a ChatGPT file object")
 	}
 	var file types.ChatGPTFileReference
-	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, err
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&file); err != nil {
+		return nil, fmt.Errorf("invalid ChatGPT file object: %w", err)
 	}
 	if err := validate.FileReference(file.DownloadURL, file.FileID); err != nil {
 		return nil, err
@@ -399,7 +398,8 @@ func isInvalidArgument(err error) bool {
 		strings.Contains(message, "Too small: expected string") ||
 		message == "download_url and file_id are required" ||
 		message == "body_content_type must be text/plain, text/markdown, or auto" ||
-		strings.HasPrefix(message, "File was received as a plain string.")
+		message == "file must be a ChatGPT file object" ||
+		strings.HasPrefix(message, "invalid ChatGPT file object:")
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {

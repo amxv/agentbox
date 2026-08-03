@@ -102,6 +102,48 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	if !strings.Contains(string(schemaJSON), "body_content_type") || !strings.Contains(string(schemaJSON), "text/markdown") {
 		t.Fatalf("post_message schema = %s", schemaJSON)
 	}
+	var schema map[string]any
+	if err := json.Unmarshal(schemaJSON, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("post_message properties = %#v", schema["properties"])
+	}
+	fileSchema, ok := properties["file"].(map[string]any)
+	if !ok {
+		t.Fatalf("post_message file schema = %#v", properties["file"])
+	}
+	if fileSchema["type"] != "object" || fileSchema["additionalProperties"] != false {
+		t.Fatalf("post_message file schema = %#v", fileSchema)
+	}
+	if _, exists := fileSchema["anyOf"]; exists {
+		t.Fatalf("post_message file schema contains a string/object union: %#v", fileSchema)
+	}
+	fileProperties, ok := fileSchema["properties"].(map[string]any)
+	if !ok || len(fileProperties) != 4 {
+		t.Fatalf("post_message file properties = %#v", fileSchema["properties"])
+	}
+	for _, name := range []string{"download_url", "file_id", "mime_type", "file_name"} {
+		property, ok := fileProperties[name].(map[string]any)
+		if !ok || len(property) != 1 || property["type"] != "string" {
+			t.Fatalf("post_message file property %s = %#v", name, fileProperties[name])
+		}
+	}
+	fileRequired, ok := fileSchema["required"].([]any)
+	if !ok || len(fileRequired) != 2 || fileRequired[0] != "download_url" || fileRequired[1] != "file_id" {
+		t.Fatalf("post_message file required = %#v", fileSchema["required"])
+	}
+	topRequired, ok := schema["required"].([]any)
+	if !ok || len(topRequired) != 1 || topRequired[0] != "thread_id" {
+		t.Fatalf("post_message top-level required = %#v", schema["required"])
+	}
+	description := strings.ToLower(post.Description)
+	for _, forbidden := range []string{"file_", "download_url", "sandbox", "filesystem path", "plain filename"} {
+		if strings.Contains(description, forbidden) {
+			t.Fatalf("post_message description contains transport instruction %q: %s", forbidden, post.Description)
+		}
+	}
 	fileParams, ok := meta["openai/fileParams"].([]any)
 	if !ok || len(fileParams) != 1 || fileParams[0] != "file" {
 		t.Fatalf("file params meta = %#v", meta["openai/fileParams"])
@@ -115,6 +157,7 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 			t.Fatalf("create_thread schema contains visibility field %q: %s", forbidden, createSchemaJSON)
 		}
 	}
+
 	visibilitySchemaJSON, err := json.Marshal(visibility.InputSchema)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +166,91 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 		if !strings.Contains(string(visibilitySchemaJSON), required) {
 			t.Fatalf("manage_thread_visibility schema missing %q: %s", required, visibilitySchemaJSON)
 		}
+	}
+}
+
+func TestParseFileInputRequiresClosedStructuredObject(t *testing.T) {
+	valid, err := parseFileInput(json.RawMessage(`{"download_url":"https://files.openai.example/download/token","file_id":"file_abc123","mime_type":"text/markdown","file_name":"handoff.md"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valid.DownloadURL != "https://files.openai.example/download/token" || valid.FileID != "file_abc123" || valid.FileName == nil || *valid.FileName != "handoff.md" {
+		t.Fatalf("valid file = %#v", valid)
+	}
+
+	for _, raw := range []string{
+		`"file_abc123"`,
+		`"sandbox:/mnt/data/handoff.md"`,
+		`"https://files.openai.example/download/token"`,
+		`[{"download_url":"https://files.openai.example/download/token","file_id":"file_abc123"}]`,
+		`{"download_url":"https://files.openai.example/download/token","file_id":"file_abc123","extra":"not allowed"}`,
+		`{"download_url":"sandbox:/mnt/data/handoff.md","file_id":"file_abc123"}`,
+	} {
+		if _, err := parseFileInput(json.RawMessage(raw)); err == nil {
+			t.Fatalf("parseFileInput(%s) unexpectedly succeeded", raw)
+		}
+	}
+}
+
+func TestPostMessageAcceptsStructuredChatGPTArtifact(t *testing.T) {
+	ctx := context.Background()
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
+	auth := testAuth()
+	thread, err := svc.CreateThread(ctx, auth, "Structured artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := New(auth, svc)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "post_message",
+		Arguments: map[string]any{
+			"thread_id": thread.ID,
+			"body":      "attached from ChatGPT",
+			"file": map[string]any{
+				"download_url": "https://files.openai.example/download/token",
+				"file_id":      "file_abc123",
+				"mime_type":    "text/markdown",
+				"file_name":    "handoff.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("post_message result = %#v", result)
+	}
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Message types.Message `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Message.Assets) != 1 || payload.Message.Assets[0].FileName != "handoff.md" || payload.Message.Assets[0].SizeBytes != int64(len("fake-chatgpt-file")) {
+		t.Fatalf("message = %#v", payload.Message)
+	}
+	if len(store.Uploads) != 1 || store.Uploads[0].FileName != "handoff.md" || store.Uploads[0].SizeBytes != int64(len("fake-chatgpt-file")) {
+		t.Fatalf("uploads = %#v message assets = %#v", store.Uploads, payload.Message.Assets)
 	}
 }
 

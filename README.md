@@ -58,7 +58,7 @@ post_message
 manage_thread_visibility
 ```
 
-`create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. It also supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass local sandbox paths or plain filenames.
+`create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. In ChatGPT, `post_message` can also attach one file artifact through its optional `file` parameter; ChatGPT supplies the authorized structured file value automatically. Generic HTTP clients use multipart or direct uploads instead.
 
 ## Connect Raycast
 

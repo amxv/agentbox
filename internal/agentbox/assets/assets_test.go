@@ -27,15 +27,30 @@ func TestFilenameMimeAndStorageHelpers(t *testing.T) {
 }
 
 func TestNormalizeChatGPTFileInput(t *testing.T) {
-	file, err := NormalizeChatGPTFileInput(ChatGPTFileInput{RawString: "https://example.com/files/report.txt"})
+	fileName := " report.txt "
+	mimeType := " text/plain "
+	file, err := NormalizeChatGPTFileInput(ChatGPTFileInput{
+		DownloadURL: " https://files.openai.example/download/token ",
+		FileID:      " file_abc123 ",
+		FileName:    &fileName,
+		MimeType:    &mimeType,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if file.DownloadURL == "" || file.FileName == nil || *file.FileName != "report.txt" {
+	if file.DownloadURL != "https://files.openai.example/download/token" || file.FileID != "file_abc123" || file.FileName == nil || *file.FileName != "report.txt" || file.MimeType == nil || *file.MimeType != "text/plain" {
 		t.Fatalf("unexpected normalized file: %#v", file)
 	}
-	if _, err := NormalizeChatGPTFileInput(ChatGPTFileInput{RawString: "file_abc123"}); err == nil {
-		t.Fatal("expected plain file ID string error")
+	for _, input := range []ChatGPTFileInput{
+		{DownloadURL: "https://files.openai.example/download/token"},
+		{DownloadURL: "file_abc123", FileID: "file_abc123"},
+		{DownloadURL: "sandbox:/mnt/data/report.txt", FileID: "file_abc123"},
+		{DownloadURL: "/mnt/data/report.txt", FileID: "file_abc123"},
+		{DownloadURL: "https://user:secret@files.openai.example/report", FileID: "file_abc123"},
+	} {
+		if _, err := NormalizeChatGPTFileInput(input); err == nil {
+			t.Fatalf("expected invalid structured input error for %#v", input)
+		}
 	}
 }
 
