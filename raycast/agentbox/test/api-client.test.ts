@@ -20,6 +20,7 @@ import {
   visibilityTeamOptions,
   wouldSelfRevoke,
 } from "../src/visibility-model.ts";
+import { disambiguateUploadFileNames } from "../src/upload-file-names.ts";
 
 const timestamp = "2026-08-03T12:34:56Z";
 
@@ -473,6 +474,22 @@ test("batch upload validates response safety, metadata, ordering, and external P
   await assert.rejects(() => leaked.createUploadIntents("thr_upload", files), /forbidden field storage_key/);
 });
 
+test("duplicate attachment basenames are disambiguated without changing source order", () => {
+  assert.deepEqual(
+    disambiguateUploadFileNames([
+      "/tmp/first/report.txt",
+      "/tmp/second/report.txt",
+      "/tmp/third/report (2).txt",
+      "/tmp/fourth/report.txt",
+      "/tmp/fifth/REPORT.TXT",
+      "/tmp/sixth/archive",
+      "/tmp/seventh/archive",
+    ]),
+    ["report.txt", "report (3).txt", "report (2).txt", "report (4).txt", "REPORT (5).TXT", "archive", "archive (2)"],
+  );
+  assert.deepEqual(disambiguateUploadFileNames([]), []);
+});
+
 test("coded errors and attribution/visibility fallbacks remain stable", async () => {
   const client = new AgentboxClient({ baseUrl: "https://agentbox.example", apiKey: "secret" }, async () =>
     json({ code: "SCOPE_REQUIRED", error: "threads:read scope is required." }, 403),
@@ -535,6 +552,16 @@ test("Raycast source cannot regain tenant, persistence, attachment-public-URL, o
   assert.match(postSource, /thread\.last_message_preview/);
   assert.match(browseSource, /thread\.message_count/);
   assert.match(browseSource, /thread\.last_message_preview/);
+
+  const formHelpersSource = await readFile(path.join(sourceDirectory, "form-helpers.ts"), "utf8");
+  assert.match(formHelpersSource, /disambiguateUploadFileNames/);
+  assert.match(formHelpersSource, /paths\.map\(async \(filePath, index\)/);
+
+  const attachmentActionsSource = await readFile(path.join(sourceDirectory, "attachment-actions.tsx"), "utf8");
+  assert.match(attachmentActionsSource, /assetAvailability\(asset\)/);
+  assert.match(attachmentActionsSource, /availability\.available \?/);
+  const markdownSource = await readFile(path.join(sourceDirectory, "markdown.ts"), "utf8");
+  assert.match(markdownSource, /asset\.purged_at \|\| asset\.unavailable/);
 
   const manifest = JSON.parse(await readFile(path.join(testDirectory, "..", "package.json"), "utf8")) as {
     commands: Array<{ name: string; title: string }>;
