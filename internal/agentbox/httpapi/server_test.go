@@ -698,9 +698,43 @@ func TestHTTPUserCredentialsAreIsolatedAndRotatable(t *testing.T) {
 	cookieB := login("b@example.com")
 	firstA := create(cookieA)
 	keyB := create(cookieB)
-	rotatedA := create(cookieA)
-	if firstA.ID != rotatedA.ID || firstA.Key == rotatedA.Key {
-		t.Fatalf("rotation did not replace only the secret: first=%#v rotated=%#v", firstA, rotatedA)
+	duplicateA := httptest.NewRecorder()
+	duplicateARequest := httptest.NewRequest(http.MethodPost, "/api/keys", strings.NewReader(`{"name":"CHATGPT","purpose":"chatgpt"}`))
+	duplicateARequest.AddCookie(cookieA)
+	server.ServeHTTP(duplicateA, duplicateARequest)
+	if duplicateA.Code != http.StatusConflict || !strings.Contains(duplicateA.Body.String(), `"code":"CREDENTIAL_LABEL_CONFLICT"`) {
+		t.Fatalf("duplicate create status=%d body=%s", duplicateA.Code, duplicateA.Body.String())
+	}
+	beforeRotationAuth := httptest.NewRecorder()
+	beforeRotationRequest := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	beforeRotationRequest.Header.Set("authorization", "Bearer "+firstA.Key)
+	server.ServeHTTP(beforeRotationAuth, beforeRotationRequest)
+	if beforeRotationAuth.Code != http.StatusOK {
+		t.Fatalf("duplicate create invalidated original secret: status=%d body=%s", beforeRotationAuth.Code, beforeRotationAuth.Body.String())
+	}
+
+	rotateA := httptest.NewRecorder()
+	rotateARequest := httptest.NewRequest(http.MethodPatch, "/api/keys/"+firstA.ID, nil)
+	rotateARequest.AddCookie(cookieA)
+	server.ServeHTTP(rotateA, rotateARequest)
+	if rotateA.Code != http.StatusOK {
+		t.Fatalf("rotate credential status=%d body=%s", rotateA.Code, rotateA.Body.String())
+	}
+	var rotatedPayload struct {
+		Credential struct {
+			ID      string `json:"id"`
+			UserID  string `json:"user_id"`
+			Name    string `json:"name"`
+			Purpose string `json:"purpose"`
+			Secret  string `json:"key"`
+		} `json:"credential"`
+	}
+	if err := json.Unmarshal(rotateA.Body.Bytes(), &rotatedPayload); err != nil {
+		t.Fatal(err)
+	}
+	rotatedA := types.APIKey{ID: rotatedPayload.Credential.ID, UserID: rotatedPayload.Credential.UserID, Name: rotatedPayload.Credential.Name, Purpose: rotatedPayload.Credential.Purpose, Key: rotatedPayload.Credential.Secret}
+	if firstA.ID != rotatedA.ID || firstA.Key == rotatedA.Key || rotatedA.Key == "" {
+		t.Fatalf("stable-ID rotation did not replace only the secret: first=%#v rotated=%#v", firstA, rotatedA)
 	}
 	if firstA.UserID != "usr_a" || rotatedA.UserID != "usr_a" || keyB.UserID != "usr_b" || keyB.ID == rotatedA.ID {
 		t.Fatalf("credential ownership crossed users: first=%#v rotated=%#v b=%#v", firstA, rotatedA, keyB)

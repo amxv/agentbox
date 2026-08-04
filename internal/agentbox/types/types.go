@@ -317,6 +317,7 @@ type Asset struct {
 	PurgedByUserID           *string `json:"-"`
 	PurgeLastAttemptAt       *string `json:"-"`
 	PurgeError               *string `json:"-"`
+	Position                 int64   `json:"-"`
 }
 
 type AssetAuthorizationLease interface {
@@ -365,6 +366,7 @@ type Message struct {
 	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
 	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
 	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	Position                 int64   `json:"-"`
 }
 
 type ThreadWithMessages struct {

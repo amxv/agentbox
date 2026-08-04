@@ -910,7 +910,7 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 		}
 		key, err := s.service.CreateAPIKeyWithPurposeAndScopes(r.Context(), *authContext, input.Name, input.Purpose, scopes)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeServiceError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{

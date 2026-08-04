@@ -8,9 +8,9 @@ begin
     raise exception 'migration 0017 is not recorded in schema_migrations';
   end if;
   if not exists (
-    select 1 from schema_migrations where version = '0022'
+    select 1 from schema_migrations where version = '0023'
   ) then
-    raise exception 'migration 0022 is not recorded in schema_migrations';
+    raise exception 'migration 0023 is not recorded in schema_migrations';
   end if;
 
   if to_regclass('tenants') is not null then
@@ -61,12 +61,34 @@ begin
   ) then
     raise exception 'message thread reference is orphaned';
   end if;
+  if exists (select 1 from messages where position <= 0) then
+    raise exception 'message with invalid ordinal remains';
+  end if;
+  if exists (
+    select 1
+    from messages
+    group by thread_id, position
+    having count(*) > 1
+  ) then
+    raise exception 'duplicate message ordinal remains';
+  end if;
   if exists (
     select 1 from assets a
     left join messages m on m.id = a.message_id
     where m.id is null
   ) then
     raise exception 'asset message reference is orphaned';
+  end if;
+  if exists (select 1 from assets where position <= 0) then
+    raise exception 'asset with invalid ordinal remains';
+  end if;
+  if exists (
+    select 1
+    from assets
+    group by message_id, position
+    having count(*) > 1
+  ) then
+    raise exception 'duplicate asset ordinal remains';
   end if;
   if exists (
     select 1 from pending_uploads p

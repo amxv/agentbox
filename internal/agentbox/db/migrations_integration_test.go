@@ -237,6 +237,178 @@ func TestMigrateThroughRejectsUnknownVersionBeforeOpeningPostgres(t *testing.T) 
 	}
 }
 
+func TestContentOrdinalMigrationBackfillsTiesAndEnforcesConstraints(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.migrateThrough(ctx, "0016"); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "ordinal-backfill@example.com", "Ordinal Backfill", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.migrateThrough(ctx, "0022"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into threads (id, owner_user_id, title, created_by)
+values ('thr_ordinal_backfill', $1, 'Ordinal backfill', 'test')
+`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into messages (id, thread_id, author, body, created_at)
+values
+  ('msg_ordinal_b', 'thr_ordinal_backfill', 'test', 'second by deterministic legacy key', '2026-08-04T00:00:00Z'),
+  ('msg_ordinal_a', 'thr_ordinal_backfill', 'test', 'first by deterministic legacy key', '2026-08-04T00:00:00Z')
+`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by, created_at)
+values
+  ('ast_ordinal_b', 'msg_ordinal_a', 'ordinal/b', 'b.txt', 1, 'test', '2026-08-04T00:00:00Z'),
+  ('ast_ordinal_a', 'msg_ordinal_a', 'ordinal/a', 'a.txt', 1, 'test', '2026-08-04T00:00:00Z')
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.migrateThrough(ctx, "0023"); err != nil {
+		t.Fatal(err)
+	}
+
+	var messageOrder string
+	if err := repository.pool.QueryRow(ctx, `
+select string_agg(id || ':' || position::text, ',' order by position)
+from messages where thread_id = 'thr_ordinal_backfill'
+`).Scan(&messageOrder); err != nil {
+		t.Fatal(err)
+	}
+	if messageOrder != "msg_ordinal_a:1,msg_ordinal_b:2" {
+		t.Fatalf("message backfill order=%q", messageOrder)
+	}
+	var assetOrder string
+	if err := repository.pool.QueryRow(ctx, `
+select string_agg(id || ':' || position::text, ',' order by position)
+from assets where message_id = 'msg_ordinal_a'
+`).Scan(&assetOrder); err != nil {
+		t.Fatal(err)
+	}
+	if assetOrder != "ast_ordinal_a:1,ast_ordinal_b:2" {
+		t.Fatalf("asset backfill order=%q", assetOrder)
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into messages (id, thread_id, position, author, body)
+values ('msg_ordinal_duplicate', 'thr_ordinal_backfill', 1, 'test', 'duplicate')
+`); err == nil {
+		t.Fatal("duplicate message ordinal was accepted")
+	}
+	if _, err := repository.pool.Exec(ctx, `
+insert into assets (id, message_id, position, storage_key, file_name, size_bytes, created_by)
+values ('ast_ordinal_zero', 'msg_ordinal_a', 0, 'ordinal/zero', 'zero.txt', 1, 'test')
+`); err == nil {
+		t.Fatal("non-positive asset ordinal was accepted")
+	}
+}
+
+func TestContentOrdinalsPreserveLiveOrderAcrossReadersAndTimestampTies(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "ordinal-live@example.com", "Ordinal Live", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := types.AuthContext{UserID: owner.ID, UserDisplayName: owner.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard", SessionID: "sess_ordinal_live"}
+	thread, first, err := repository.CreateThreadWithMessage(ctx, owner.ID, "Ordinal live", auth, "first", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withAssets, err := repository.PostMessage(ctx, owner.ID, thread.ID, auth, "with-assets", nil, []types.NewAsset{
+		{StorageKey: "ordinal/first", FileName: "first.txt", SizeBytes: 1},
+		{StorageKey: "ordinal/second", FileName: "second.txt", SizeBytes: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		message types.Message
+		err     error
+	}
+	results := make(chan result, 4)
+	start := make(chan struct{})
+	for index := 0; index < 4; index++ {
+		index := index
+		go func() {
+			<-start
+			message, err := repository.PostMessage(context.Background(), owner.ID, thread.ID, auth, fmt.Sprintf("concurrent-%d", index), nil, nil)
+			results <- result{message: message, err: err}
+		}()
+	}
+	close(start)
+	expected := []types.Message{first, withAssets}
+	for index := 0; index < 4; index++ {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		expected = append(expected, result.message)
+	}
+	sort.Slice(expected, func(i, j int) bool { return expected[i].Position < expected[j].Position })
+	for index, message := range expected {
+		if message.Position != int64(index+1) {
+			t.Fatalf("allocated message positions=%#v", expected)
+		}
+	}
+	if _, err := repository.pool.Exec(ctx, `update messages set created_at = '2026-08-04T00:00:00Z' where thread_id = $1`, thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.pool.Exec(ctx, `update assets set created_at = '2026-08-04T00:00:00Z' where message_id = $1`, withAssets.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	assertOrder := func(name string, messages []types.Message) {
+		t.Helper()
+		if len(messages) != len(expected) {
+			t.Fatalf("%s message count=%d want=%d", name, len(messages), len(expected))
+		}
+		for index := range expected {
+			if messages[index].Body != expected[index].Body {
+				t.Fatalf("%s order[%d]=%q want=%q", name, index, messages[index].Body, expected[index].Body)
+			}
+		}
+		if len(messages[1].Assets) != 2 || messages[1].Assets[0].FileName != "first.txt" || messages[1].Assets[1].FileName != "second.txt" {
+			t.Fatalf("%s asset order=%#v", name, messages[1].Assets)
+		}
+	}
+
+	authenticated, err := repository.GetThread(ctx, owner.ID, thread.ID)
+	if err != nil || authenticated == nil {
+		t.Fatalf("authenticated detail=%#v err=%v", authenticated, err)
+	}
+	assertOrder("authenticated", authenticated.Messages)
+	ownerDetail, err := repository.GetOwnerContentThread(ctx, owner.ID, thread.ID)
+	if err != nil || ownerDetail == nil {
+		t.Fatalf("owner detail=%#v err=%v", ownerDetail, err)
+	}
+	assertOrder("owner", ownerDetail.Messages)
+
+	publish := true
+	token := "agpub_ordinal_live"
+	if _, err := repository.ManageThreadVisibility(ctx, owner.ID, thread.ID, types.ManageThreadVisibilityInput{Public: &publish, PublicToken: token, PublicTokenHash: hashSecret(token), PublicTokenPrefix: "agpub_ordinal"}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := repository.AcquirePublicThreadLease(ctx, hashSecret(token))
+	if err != nil || lease == nil {
+		t.Fatalf("public lease=%#v err=%v", lease, err)
+	}
+	publicThread := lease.Thread()
+	if err := lease.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertOrder("public", publicThread.Messages)
+}
+
 func TestCutoverPostcheckSQLPassesFinalSchema(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

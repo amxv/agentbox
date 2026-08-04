@@ -28,9 +28,9 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{sql: `insert into messages (id, thread_id, author, body) values ('msg_snapshot', 'thr_snapshot', 'test', 'body')`},
-		{sql: `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`},
-		{sql: `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by, created_by_user_id, purged_at, purged_by_user_id) values ('ast_snapshot_purged', 'msg_snapshot', 'agentbox/deleted.bin', 'deleted.bin', 9, 'test', $1, now(), $1)`, args: []any{owner.ID}},
+		{sql: `insert into messages (id, thread_id, position, author, body) values ('msg_snapshot', 'thr_snapshot', 1, 'test', 'body')`},
+		{sql: `insert into assets (id, message_id, position, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'msg_snapshot', 1, 'agentbox/existing.bin', 'existing.bin', 12, 'test')`},
+		{sql: `insert into assets (id, message_id, position, storage_key, file_name, size_bytes, created_by, created_by_user_id, purged_at, purged_by_user_id) values ('ast_snapshot_purged', 'msg_snapshot', 2, 'agentbox/deleted.bin', 'deleted.bin', 9, 'test', $1, now(), $1)`, args: []any{owner.ID}},
 		{sql: `insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`},
 		{sql: `insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_snapshot', 'upl_snapshot', 'agentbox/pending.bin', 'staging', now() + interval '1 hour')`},
 	}
@@ -116,10 +116,10 @@ func TestOpenContentSnapshotRepresentsStagingAndFinalCleanupStates(t *testing.T)
 	if _, err := repository.pool.Exec(ctx, `insert into threads (id, owner_user_id, title, created_by) values ('thr_pending_inventory', $1, 'Pending inventory', 'test')`, owner.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.pool.Exec(ctx, `insert into messages (id, thread_id, author, body) values ('msg_pending_inventory', 'thr_pending_inventory', 'test', 'body')`); err != nil {
+	if _, err := repository.pool.Exec(ctx, `insert into messages (id, thread_id, position, author, body) values ('msg_pending_inventory', 'thr_pending_inventory', 1, 'test', 'body')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.pool.Exec(ctx, `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_pending_inventory', 'msg_pending_inventory', 'shared/key.bin', 'shared.bin', 3, 'test')`); err != nil {
+	if _, err := repository.pool.Exec(ctx, `insert into assets (id, message_id, position, storage_key, file_name, size_bytes, created_by) values ('ast_pending_inventory', 'msg_pending_inventory', 1, 'shared/key.bin', 'shared.bin', 3, 'test')`); err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{

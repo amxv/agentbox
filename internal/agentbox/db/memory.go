@@ -73,6 +73,36 @@ type memoryUploadCleanup struct {
 	LastError    string
 }
 
+func messagePositionLess(left types.Message, right types.Message) bool {
+	if left.Position > 0 && right.Position > 0 && left.Position != right.Position {
+		return left.Position < right.Position
+	}
+	if left.CreatedAt != right.CreatedAt {
+		return left.CreatedAt < right.CreatedAt
+	}
+	return left.ID < right.ID
+}
+
+func messagePositionAfter(left types.Message, right types.Message) bool {
+	return messagePositionLess(right, left)
+}
+
+func assetPositionLess(left types.Asset, right types.Asset) bool {
+	if left.Position > 0 && right.Position > 0 && left.Position != right.Position {
+		return left.Position < right.Position
+	}
+	if left.CreatedAt != right.CreatedAt {
+		return left.CreatedAt < right.CreatedAt
+	}
+	return left.ID < right.ID
+}
+
+func sortMessageAssets(message *types.Message) {
+	sort.SliceStable(message.Assets, func(i, j int) bool {
+		return assetPositionLess(message.Assets[i], message.Assets[j])
+	})
+}
+
 func (m *MemoryRepository) ResolveThreadAccess(_ context.Context, userID string, threadID string) (*types.ThreadAccess, error) {
 	for _, thread := range m.Threads {
 		if thread.ID == threadID {
@@ -256,13 +286,11 @@ func (m *MemoryRepository) AcquirePublicThreadLease(_ context.Context, tokenHash
 					copyMessage.Assets = append(copyMessage.Assets, asset)
 				}
 			}
+			sortMessageAssets(&copyMessage)
 			messages = append(messages, copyMessage)
 		}
 		sort.SliceStable(messages, func(i, j int) bool {
-			if messages[i].CreatedAt != messages[j].CreatedAt {
-				return messages[i].CreatedAt < messages[j].CreatedAt
-			}
-			return messages[i].ID < messages[j].ID
+			return messagePositionLess(messages[i], messages[j])
 		})
 		return memoryPublicThreadLease{thread: types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: types.ThreadVisibility{ThreadID: thread.ID, OwnerUserID: thread.OwnerUserID}}}, nil
 	}
@@ -439,7 +467,8 @@ func (m *MemoryRepository) SearchThreadsPage(_ context.Context, userID string, p
 		}
 		messageCount := 0
 		lastBody := ""
-		lastAt := ""
+		var lastMessage types.Message
+		hasLastMessage := false
 		matchedBody := ""
 		titleMatches := strings.Contains(strings.ToLower(thread.Title), query)
 		for _, message := range m.Messages {
@@ -447,9 +476,10 @@ func (m *MemoryRepository) SearchThreadsPage(_ context.Context, userID string, p
 				continue
 			}
 			messageCount++
-			if message.CreatedAt >= lastAt {
+			if !hasLastMessage || messagePositionAfter(message, lastMessage) {
 				lastBody = message.Body
-				lastAt = message.CreatedAt
+				lastMessage = message
+				hasLastMessage = true
 			}
 			if matchedBody == "" && strings.Contains(strings.ToLower(message.Body), query) {
 				matchedBody = message.Body
@@ -555,15 +585,19 @@ func (m *MemoryRepository) ownerContentThreadsPage(ownerUserID string, query str
 			}
 		}
 		messageCount := 0
-		lastBody, lastAt, matchedBody := "", "", ""
+		lastBody, matchedBody := "", ""
+		var lastMessage types.Message
+		hasLastMessage := false
 		titleMatches := queryLower == "" || strings.Contains(strings.ToLower(thread.Title), queryLower)
 		for _, message := range m.Messages {
 			if message.ThreadID != thread.ID {
 				continue
 			}
 			messageCount++
-			if message.CreatedAt >= lastAt {
-				lastBody, lastAt = message.Body, message.CreatedAt
+			if !hasLastMessage || messagePositionAfter(message, lastMessage) {
+				lastBody = message.Body
+				lastMessage = message
+				hasLastMessage = true
 			}
 			if queryLower != "" && matchedBody == "" && strings.Contains(strings.ToLower(message.Body), queryLower) {
 				matchedBody = message.Body
@@ -621,13 +655,11 @@ func (m *MemoryRepository) GetOwnerContentThread(_ context.Context, ownerUserID 
 				}
 			}
 			message.Assets = assets
+			sortMessageAssets(&message)
 			messages = append(messages, message)
 		}
 		sort.SliceStable(messages, func(i, j int) bool {
-			if messages[i].CreatedAt != messages[j].CreatedAt {
-				return messages[i].CreatedAt < messages[j].CreatedAt
-			}
-			return messages[i].ID < messages[j].ID
+			return messagePositionLess(messages[i], messages[j])
 		})
 		thread.VisibilitySummary = m.threadVisibilitySummary(thread, ownerUserID)
 		thread.VisibilitySummary.Private = len(thread.VisibilitySummary.SharedTeams) == 0 && !thread.VisibilitySummary.Public
@@ -698,6 +730,7 @@ func (m *MemoryRepository) CreateThreadWithMessage(_ context.Context, userID str
 		CreatedByKeyID:           optionalString(auth.KeyID),
 		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
 		CreatedByActorName:       optionalString(auth.ActorName),
+		Position:                 1,
 	}
 	m.Threads = append(m.Threads, thread)
 	m.Messages = append(m.Messages, message)
@@ -723,10 +756,11 @@ func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID 
 				}
 			}
 			message.Assets = assets
+			sortMessageAssets(&message)
 			messages = append(messages, message)
 		}
 		sort.Slice(messages, func(i, j int) bool {
-			return messages[i].CreatedAt < messages[j].CreatedAt
+			return messagePositionLess(messages[i], messages[j])
 		})
 		thread.VisibilitySummary = m.threadVisibilitySummary(thread, userID)
 		return &types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: m.threadVisibility(thread)}, nil
@@ -1139,9 +1173,17 @@ func (m *MemoryRepository) postMessageUnchecked(_ context.Context, userID string
 		CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
 		CreatedByActorName:       optionalString(auth.ActorName),
 	}
+	for _, existing := range m.Messages {
+		if existing.ThreadID == threadID && existing.Position >= message.Position {
+			message.Position = existing.Position + 1
+		}
+	}
+	if message.Position == 0 {
+		message.Position = 1
+	}
 	m.Messages = append(m.Messages, message)
 	m.Threads[threadIndex].UpdatedAt = isoMillis(time.Now())
-	for _, asset := range newAssets {
+	for index, asset := range newAssets {
 		createdAsset := types.Asset{
 			ID:                       "asset_" + uuid.NewString(),
 			MessageID:                message.ID,
@@ -1157,6 +1199,7 @@ func (m *MemoryRepository) postMessageUnchecked(_ context.Context, userID string
 			CreatedByKeyID:           optionalString(auth.KeyID),
 			CreatedByUserDisplayName: optionalString(auth.UserDisplayName),
 			CreatedByActorName:       optionalString(auth.ActorName),
+			Position:                 int64(index + 1),
 		}
 		m.Assets = append(m.Assets, createdAsset)
 		message.Assets = append(message.Assets, createdAsset)

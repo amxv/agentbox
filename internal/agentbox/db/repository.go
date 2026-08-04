@@ -737,7 +737,7 @@ select id, thread_id, author, body, body_content_type, created_at,
        created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
 from messages
 where thread_id = $1
-order by created_at, id
+order by position
 `, threadID)
 	if err != nil {
 		return nil, err
@@ -750,6 +750,7 @@ order by created_at, id
 			rows.Close()
 			return nil, err
 		}
+		message.Position = int64(len(messages) + 1)
 		messageIndex[message.ID] = len(messages)
 		messages = append(messages, message)
 	}
@@ -766,7 +767,7 @@ select a.id, a.message_id, a.storage_key, a.file_name, a.mime_type, a.size_bytes
 from assets a
 join messages m on m.id = a.message_id
 where m.thread_id = $1
-order by a.created_at, a.id
+order by m.position, a.position
 `, threadID)
 	if err != nil {
 		return nil, err
@@ -778,6 +779,7 @@ order by a.created_at, a.id
 			return nil, err
 		}
 		if index, ok := messageIndex[asset.MessageID]; ok {
+			asset.Position = int64(len(messages[index].Assets) + 1)
 			messages[index].Assets = append(messages[index].Assets, asset)
 		}
 	}
@@ -804,7 +806,7 @@ select
   created_by_actor_name
 from messages
 where thread_id = $1
-order by created_at, id
+order by position
 `, threadID)
 	if err != nil {
 		return nil, err
@@ -817,6 +819,7 @@ order by created_at, id
 		if err != nil {
 			return nil, err
 		}
+		message.Position = int64(len(messages) + 1)
 		messageIndex[message.ID] = len(messages)
 		messages = append(messages, message)
 	}
@@ -845,7 +848,7 @@ select
 from assets a
 join messages m on m.id = a.message_id
 where m.thread_id = $1
-order by a.created_at, a.id
+order by m.position, a.position
 `, threadID)
 	if err != nil {
 		return nil, err
@@ -857,6 +860,7 @@ order by a.created_at, a.id
 			return nil, err
 		}
 		if index, ok := messageIndex[asset.MessageID]; ok {
+			asset.Position = int64(len(messages[index].Assets) + 1)
 			messages[index].Assets = append(messages[index].Assets, asset)
 		}
 	}
@@ -905,7 +909,7 @@ select
     select left(summary_latest.body, 512)
     from messages summary_latest
     where summary_latest.thread_id = t.id
-    order by summary_latest.created_at desc, summary_latest.id desc
+    order by summary_latest.position desc
     limit 1
   ), '') as last_message_body,
 `+threadVisibilitySummarySelect+`
@@ -992,8 +996,8 @@ select
   t.created_by_user_display_name,
   t.created_by_actor_name,
   (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
-  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc limit 1), '') as last_message_body,
-  coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $2 order by mm.created_at desc limit 1), '') as matched_message_body,
+  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.position desc limit 1), '') as last_message_body,
+  coalesce((select mm.body from messages mm where mm.thread_id = t.id and mm.body ilike $2 order by mm.position desc limit 1), '') as matched_message_body,
 `+threadVisibilitySummarySelect+`
 from threads t
 where `+normalThreadAccessPredicate+`
@@ -1120,8 +1124,8 @@ select
   owner.updated_at,
   owner.disabled_at,
   (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
-  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc, lm.id desc limit 1), '') as last_message_body,
-  coalesce((select mm.body from messages mm where $2 <> '' and mm.thread_id = t.id and mm.body ilike $2 order by mm.created_at desc, mm.id desc limit 1), '') as matched_message_body
+  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.position desc limit 1), '') as last_message_body,
+  coalesce((select mm.body from messages mm where $2 <> '' and mm.thread_id = t.id and mm.body ilike $2 order by mm.position desc limit 1), '') as matched_message_body
 from threads t
 join users owner on owner.id = t.owner_user_id
 where ($2 = '' or t.title ilike $2 or exists (
@@ -1181,7 +1185,7 @@ select
   owner.updated_at,
   owner.disabled_at,
   (select count(*)::int from messages counted_message where counted_message.thread_id = t.id) as message_count,
-  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.created_at desc, lm.id desc limit 1), '') as last_message_body,
+  coalesce((select lm.body from messages lm where lm.thread_id = t.id order by lm.position desc limit 1), '') as last_message_body,
   ''::text as matched_message_body
 from threads t
 join users owner on owner.id = t.owner_user_id
@@ -1342,16 +1346,17 @@ returning id, owner_user_id, title, created_at, updated_at, created_by,
 	messageID := "msg_" + uuid.NewString()
 	message, err := scanMessage(tx.QueryRow(ctx, `
 insert into messages (
-  id, thread_id, author, body, body_content_type, created_by_user_id, created_by_key_id,
+  id, thread_id, position, author, body, body_content_type, created_by_user_id, created_by_key_id,
   created_by_user_display_name, created_by_actor_name
 )
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+values ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)
 returning id, thread_id, author, body, body_content_type, created_at,
           created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
 `, messageID, thread.ID, auth.ActorName, body, bodyContentType, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)), nil)
 	if err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
+	message.Position = 1
 	if _, err := tx.Exec(ctx, `update threads t set updated_at = now() where `+normalThreadAccessPredicate+` and t.id = $2`, userID, thread.ID); err != nil {
 		return types.Thread{}, types.Message{}, err
 	}
@@ -1386,64 +1391,9 @@ where `+normalThreadAccessPredicate+` and t.id = $2
 		return nil, err
 	}
 
-	messageRows, err := r.pool.Query(ctx, `
-select id, thread_id, author, body, body_content_type, created_at,
-       created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
-from messages
-where thread_id = $1
-order by created_at asc
-`, threadID)
+	messages, err := r.loadThreadMessages(ctx, threadID)
 	if err != nil {
 		return nil, err
-	}
-	defer messageRows.Close()
-
-	messages := []types.Message{}
-	messageIDs := []string{}
-	for messageRows.Next() {
-		message, err := scanMessage(messageRows, nil)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, message)
-		messageIDs = append(messageIDs, message.ID)
-	}
-	if err := messageRows.Err(); err != nil {
-		return nil, err
-	}
-
-	if len(messageIDs) > 0 {
-		assetRows, err := r.pool.Query(ctx, `
-select id, message_id, storage_key, file_name, mime_type, size_bytes,
-       created_at, created_by, created_by_user_id, created_by_key_id,
-       created_by_user_display_name, created_by_actor_name,
-       purged_at, purged_by_user_id, purge_last_attempt_at, purge_error
-from assets
-where message_id = any($1)
-order by created_at asc
-`, messageIDs)
-		if err != nil {
-			return nil, err
-		}
-		defer assetRows.Close()
-
-		assetsByMessage := map[string][]types.Asset{}
-		for assetRows.Next() {
-			asset, err := scanAsset(assetRows)
-			if err != nil {
-				return nil, err
-			}
-			assetsByMessage[asset.MessageID] = append(assetsByMessage[asset.MessageID], asset)
-		}
-		if err := assetRows.Err(); err != nil {
-			return nil, err
-		}
-		for i := range messages {
-			messages[i].Assets = assetsByMessage[messages[i].ID]
-			if messages[i].Assets == nil {
-				messages[i].Assets = []types.Asset{}
-			}
-		}
 	}
 
 	visibility, err := r.GetThreadVisibility(ctx, userID, threadID)
@@ -2019,39 +1969,49 @@ where storage_key = any($1) and object_kind = 'final_candidate'
 }
 
 func postMessageTx(ctx context.Context, tx pgx.Tx, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, newAssets []types.NewAsset) (types.Message, error) {
+	var nextPosition int64
+	if err := tx.QueryRow(ctx, `
+select coalesce(max(position), 0) + 1
+from messages
+where thread_id = $1
+`, threadID).Scan(&nextPosition); err != nil {
+		return types.Message{}, err
+	}
 	messageID := "msg_" + uuid.NewString()
 	message, err := scanMessage(tx.QueryRow(ctx, `
 insert into messages (
-  id, thread_id, author, body, body_content_type, created_by_user_id, created_by_key_id,
+  id, thread_id, position, author, body, body_content_type, created_by_user_id, created_by_key_id,
   created_by_user_display_name, created_by_actor_name
 )
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 returning id, thread_id, author, body, body_content_type, created_at,
           created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
-`, messageID, threadID, auth.ActorName, body, bodyContentType, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)), nil)
+`, messageID, threadID, nextPosition, auth.ActorName, body, bodyContentType, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)), nil)
 	if err != nil {
 		return types.Message{}, err
 	}
+	message.Position = nextPosition
 	if _, err := tx.Exec(ctx, `update threads set updated_at = now() where id = $1`, threadID); err != nil {
 		return types.Message{}, err
 	}
 	message.Assets = []types.Asset{}
-	for _, asset := range newAssets {
+	for index, asset := range newAssets {
 		assetID := "asset_" + uuid.NewString()
 		created, err := scanAsset(tx.QueryRow(ctx, `
 insert into assets (
-  id, message_id, storage_key, file_name, mime_type, size_bytes,
+  id, message_id, position, storage_key, file_name, mime_type, size_bytes,
   created_by, created_by_user_id, created_by_key_id, created_by_user_display_name, created_by_actor_name
 )
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 returning id, message_id, storage_key, file_name, mime_type, size_bytes,
           created_at, created_by, created_by_user_id, created_by_key_id,
           created_by_user_display_name, created_by_actor_name,
           purged_at, purged_by_user_id, purge_last_attempt_at, purge_error
-`, assetID, messageID, asset.StorageKey, asset.FileName, asset.MimeType, asset.SizeBytes, auth.ActorName, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)))
+`, assetID, messageID, int64(index+1), asset.StorageKey, asset.FileName, asset.MimeType, asset.SizeBytes, auth.ActorName, userID, optionalString(auth.KeyID), optionalString(auth.UserDisplayName), optionalString(auth.ActorName)))
 		if err != nil {
 			return types.Message{}, err
 		}
+		created.Position = int64(index + 1)
 		message.Assets = append(message.Assets, created)
 	}
 	return message, nil
