@@ -1,0 +1,15 @@
+import { proxyToGoBackend } from "../../../../../_proxy/proxy";
+
+export const runtime = "nodejs";
+
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ assetId: string }> }
+) {
+  const { assetId } = await context.params;
+  const url = new URL(request.url);
+  return proxyToGoBackend({
+    path: `/api/owner/content/assets/${encodeURIComponent(assetId)}/preview${url.search}`,
+    request
+  });
+}
