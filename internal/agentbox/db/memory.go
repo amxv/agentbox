@@ -1328,10 +1328,7 @@ func (m *MemoryRepository) CreateAPIKey(_ context.Context, userID string, name s
 	}
 	for i := range m.APIKeys {
 		if m.APIKeys[i].UserID == userID && strings.EqualFold(m.APIKeys[i].Name, name) && m.APIKeys[i].RevokedAt == nil {
-			created.ID = m.APIKeys[i].ID
-			created.CreatedAt = m.APIKeys[i].CreatedAt
-			m.APIKeys[i] = created
-			return created, nil
+			return types.APIKey{}, types.ErrCredentialLabelConflict
 		}
 	}
 	m.APIKeys = append(m.APIKeys, created)
@@ -1365,22 +1362,7 @@ func (m *MemoryRepository) raycastSetupBaseURL(keyID string) string {
 	return m.RaycastSetupURLs[keyID]
 }
 
-func (m *MemoryRepository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error) {
-	if !rotate {
-		state, err := m.GetOnboardingState(ctx, userID)
-		if err != nil {
-			return types.APIKey{}, types.OnboardingState{}, err
-		}
-		for _, step := range state.Steps {
-			if step.Connector == connector && step.Credential != nil {
-				return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialExists
-			}
-		}
-	}
-	created, err := m.CreateAPIKey(ctx, userID, name, purpose, tokenHash, tokenPrefix, scopes)
-	if err != nil {
-		return types.APIKey{}, types.OnboardingState{}, err
-	}
+func (m *MemoryRepository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string, rotate bool) (types.APIKey, types.OnboardingState, error) {
 	now := isoMillis(time.Now().UTC())
 	index := m.onboardingIndex(userID)
 	if index < 0 {
@@ -1388,22 +1370,73 @@ func (m *MemoryRepository) CreateOnboardingCredential(ctx context.Context, userI
 		index = len(m.Onboarding) - 1
 	}
 	state := &m.Onboarding[index]
-	state.DismissedAt = nil
-	state.UpdatedAt = &now
-	updated := false
-	for stepIndex := range state.Steps {
-		if state.Steps[stepIndex].Connector != connector {
+	stepIndex := -1
+	linkedCredentialID := ""
+	for candidateIndex := range state.Steps {
+		if state.Steps[candidateIndex].Connector != connector {
 			continue
 		}
+		stepIndex = candidateIndex
+		if state.Steps[candidateIndex].Credential != nil {
+			linkedCredentialID = state.Steps[candidateIndex].Credential.ID
+		}
+		break
+	}
+	linkedKeyIndex := -1
+	if linkedCredentialID != "" {
+		for keyIndex := range m.APIKeys {
+			if m.APIKeys[keyIndex].ID == linkedCredentialID && m.APIKeys[keyIndex].UserID == userID && m.APIKeys[keyIndex].RevokedAt == nil {
+				linkedKeyIndex = keyIndex
+				break
+			}
+		}
+	}
+	if rotate && linkedKeyIndex < 0 {
+		return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialNotFound
+	}
+	if !rotate && linkedKeyIndex >= 0 {
+		return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialExists
+	}
+
+	var created types.APIKey
+	if rotate {
+		for keyIndex := range m.APIKeys {
+			if keyIndex != linkedKeyIndex && m.APIKeys[keyIndex].UserID == userID && strings.EqualFold(m.APIKeys[keyIndex].Name, name) && m.APIKeys[keyIndex].RevokedAt == nil {
+				return types.APIKey{}, types.OnboardingState{}, types.ErrCredentialLabelConflict
+			}
+		}
+		key := &m.APIKeys[linkedKeyIndex]
+		key.Name = name
+		key.Purpose = purpose
+		key.TokenHash = tokenHash
+		key.TokenPrefix = tokenPrefix
+		key.KeyMasked = maskSecret(tokenPrefix)
+		key.Scopes = append([]string(nil), scopes...)
+		key.UpdatedAt = now
+		key.LastUsedAt = nil
+		created = *key
+	} else {
+		var err error
+		created, err = m.CreateAPIKey(ctx, userID, name, purpose, tokenHash, tokenPrefix, scopes)
+		if err != nil {
+			return types.APIKey{}, types.OnboardingState{}, err
+		}
+	}
+	if purpose == "raycast" {
+		if m.RaycastSetupURLs == nil {
+			m.RaycastSetupURLs = map[string]string{}
+		}
+		m.RaycastSetupURLs[created.ID] = strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")
+	}
+	state.DismissedAt = nil
+	state.UpdatedAt = &now
+	if stepIndex >= 0 {
 		state.Steps[stepIndex].Credential = &created
 		state.Steps[stepIndex].UpdatedAt = &now
 		if state.Steps[stepIndex].CompletedAt == nil {
 			state.Steps[stepIndex].CompletedAt = &now
 		}
-		updated = true
-		break
-	}
-	if !updated {
+	} else {
 		state.Steps = append(state.Steps, types.OnboardingStep{Connector: connector, CompletedAt: &now, UpdatedAt: &now, Credential: &created})
 	}
 	sort.SliceStable(state.Steps, func(i, j int) bool {
@@ -1589,12 +1622,23 @@ func (m *MemoryRepository) RevokeAPIKeyByID(_ context.Context, keyID string) (bo
 	return false, nil
 }
 
-func (m *MemoryRepository) RotateAPIKeyForUserByID(_ context.Context, userID string, keyID string, tokenHash string, tokenPrefix string) (*types.APIKey, error) {
+func (m *MemoryRepository) RotateAPIKeyForUserByID(_ context.Context, userID string, keyID string, tokenHash string, tokenPrefix string, setupBaseURL string) (*types.APIKey, string, error) {
 	now := isoMillis(time.Now().UTC())
 	for index := range m.APIKeys {
 		key := &m.APIKeys[index]
 		if key.UserID != strings.TrimSpace(userID) || key.ID != strings.TrimSpace(keyID) || key.RevokedAt != nil {
 			continue
+		}
+		resolvedBaseURL := m.raycastSetupBaseURL(key.ID)
+		if key.Purpose == "raycast" && strings.TrimSpace(resolvedBaseURL) == "" {
+			resolvedBaseURL = strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")
+			if resolvedBaseURL == "" {
+				return nil, "", types.ErrRaycastSetupUnavailable
+			}
+			if m.RaycastSetupURLs == nil {
+				m.RaycastSetupURLs = map[string]string{}
+			}
+			m.RaycastSetupURLs[key.ID] = resolvedBaseURL
 		}
 		key.TokenHash = tokenHash
 		key.TokenPrefix = tokenPrefix
@@ -1602,16 +1646,24 @@ func (m *MemoryRepository) RotateAPIKeyForUserByID(_ context.Context, userID str
 		key.UpdatedAt = now
 		key.LastUsedAt = nil
 		copyKey := *key
-		return &copyKey, nil
+		return &copyKey, resolvedBaseURL, nil
 	}
-	return nil, nil
+	return nil, "", nil
 }
 
-func (m *MemoryRepository) GetAPIKeySetup(_ context.Context, userID string, keyID string) (*types.APIKey, string, error) {
+func (m *MemoryRepository) GetAPIKeySetup(_ context.Context, userID string, keyID string, setupBaseURL string) (*types.APIKey, string, error) {
 	for _, key := range m.APIKeys {
 		if key.UserID == strings.TrimSpace(userID) && key.ID == strings.TrimSpace(keyID) {
 			copyKey := key
-			return &copyKey, m.raycastSetupBaseURL(key.ID), nil
+			baseURL := m.raycastSetupBaseURL(key.ID)
+			if key.Purpose == "raycast" && strings.TrimSpace(baseURL) == "" && strings.TrimSpace(setupBaseURL) != "" {
+				baseURL = strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")
+				if m.RaycastSetupURLs == nil {
+					m.RaycastSetupURLs = map[string]string{}
+				}
+				m.RaycastSetupURLs[key.ID] = baseURL
+			}
+			return &copyKey, baseURL, nil
 		}
 	}
 	return nil, "", nil

@@ -19,6 +19,12 @@ export async function proxyToGoBackend({ path, request }: ProxyContext) {
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("content-length");
+  headers.delete("forwarded");
+  headers.delete("x-forwarded-host");
+  headers.delete("x-forwarded-proto");
+  headers.delete("x-forwarded-port");
+  headers.set("x-forwarded-host", incoming.host);
+  headers.set("x-forwarded-proto", incoming.protocol.replace(/:$/, ""));
 
   const init: RequestInit & { duplex?: "half" } = {
     method: request.method,

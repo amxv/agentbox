@@ -37,3 +37,29 @@ func TestValidateRuntimeConfigAcceptsConfiguredBackend(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidateRuntimeConfigRequiresTrustedProductionDashboardOrigin(t *testing.T) {
+	base := config.Config{
+		DatabaseURL:       "postgres://example",
+		R2AccountID:       "acct",
+		R2AccessKeyID:     "key",
+		R2SecretAccessKey: "secret",
+		R2Bucket:          "bucket",
+		Environment:       "production",
+	}
+	if err := validateRuntimeConfig(base); err == nil || !strings.Contains(err.Error(), "AGENTBOX_APP_PUBLIC_URL") {
+		t.Fatalf("missing production dashboard origin error=%v", err)
+	}
+	base.AppPublicURL = "http://dashboard.example"
+	if err := validateRuntimeConfig(base); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("insecure production dashboard origin error=%v", err)
+	}
+	base.AppPublicURL = "https://dashboard.example/path"
+	if err := validateRuntimeConfig(base); err == nil || !strings.Contains(err.Error(), "without a path") {
+		t.Fatalf("pathful production dashboard origin error=%v", err)
+	}
+	base.AppPublicURL = "https://dashboard.example/"
+	if err := validateRuntimeConfig(base); err != nil {
+		t.Fatalf("trusted production dashboard origin rejected: %v", err)
+	}
+}

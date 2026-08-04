@@ -72,3 +72,36 @@ func TestLoadFromEnvMaintenanceSettings(t *testing.T) {
 		t.Fatalf("maintenance config = %#v", cfg)
 	}
 }
+
+func TestTrustedAppPublicURLNormalizesOnlyDashboardOrigins(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  Config
+		want    string
+		wantErr bool
+	}{
+		{name: "development fallback omitted", config: Config{}, want: ""},
+		{name: "https origin", config: Config{AppPublicURL: "https://Dashboard.Example:8443/"}, want: "https://Dashboard.Example:8443"},
+		{name: "development http", config: Config{AppPublicURL: "http://127.0.0.1:3000"}, want: "http://127.0.0.1:3000"},
+		{name: "production missing", config: Config{Environment: "production"}, wantErr: true},
+		{name: "production http", config: Config{Environment: "production", AppPublicURL: "http://dashboard.example"}, wantErr: true},
+		{name: "path rejected", config: Config{AppPublicURL: "https://dashboard.example/share"}, wantErr: true},
+		{name: "query rejected", config: Config{AppPublicURL: "https://dashboard.example?next=evil"}, wantErr: true},
+		{name: "userinfo rejected", config: Config{AppPublicURL: "https://user@dashboard.example"}, wantErr: true},
+		{name: "non-http rejected", config: Config{AppPublicURL: "javascript:alert(1)"}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := test.config.TrustedAppPublicURL()
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("TrustedAppPublicURL()=%q, want error", got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("TrustedAppPublicURL()=%q err=%v want=%q", got, err, test.want)
+			}
+		})
+	}
+}

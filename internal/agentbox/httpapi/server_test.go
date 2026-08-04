@@ -2262,6 +2262,32 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	}
 }
 
+func TestRequestBaseURLUsesConfiguredOriginAndIgnoresForwardedSpoofing(t *testing.T) {
+	configured := NewServer(config.Config{Environment: "production", AppPublicURL: "https://dashboard.example/"}, nil)
+	request := httptest.NewRequest(http.MethodGet, "http://backend.internal/api/health", nil)
+	request.Host = "backend.internal"
+	request.Header.Set("Forwarded", `host=evil.example;proto=https`)
+	request.Header.Set("X-Forwarded-Host", "evil.example")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if got := configured.requestBaseURL(request); got != "https://dashboard.example" {
+		t.Fatalf("configured request base URL=%q", got)
+	}
+
+	development := NewServer(config.Config{}, nil)
+	if got := development.requestBaseURL(request); got != "http://backend.internal" {
+		t.Fatalf("development request base URL trusted forwarded spoofing: %q", got)
+	}
+	request.Host = "evil.example/path"
+	if got := development.requestBaseURL(request); got != "" {
+		t.Fatalf("invalid development host produced origin %q", got)
+	}
+
+	invalidProduction := NewServer(config.Config{Environment: "production", AppPublicURL: "http://dashboard.example"}, nil)
+	if got := invalidProduction.requestBaseURL(request); got != "" {
+		t.Fatalf("invalid production origin produced %q", got)
+	}
+}
+
 func TestHTTPOnboardingIsBrowserOnlyExplicitAndResumable(t *testing.T) {
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})

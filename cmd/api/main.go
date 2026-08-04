@@ -67,10 +67,13 @@ func validateRuntimeConfig(cfg config.Config) error {
 	if cfg.R2Bucket == "" {
 		missing = append(missing, "R2_BUCKET")
 	}
-	if len(missing) == 0 {
-		return nil
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required backend configuration: %v", missing)
 	}
-	return fmt.Errorf("missing required backend configuration: %v", missing)
+	if _, err := cfg.TrustedAppPublicURL(); err != nil {
+		return err
+	}
+	return nil
 }
 
 type repositoryWithClose interface {

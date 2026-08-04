@@ -18,6 +18,7 @@ var ErrTeamNotFound = errors.New("team not found")
 var ErrTeamSlugConflict = errors.New("team slug is already in use")
 var ErrInvalidOnboardingConnector = errors.New("invalid onboarding connector")
 var ErrOnboardingCredentialExists = errors.New("onboarding credential already exists")
+var ErrOnboardingCredentialNotFound = errors.New("onboarding credential is not active")
 var ErrThreadPublicLinkExists = errors.New("thread public link already exists")
 var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
 var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
@@ -26,6 +27,7 @@ var ErrPendingUploadUnavailable = errors.New("pending upload is unavailable, exp
 var ErrPendingUploadQuotaExceeded = errors.New("pending upload quota exceeded")
 var ErrPendingUploadFinalizing = errors.New("pending upload is already finalizing")
 var ErrCredentialLabelConflict = errors.New("an active credential already uses that label")
+var ErrRaycastSetupUnavailable = errors.New("raycast setup metadata is unavailable")
 
 type Actor struct {
 	Name    string `json:"name"`

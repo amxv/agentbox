@@ -63,7 +63,7 @@ type Repository interface {
 	MarkUploadCleanupFailure(ctx context.Context, cleanupID string, message string) error
 	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
 	CreateRaycastAPIKey(ctx context.Context, userID string, name string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string) (types.APIKey, error)
-	CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error)
+	CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string, rotate bool) (types.APIKey, types.OnboardingState, error)
 	GetOnboardingState(ctx context.Context, userID string) (types.OnboardingState, error)
 	DismissOnboarding(ctx context.Context, userID string) (types.OnboardingState, error)
 	ListAPIKeys(ctx context.Context, userID string) ([]types.APIKey, error)
@@ -73,8 +73,8 @@ type Repository interface {
 	RevokeAPIKey(ctx context.Context, userID string, name string) (bool, error)
 	RevokeAPIKeyForUserByID(ctx context.Context, userID string, keyID string) (bool, error)
 	RevokeAPIKeyByID(ctx context.Context, keyID string) (bool, error)
-	RotateAPIKeyForUserByID(ctx context.Context, userID string, keyID string, tokenHash string, tokenPrefix string) (*types.APIKey, error)
-	GetAPIKeySetup(ctx context.Context, userID string, keyID string) (*types.APIKey, string, error)
+	RotateAPIKeyForUserByID(ctx context.Context, userID string, keyID string, tokenHash string, tokenPrefix string, setupBaseURL string) (*types.APIKey, string, error)
+	GetAPIKeySetup(ctx context.Context, userID string, keyID string, setupBaseURL string) (*types.APIKey, string, error)
 	FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error)
 	MarkAPIKeyUsed(ctx context.Context, keyID string) error
 	BootstrapOwner(ctx context.Context, email string, displayName string, passwordHash string) (types.User, error)
@@ -971,6 +971,9 @@ func (s *Service) CreateAPIKeyWithPurposeAndScopes(ctx context.Context, auth typ
 		return types.APIKey{}, err
 	}
 	created, err := s.repo.CreateAPIKey(ctx, auth.UserID, name, normalizeCredentialPurpose(purpose), hashSecret(secret), tokenPrefix(secret), normalizeScopes(scopes))
+	if errors.Is(err, types.ErrCredentialLabelConflict) {
+		return types.APIKey{}, CodedError{Code: "CREDENTIAL_LABEL_CONFLICT", Message: "An active credential already uses that label. Choose a distinct label or rotate that exact credential.", Err: err}
+	}
 	if err != nil {
 		return types.APIKey{}, err
 	}
@@ -1008,9 +1011,19 @@ func (s *Service) CreateOnboardingConnection(ctx context.Context, auth types.Aut
 	if err != nil {
 		return OnboardingConnectionResult{}, err
 	}
-	credential, state, err := s.repo.CreateOnboardingCredential(ctx, auth.UserID, connector, name, purpose, hashSecret(secret), tokenPrefix(secret), scopes, rotate)
+	setupBaseURL := ""
+	if connector == "raycast" {
+		setupBaseURL = baseURL
+	}
+	credential, state, err := s.repo.CreateOnboardingCredential(ctx, auth.UserID, connector, name, purpose, hashSecret(secret), tokenPrefix(secret), scopes, setupBaseURL, rotate)
 	if errors.Is(err, types.ErrOnboardingCredentialExists) {
 		return OnboardingConnectionResult{}, CodedError{Code: "ONBOARDING_CREDENTIAL_EXISTS", Message: "This connector already has an active credential. Choose rotate to replace it.", Err: err}
+	}
+	if errors.Is(err, types.ErrOnboardingCredentialNotFound) {
+		return OnboardingConnectionResult{}, CodedError{Code: "ONBOARDING_CREDENTIAL_NOT_FOUND", Message: "This connector does not have an active credential to rotate. Reconnect it instead.", Err: err}
+	}
+	if errors.Is(err, types.ErrCredentialLabelConflict) {
+		return OnboardingConnectionResult{}, CodedError{Code: "CREDENTIAL_LABEL_CONFLICT", Message: "An unrelated active credential already uses this connector label. Rename or revoke that credential before reconnecting onboarding.", Err: err}
 	}
 	if err != nil {
 		return OnboardingConnectionResult{}, err
@@ -1113,7 +1126,7 @@ func (s *Service) CreateRaycastInstallation(ctx context.Context, auth types.Auth
 	}, nil
 }
 
-func (s *Service) RotateAPIKeyByID(ctx context.Context, auth types.AuthContext, keyID string) (types.APIKey, *types.RaycastSetupMaterial, error) {
+func (s *Service) RotateAPIKeyByID(ctx context.Context, auth types.AuthContext, keyID string, baseURL string) (types.APIKey, *types.RaycastSetupMaterial, error) {
 	if err := requireUserAuthContext(auth); err != nil {
 		return types.APIKey{}, nil, err
 	}
@@ -1125,7 +1138,10 @@ func (s *Service) RotateAPIKeyByID(ctx context.Context, auth types.AuthContext, 
 	if err != nil {
 		return types.APIKey{}, nil, err
 	}
-	rotated, err := s.repo.RotateAPIKeyForUserByID(ctx, auth.UserID, keyID, hashSecret(secret), tokenPrefix(secret))
+	rotated, setupBaseURL, err := s.repo.RotateAPIKeyForUserByID(ctx, auth.UserID, keyID, hashSecret(secret), tokenPrefix(secret), strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if errors.Is(err, types.ErrRaycastSetupUnavailable) {
+		return types.APIKey{}, nil, CodedError{Code: "RAYCAST_SETUP_UNAVAILABLE", Message: "Raycast setup metadata is unavailable for this credential, so its secret was not rotated.", Err: err}
+	}
 	if err != nil {
 		return types.APIKey{}, nil, err
 	}
@@ -1135,14 +1151,7 @@ func (s *Service) RotateAPIKeyByID(ctx context.Context, auth types.AuthContext, 
 	rotated.Key = secret
 	var setup *types.RaycastSetupMaterial
 	if rotated.Purpose == "raycast" {
-		metadata, baseURL, err := s.repo.GetAPIKeySetup(ctx, auth.UserID, rotated.ID)
-		if err != nil {
-			return types.APIKey{}, nil, err
-		}
-		if metadata == nil || strings.TrimSpace(baseURL) == "" {
-			return types.APIKey{}, nil, CodedError{Code: "RAYCAST_SETUP_UNAVAILABLE", Message: "Raycast setup metadata is unavailable for this credential."}
-		}
-		material := raycastSetupMaterial(baseURL, secret, rotated.ID, rotated.Name)
+		material := raycastSetupMaterial(setupBaseURL, secret, rotated.ID, rotated.Name)
 		setup = &material
 	}
 	return *rotated, setup, nil
@@ -1166,21 +1175,21 @@ func (s *Service) RevokeAPIKeyByID(ctx context.Context, auth types.AuthContext, 
 	return nil
 }
 
-func (s *Service) RaycastInstallationSetup(ctx context.Context, auth types.AuthContext, keyID string) (types.RaycastSetupMaterial, error) {
+func (s *Service) RaycastInstallationSetup(ctx context.Context, auth types.AuthContext, keyID string, baseURL string) (types.RaycastSetupMaterial, error) {
 	if err := requireUserAuthContext(auth); err != nil {
 		return types.RaycastSetupMaterial{}, err
 	}
-	key, baseURL, err := s.repo.GetAPIKeySetup(ctx, auth.UserID, strings.TrimSpace(keyID))
+	key, setupBaseURL, err := s.repo.GetAPIKeySetup(ctx, auth.UserID, strings.TrimSpace(keyID), strings.TrimRight(strings.TrimSpace(baseURL), "/"))
 	if err != nil {
 		return types.RaycastSetupMaterial{}, err
 	}
 	if key == nil || key.Purpose != "raycast" {
 		return types.RaycastSetupMaterial{}, CodedError{Code: "CREDENTIAL_NOT_FOUND", Message: "Raycast installation credential not found.", Err: ErrAPIKeyNotFound}
 	}
-	if strings.TrimSpace(baseURL) == "" {
+	if strings.TrimSpace(setupBaseURL) == "" {
 		return types.RaycastSetupMaterial{}, CodedError{Code: "RAYCAST_SETUP_UNAVAILABLE", Message: "Raycast setup metadata is unavailable for this credential."}
 	}
-	return raycastSetupMaterial(baseURL, "", key.ID, key.Name), nil
+	return raycastSetupMaterial(setupBaseURL, "", key.ID, key.Name), nil
 }
 
 func (s *Service) RevokeAPIKey(ctx context.Context, auth types.AuthContext, name string) error {

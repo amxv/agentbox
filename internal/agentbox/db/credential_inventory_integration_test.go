@@ -53,23 +53,23 @@ func TestPostgresCredentialInventoryRetainsRaycastInstallationsAndRevocations(t 
 		t.Fatalf("second page=%#v", secondPage)
 	}
 
-	setupKey, setupBaseURL, err := repository.GetAPIKeySetup(ctx, owner.ID, macbook.ID)
+	setupKey, setupBaseURL, err := repository.GetAPIKeySetup(ctx, owner.ID, macbook.ID, "https://dashboard.example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if setupKey == nil || setupKey.ID != macbook.ID || setupBaseURL != "https://dashboard.example" {
 		t.Fatalf("persisted Raycast setup key=%#v base=%q", setupKey, setupBaseURL)
 	}
-	if crossUserKey, crossUserBase, err := repository.GetAPIKeySetup(ctx, other.ID, macbook.ID); err != nil || crossUserKey != nil || crossUserBase != "" {
+	if crossUserKey, crossUserBase, err := repository.GetAPIKeySetup(ctx, other.ID, macbook.ID, "https://dashboard.example"); err != nil || crossUserKey != nil || crossUserBase != "" {
 		t.Fatalf("cross-user setup leaked: key=%#v base=%q err=%v", crossUserKey, crossUserBase, err)
 	}
 
 	rotatedSecret := "agb_pg_macbook_rotated"
-	rotated, err := repository.RotateAPIKeyForUserByID(ctx, owner.ID, macbook.ID, hashSecret(rotatedSecret), "agb_pg_macbo")
+	rotated, rotatedBaseURL, err := repository.RotateAPIKeyForUserByID(ctx, owner.ID, macbook.ID, hashSecret(rotatedSecret), "agb_pg_macbo", "https://dashboard.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rotated == nil || rotated.ID != macbook.ID || rotated.TokenHash == macbook.TokenHash {
+	if rotated == nil || rotated.ID != macbook.ID || rotated.TokenHash == macbook.TokenHash || rotatedBaseURL != "https://dashboard.example" {
 		t.Fatalf("stable-ID rotation failed: before=%#v after=%#v", macbook, rotated)
 	}
 	if key, user, err := repository.FindAPIKeyBySecret(ctx, macbookSecret); err != nil || key != nil || user != nil {
@@ -81,7 +81,7 @@ func TestPostgresCredentialInventoryRetainsRaycastInstallationsAndRevocations(t 
 	if key, user, err := repository.FindAPIKeyBySecret(ctx, studioSecret); err != nil || key == nil || user == nil || key.ID != studio.ID {
 		t.Fatalf("rotating MacBook affected Studio: key=%#v user=%#v err=%v", key, user, err)
 	}
-	if crossUserRotation, err := repository.RotateAPIKeyForUserByID(ctx, other.ID, macbook.ID, hashSecret("cross"), "cross"); err != nil || crossUserRotation != nil {
+	if crossUserRotation, _, err := repository.RotateAPIKeyForUserByID(ctx, other.ID, macbook.ID, hashSecret("cross"), "cross", "https://dashboard.example"); err != nil || crossUserRotation != nil {
 		t.Fatalf("cross-user rotation changed credential: key=%#v err=%v", crossUserRotation, err)
 	}
 

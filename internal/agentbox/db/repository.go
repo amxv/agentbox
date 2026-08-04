@@ -2076,16 +2076,13 @@ func (r *Repository) CreateAPIKey(ctx context.Context, userID string, name strin
 	created, err := scanAPIKey(r.pool.QueryRow(ctx, `
 insert into api_keys (id, user_id, name, purpose, token_prefix, token_hash, scopes)
 values ($1, $2, $3, $4, $5, $6, $7)
-on conflict (user_id, lower(name)) where revoked_at is null do update
-set purpose = excluded.purpose,
-    token_prefix = excluded.token_prefix,
-    token_hash = excluded.token_hash,
-    scopes = excluded.scopes,
-    updated_at = now(),
-    last_used_at = null
 returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
 `, id, userID, name, purpose, tokenPrefix, tokenHash, scopes))
 	if err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+			return types.APIKey{}, types.ErrCredentialLabelConflict
+		}
 		return types.APIKey{}, err
 	}
 	return created, nil
@@ -2108,12 +2105,12 @@ returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_
 	return created, nil
 }
 
-func (r *Repository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error) {
+func (r *Repository) CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string, rotate bool) (types.APIKey, types.OnboardingState, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return types.APIKey{}, types.OnboardingState{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `
 insert into user_onboarding (user_id)
@@ -2132,23 +2129,23 @@ for update
 `, userID).Scan(&lockedUserID); err != nil {
 		return types.APIKey{}, types.OnboardingState{}, err
 	}
-	if !rotate {
-		var activeExists bool
-		if err := tx.QueryRow(ctx, `
-select exists (
-  select 1
-  from user_onboarding_steps s
-  join api_keys k on k.id = s.credential_id
-  where s.user_id = $1
-    and s.connector = $2
-    and k.revoked_at is null
-)
-`, userID, connector).Scan(&activeExists); err != nil {
-			return types.APIKey{}, types.OnboardingState{}, err
-		}
-		if activeExists {
-			return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialExists
-		}
+	var linkedCredentialID *string
+	var linkedRevokedAt *time.Time
+	err = tx.QueryRow(ctx, `
+select s.credential_id, k.revoked_at
+from user_onboarding_steps s
+left join api_keys k on k.id = s.credential_id and k.user_id = s.user_id
+where s.user_id = $1 and s.connector = $2
+`, userID, connector).Scan(&linkedCredentialID, &linkedRevokedAt)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return types.APIKey{}, types.OnboardingState{}, err
+	}
+	activeLinkedCredential := err == nil && linkedCredentialID != nil && linkedRevokedAt == nil
+	if rotate && !activeLinkedCredential {
+		return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialNotFound
+	}
+	if !rotate && activeLinkedCredential {
+		return types.APIKey{}, types.OnboardingState{}, types.ErrOnboardingCredentialExists
 	}
 	if _, err := tx.Exec(ctx, `
 update user_onboarding
@@ -2159,19 +2156,34 @@ where user_id = $1
 		return types.APIKey{}, types.OnboardingState{}, err
 	}
 
-	created, err := scanAPIKey(tx.QueryRow(ctx, `
-insert into api_keys (id, user_id, name, purpose, token_prefix, token_hash, scopes)
-values ($1, $2, $3, $4, $5, $6, $7)
-on conflict (user_id, lower(name)) where revoked_at is null do update
-set purpose = excluded.purpose,
-    token_prefix = excluded.token_prefix,
-    token_hash = excluded.token_hash,
-    scopes = excluded.scopes,
+	normalizedSetupBaseURL := strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")
+	var created types.APIKey
+	if rotate {
+		created, err = scanAPIKey(tx.QueryRow(ctx, `
+update api_keys
+set name = $3,
+    purpose = $4,
+    token_prefix = $5,
+    token_hash = $6,
+    scopes = $7,
+    setup_base_url = case when $4 = 'raycast' then nullif($8, '') else setup_base_url end,
     updated_at = now(),
     last_used_at = null
+where id = $1 and user_id = $2 and revoked_at is null
 returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
-`, "key_"+uuid.NewString(), userID, name, purpose, tokenPrefix, tokenHash, scopes))
+`, *linkedCredentialID, userID, name, purpose, tokenPrefix, tokenHash, scopes, normalizedSetupBaseURL))
+	} else {
+		created, err = scanAPIKey(tx.QueryRow(ctx, `
+insert into api_keys (id, user_id, name, purpose, token_prefix, token_hash, scopes, setup_base_url)
+values ($1, $2, $3, $4, $5, $6, $7, case when $4 = 'raycast' then nullif($8, '') else null end)
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+`, "key_"+uuid.NewString(), userID, name, purpose, tokenPrefix, tokenHash, scopes, normalizedSetupBaseURL))
+	}
 	if err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+			return types.APIKey{}, types.OnboardingState{}, types.ErrCredentialLabelConflict
+		}
 		return types.APIKey{}, types.OnboardingState{}, err
 	}
 
@@ -2405,51 +2417,74 @@ where id = $1
 	return tag.RowsAffected() > 0, nil
 }
 
-func (r *Repository) RotateAPIKeyForUserByID(ctx context.Context, userID string, keyID string, tokenHash string, tokenPrefix string) (*types.APIKey, error) {
-	key, err := scanAPIKey(r.pool.QueryRow(ctx, `
-update api_keys
-set token_hash = $3,
-    token_prefix = $4,
-    updated_at = now(),
-    last_used_at = null
-where user_id = $1 and id = $2 and revoked_at is null
-returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
-`, strings.TrimSpace(userID), strings.TrimSpace(keyID), tokenHash, tokenPrefix))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+func (r *Repository) RotateAPIKeyForUserByID(ctx context.Context, userID string, keyID string, tokenHash string, tokenPrefix string, setupBaseURL string) (*types.APIKey, string, error) {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return &key, nil
-}
+	defer func() { _ = tx.Rollback(ctx) }()
 
-func (r *Repository) GetAPIKeySetup(ctx context.Context, userID string, keyID string) (*types.APIKey, string, error) {
-	row := r.pool.QueryRow(ctx, `
+	key, persistedBaseURL, err := scanAPIKeyWithSetup(tx.QueryRow(ctx, `
 select id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at,
        coalesce(setup_base_url, '')
 from api_keys
-where user_id = $1 and id = $2
-`, strings.TrimSpace(userID), strings.TrimSpace(keyID))
-	var createdAt time.Time
-	var updatedAt time.Time
-	var lastUsedAt *time.Time
-	var revokedAt *time.Time
-	var setupBaseURL string
-	key := types.APIKey{}
-	err := row.Scan(&key.ID, &key.UserID, &key.Name, &key.Purpose, &key.TokenPrefix, &key.TokenHash, &key.Scopes, &createdAt, &updatedAt, &lastUsedAt, &revokedAt, &setupBaseURL)
+where user_id = $1 and id = $2 and revoked_at is null
+for update
+`, strings.TrimSpace(userID), strings.TrimSpace(keyID)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", nil
 	}
 	if err != nil {
 		return nil, "", err
 	}
-	key.KeyMasked = maskSecret(key.TokenPrefix)
-	key.CreatedAt = isoMillis(createdAt)
-	key.UpdatedAt = isoMillis(updatedAt)
-	key.LastUsedAt = optionalISOTime(lastUsedAt)
-	key.RevokedAt = optionalISOTime(revokedAt)
-	return &key, setupBaseURL, nil
+	resolvedBaseURL := strings.TrimRight(strings.TrimSpace(persistedBaseURL), "/")
+	if key.Purpose == "raycast" && resolvedBaseURL == "" {
+		resolvedBaseURL = strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")
+		if resolvedBaseURL == "" {
+			return nil, "", types.ErrRaycastSetupUnavailable
+		}
+	}
+	rotated, err := scanAPIKey(tx.QueryRow(ctx, `
+update api_keys
+set token_hash = $3,
+    token_prefix = $4,
+    setup_base_url = case when purpose = 'raycast' then nullif($5, '') else setup_base_url end,
+    updated_at = now(),
+    last_used_at = null
+where user_id = $1 and id = $2 and revoked_at is null
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at
+`, strings.TrimSpace(userID), strings.TrimSpace(keyID), tokenHash, tokenPrefix, resolvedBaseURL))
+	if err != nil {
+		return nil, "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, "", err
+	}
+	return &rotated, resolvedBaseURL, nil
+}
+
+func (r *Repository) GetAPIKeySetup(ctx context.Context, userID string, keyID string, setupBaseURL string) (*types.APIKey, string, error) {
+	key, resolvedBaseURL, err := scanAPIKeyWithSetup(r.pool.QueryRow(ctx, `
+update api_keys
+set setup_base_url = case
+      when purpose = 'raycast' and coalesce(setup_base_url, '') = '' then nullif($3, '')
+      else setup_base_url
+    end,
+    updated_at = case
+      when purpose = 'raycast' and coalesce(setup_base_url, '') = '' and nullif($3, '') is not null then now()
+      else updated_at
+    end
+where user_id = $1 and id = $2
+returning id, user_id, name, purpose, token_prefix, token_hash, scopes, created_at, updated_at, last_used_at, revoked_at,
+          coalesce(setup_base_url, '')
+`, strings.TrimSpace(userID), strings.TrimSpace(keyID), strings.TrimRight(strings.TrimSpace(setupBaseURL), "/")))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return &key, resolvedBaseURL, nil
 }
 
 func (r *Repository) FindAPIKeyBySecret(ctx context.Context, key string) (*types.APIKey, *types.User, error) {
@@ -3714,6 +3749,35 @@ func scanAPIKey(row threadScanner) (types.APIKey, error) {
 		key.RevokedAt = &value
 	}
 	return key, err
+}
+
+func scanAPIKeyWithSetup(row threadScanner) (types.APIKey, string, error) {
+	var createdAt time.Time
+	var updatedAt time.Time
+	var lastUsedAt *time.Time
+	var revokedAt *time.Time
+	var setupBaseURL string
+	key := types.APIKey{}
+	err := row.Scan(
+		&key.ID,
+		&key.UserID,
+		&key.Name,
+		&key.Purpose,
+		&key.TokenPrefix,
+		&key.TokenHash,
+		&key.Scopes,
+		&createdAt,
+		&updatedAt,
+		&lastUsedAt,
+		&revokedAt,
+		&setupBaseURL,
+	)
+	key.KeyMasked = maskSecret(key.TokenPrefix)
+	key.CreatedAt = isoMillis(createdAt)
+	key.UpdatedAt = isoMillis(updatedAt)
+	key.LastUsedAt = optionalISOTime(lastUsedAt)
+	key.RevokedAt = optionalISOTime(revokedAt)
+	return key, setupBaseURL, err
 }
 
 func scanAPIKeyAndUser(row threadScanner) (types.APIKey, types.User, error) {

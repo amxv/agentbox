@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -72,6 +74,40 @@ func (c Config) IsProduction() bool {
 
 func (c Config) IsVercel() bool {
 	return os.Getenv("VERCEL") == "1" || c.VercelEnvironment != ""
+}
+
+// TrustedAppPublicURL validates and normalizes the dashboard origin used in
+// public links and connector setup material. Production deployments must use
+// an explicit HTTPS origin so backend request headers can never choose where
+// AgentBox sends users or persists connector configuration.
+func (c Config) TrustedAppPublicURL() (string, error) {
+	raw := strings.TrimSpace(c.AppPublicURL)
+	if raw == "" {
+		if c.IsProduction() {
+			return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL is required in production")
+		}
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must be an absolute dashboard origin: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must use http or https")
+	}
+	if c.IsProduction() && parsed.Scheme != "https" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must use https in production")
+	}
+	if parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must include a trusted host and no user information")
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must be an origin without a path")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must not include a query or fragment")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func multipartLimit(maxFileSize int64) int64 {

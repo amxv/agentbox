@@ -67,7 +67,13 @@ func main() {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	check(err)
 	server := &http.Server{
-		Handler: httpapi.NewServer(config.Config{AppPublicURL: "https://dashboard.example"}, svc),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Forwarded-Host") != "dashboard.example" || r.Header.Get("X-Forwarded-Proto") != "https" || r.Header.Get("Forwarded") != "" {
+				http.Error(w, "dashboard proxy did not replace forwarded headers", http.StatusBadRequest)
+				return
+			}
+			httpapi.NewServer(config.Config{AppPublicURL: "https://dashboard.example"}, svc).ServeHTTP(w, r)
+		}),
 	}
 	go func() {
 		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {

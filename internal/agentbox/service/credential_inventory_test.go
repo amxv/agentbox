@@ -67,7 +67,7 @@ func TestRaycastInstallationsShareCredentialInventoryAndRemainIndependent(t *tes
 	}
 
 	oldMacbookSecret := macbook.Credential.Key
-	rotated, rotatedSetup, err := svc.RotateAPIKeyByID(ctx, authA, macbook.Credential.ID)
+	rotated, rotatedSetup, err := svc.RotateAPIKeyByID(ctx, authA, macbook.Credential.ID, "https://dashboard.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestRaycastInstallationsShareCredentialInventoryAndRemainIndependent(t *tes
 		t.Fatalf("rotating MacBook affected Studio: auth=%#v err=%v", authenticated, err)
 	}
 
-	reopened, err := svc.RaycastInstallationSetup(ctx, authA, macbook.Credential.ID)
+	reopened, err := svc.RaycastInstallationSetup(ctx, authA, macbook.Credential.ID, "https://dashboard.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,18 +115,65 @@ func TestRaycastInstallationsShareCredentialInventoryAndRemainIndependent(t *tes
 		t.Fatalf("revocation history missing: %#v", inventory.Credentials)
 	}
 
-	if _, _, err := svc.RotateAPIKeyByID(ctx, authB, macbook.Credential.ID); codedErrorCode(err) != "CREDENTIAL_NOT_FOUND" {
+	if _, _, err := svc.RotateAPIKeyByID(ctx, authB, macbook.Credential.ID, "https://dashboard.example"); codedErrorCode(err) != "CREDENTIAL_NOT_FOUND" {
 		t.Fatalf("cross-user rotate error=%v", err)
 	}
 	if err := svc.RevokeAPIKeyByID(ctx, authB, macbook.Credential.ID); codedErrorCode(err) != "CREDENTIAL_NOT_FOUND" {
 		t.Fatalf("cross-user revoke error=%v", err)
 	}
-	if _, err := svc.RaycastInstallationSetup(ctx, authB, macbook.Credential.ID); codedErrorCode(err) != "CREDENTIAL_NOT_FOUND" {
+	if _, err := svc.RaycastInstallationSetup(ctx, authB, macbook.Credential.ID, "https://dashboard.example"); codedErrorCode(err) != "CREDENTIAL_NOT_FOUND" {
 		t.Fatalf("cross-user setup error=%v", err)
 	}
 	otherInventory, err := svc.ListAPIKeysPage(ctx, authB, types.PageRequest{Limit: 10})
 	if err != nil || len(otherInventory.Credentials) != 0 {
 		t.Fatalf("cross-user inventory leaked: page=%#v err=%v", otherInventory, err)
+	}
+}
+
+func TestCredentialCreateConflictsAndLegacyRaycastRotationIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	repo := &db.MemoryRepository{}
+	svc := New(repo, &assets.FakeStore{})
+	user := types.User{ID: "usr_atomic_credentials", Email: "atomic@example.invalid", DisplayName: "Atomic"}
+	repo.Users = append(repo.Users, user)
+	browser := types.AuthContext{UserID: user.ID, UserDisplayName: user.DisplayName, SubjectType: types.AuthSubjectUserSession, ActorName: "Web dashboard", SessionID: "sess_atomic"}
+
+	created, err := svc.CreateAPIKeyWithPurposeAndScopes(ctx, browser, "Local Mac", "local", []string{"threads:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateAPIKeyWithPurposeAndScopes(ctx, browser, "local mac", "local", []string{"threads:write"}); codedErrorCode(err) != "CREDENTIAL_LABEL_CONFLICT" {
+		t.Fatalf("duplicate create error=%v", err)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(ctx, created.Key); err != nil || authenticated == nil || authenticated.KeyID != created.ID {
+		t.Fatalf("duplicate create replaced original credential: auth=%#v err=%v", authenticated, err)
+	}
+
+	legacySecret := "agb_legacy_raycast"
+	legacy, err := repo.CreateAPIKey(ctx, user.ID, "Legacy Raycast", "raycast", hashSecret(legacySecret), tokenPrefix(legacySecret), ConnectorAPIKeyScopes("raycast"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.RotateAPIKeyByID(ctx, browser, legacy.ID, ""); codedErrorCode(err) != "RAYCAST_SETUP_UNAVAILABLE" {
+		t.Fatalf("legacy rotation without trusted origin error=%v", err)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(ctx, legacySecret); err != nil || authenticated == nil || authenticated.KeyID != legacy.ID {
+		t.Fatalf("failed legacy rotation invalidated old secret: auth=%#v err=%v", authenticated, err)
+	}
+
+	rotated, setup, err := svc.RotateAPIKeyByID(ctx, browser, legacy.ID, "https://dashboard.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup == nil || setup.BaseURL != "https://dashboard.example" || setup.APIKey != rotated.Key || rotated.ID != legacy.ID {
+		t.Fatalf("legacy rotation did not atomically backfill setup: rotated=%#v setup=%#v", rotated, setup)
+	}
+	if authenticated, err := svc.AuthenticateAPIKey(ctx, legacySecret); err != nil || authenticated != nil {
+		t.Fatalf("successful legacy rotation left old secret active: auth=%#v err=%v", authenticated, err)
+	}
+	reopened, err := svc.RaycastInstallationSetup(ctx, browser, legacy.ID, "https://other.example")
+	if err != nil || reopened.BaseURL != "https://dashboard.example" || reopened.APIKey != "" {
+		t.Fatalf("reopened legacy setup=%#v err=%v", reopened, err)
 	}
 }
 

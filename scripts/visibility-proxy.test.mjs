@@ -19,10 +19,13 @@ async function readFixture(stream) {
   throw new Error("Visibility backend exited before publishing its fixture.");
 }
 
-function request(method, body, threadID = fixture.thread_id) {
+function request(method, body, threadID = fixture.thread_id, extraHeaders = {}) {
   return new Request(`https://dashboard.example/api/threads/${encodeURIComponent(threadID)}/visibility?key=${encodeURIComponent(fixture.api_key)}`, {
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...extraHeaders
+    },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
 }
@@ -59,6 +62,16 @@ describe("dashboard-origin visibility proxy", () => {
     expect(typeof route.GET).toBe("function");
     expect(typeof route.PATCH).toBe("function");
     expect(route.PUT).toBeUndefined();
+  });
+
+  test("overwrites client-supplied forwarding headers", async () => {
+    const read = await route.GET(request("GET", undefined, fixture.thread_id, {
+      forwarded: "host=evil.example;proto=http",
+      "x-forwarded-host": "evil.example",
+      "x-forwarded-proto": "http",
+      "x-forwarded-port": "80"
+    }), { params: Promise.resolve({ threadId: fixture.thread_id }) });
+    expect(read.status).toBe(200);
   });
 
   test("PATCH reaches the canonical Go visibility handler", async () => {

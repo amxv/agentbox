@@ -337,12 +337,14 @@ func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
 	}
 
 	ownerSecondSecret := "agb_owner_second"
-	ownerSecond, err := repository.CreateAPIKey(ctx, owner.ID, "CHATGPT", "chatgpt", hashSecret(ownerSecondSecret), "agb_owner_s", []string{"threads:read", "threads:write"})
-	if err != nil {
-		t.Fatal(err)
+	if ownerSecond, err := repository.CreateAPIKey(ctx, owner.ID, "CHATGPT", "chatgpt", hashSecret(ownerSecondSecret), "agb_owner_s", []string{"threads:read", "threads:write"}); !errors.Is(err, types.ErrCredentialLabelConflict) || ownerSecond.ID != "" {
+		t.Fatalf("duplicate create replaced an active credential: first=%#v second=%#v err=%v", ownerFirst, ownerSecond, err)
 	}
-	if ownerSecond.ID != ownerFirst.ID || ownerSecond.TokenHash == ownerFirst.TokenHash || ownerSecond.Purpose != "chatgpt" {
-		t.Fatalf("owner rotation did not update the existing credential: first=%#v second=%#v", ownerFirst, ownerSecond)
+	if key, user, err := repository.FindAPIKeyBySecret(ctx, ownerFirstSecret); err != nil || key == nil || user == nil || key.ID != ownerFirst.ID {
+		t.Fatalf("original credential stopped authenticating after duplicate create: key=%#v user=%#v err=%v", key, user, err)
+	}
+	if key, user, err := repository.FindAPIKeyBySecret(ctx, ownerSecondSecret); err != nil || key != nil || user != nil {
+		t.Fatalf("rejected duplicate secret authenticated: key=%#v user=%#v err=%v", key, user, err)
 	}
 
 	ownerKeys, err := repository.ListAPIKeys(ctx, owner.ID)
@@ -353,7 +355,7 @@ func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ownerKeys) != 1 || ownerKeys[0].ID != ownerSecond.ID || len(memberKeys) != 1 || memberKeys[0].ID != memberKey.ID {
+	if len(ownerKeys) != 1 || ownerKeys[0].ID != ownerFirst.ID || len(memberKeys) != 1 || memberKeys[0].ID != memberKey.ID {
 		t.Fatalf("credential lists crossed users: owner=%#v member=%#v", ownerKeys, memberKeys)
 	}
 
@@ -361,15 +363,15 @@ func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if oldOwnerKey != nil || oldOwnerUser != nil {
-		t.Fatalf("rotated secret still authenticated: key=%#v user=%#v", oldOwnerKey, oldOwnerUser)
+	if oldOwnerKey == nil || oldOwnerUser == nil || oldOwnerKey.ID != ownerFirst.ID || oldOwnerUser.ID != owner.ID {
+		t.Fatalf("original secret stopped authenticating after rejected duplicate create: key=%#v user=%#v", oldOwnerKey, oldOwnerUser)
 	}
 	activeOwnerKey, activeOwnerUser, err := repository.FindAPIKeyBySecret(ctx, ownerSecondSecret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activeOwnerKey == nil || activeOwnerUser == nil || activeOwnerUser.ID != owner.ID {
-		t.Fatalf("rotated owner secret did not resolve owner: key=%#v user=%#v", activeOwnerKey, activeOwnerUser)
+	if activeOwnerKey != nil || activeOwnerUser != nil {
+		t.Fatalf("rejected duplicate secret unexpectedly resolved: key=%#v user=%#v", activeOwnerKey, activeOwnerUser)
 	}
 	activeMemberKey, activeMemberUser, err := repository.FindAPIKeyBySecret(ctx, memberSecret)
 	if err != nil {
@@ -382,7 +384,7 @@ func TestUserOwnedCredentialsAreIsolatedRotatableAndDisableAware(t *testing.T) {
 	if removed, err := repository.RevokeAPIKey(ctx, owner.ID, "chatgpt"); err != nil || !removed {
 		t.Fatalf("revoke owner credential: removed=%t err=%v", removed, err)
 	}
-	if key, user, err := repository.FindAPIKeyBySecret(ctx, ownerSecondSecret); err != nil || key != nil || user != nil {
+	if key, user, err := repository.FindAPIKeyBySecret(ctx, ownerFirstSecret); err != nil || key != nil || user != nil {
 		t.Fatalf("revoked owner credential authenticated: key=%#v user=%#v err=%v", key, user, err)
 	}
 	if key, user, err := repository.FindAPIKeyBySecret(ctx, memberSecret); err != nil || key == nil || user == nil {
@@ -2451,26 +2453,26 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 	}
 
 	chatSecret := "agb_onboarding_chat"
-	chat, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(chatSecret), "agb_chat", []string{"threads:read", "mcp:use"}, false)
+	chat, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(chatSecret), "agb_chat", []string{"threads:read", "mcp:use"}, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if chat.Name != "ChatGPT" || state.DismissedAt != nil || len(state.Steps) != 1 || state.Steps[0].Credential == nil || state.Steps[0].Credential.ID != chat.ID || state.Steps[0].Credential.Key != "" {
 		t.Fatalf("chat onboarding key=%#v state=%#v", chat, state)
 	}
-	if _, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret("duplicate"), "agb_dupe", []string{"threads:read"}, false); !errors.Is(err, types.ErrOnboardingCredentialExists) {
+	if _, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret("duplicate"), "agb_dupe", []string{"threads:read"}, "", false); !errors.Is(err, types.ErrOnboardingCredentialExists) {
 		t.Fatalf("duplicate onboarding credential error=%v", err)
 	}
 
-	raycast, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "raycast", "Raycast", "raycast", hashSecret("agb_onboarding_raycast"), "agb_raycast", []string{"threads:read", "threads:write", "assets:read", "assets:write"}, false)
+	raycast, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "raycast", "Raycast", "raycast", hashSecret("agb_onboarding_raycast"), "agb_raycast", []string{"threads:read", "threads:write", "assets:read", "assets:write"}, "https://dashboard.example", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claude, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "claude", "Claude", "claude", hashSecret("agb_onboarding_claude"), "agb_claude", []string{"threads:read", "mcp:use"}, false)
+	claude, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "claude", "Claude", "claude", hashSecret("agb_onboarding_claude"), "agb_claude", []string{"threads:read", "mcp:use"}, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	local, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local"), "agb_local", []string{"threads:read", "threads:write", "keys:read", "keys:write"}, false)
+	local, state, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local"), "agb_local", []string{"threads:read", "threads:write", "keys:read", "keys:write"}, "", false)
 	if err != nil || len(state.Steps) != 4 {
 		t.Fatalf("local onboarding key=%#v state=%#v err=%v", local, state, err)
 	}
@@ -2482,7 +2484,7 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 	}
 
 	rotatedSecret := "agb_onboarding_chat_rotated"
-	rotated, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(rotatedSecret), "agb_rotate", []string{"threads:read", "mcp:use"}, true)
+	rotated, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(rotatedSecret), "agb_rotate", []string{"threads:read", "mcp:use"}, "", true)
 	if err != nil || rotated.ID != chat.ID {
 		t.Fatalf("rotation=%#v original=%#v err=%v", rotated, chat, err)
 	}
@@ -2503,7 +2505,7 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 	if err != nil || state.Steps[2].Connector != "local" || state.Steps[2].CompletedAt == nil || state.Steps[2].Credential != nil {
 		t.Fatalf("revoked local onboarding state=%#v err=%v", state, err)
 	}
-	recreated, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local_new"), "agb_local_new", []string{"threads:read"}, false)
+	recreated, _, err := repository.CreateOnboardingCredential(ctx, owner.ID, "local", "Local CLI", "local", hashSecret("agb_onboarding_local_new"), "agb_local_new", []string{"threads:read"}, "", false)
 	if err != nil || recreated.ID == local.ID {
 		t.Fatalf("recreated local=%#v original=%#v err=%v", recreated, local, err)
 	}
@@ -2522,7 +2524,7 @@ func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T
 		index := index
 		go func() {
 			<-start
-			key, _, err := repository.CreateOnboardingCredential(context.Background(), concurrentUser.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(fmt.Sprintf("concurrent-%d", index)), fmt.Sprintf("agb_%d", index), []string{"threads:read"}, false)
+			key, _, err := repository.CreateOnboardingCredential(context.Background(), concurrentUser.ID, "chatgpt", "ChatGPT", "chatgpt", hashSecret(fmt.Sprintf("concurrent-%d", index)), fmt.Sprintf("agb_%d", index), []string{"threads:read"}, "", false)
 			results <- result{key: key, err: err}
 		}()
 	}

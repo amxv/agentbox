@@ -155,9 +155,10 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 			writeServiceError(w, err)
 			return
 		}
-		signupURL := "/signup?token=" + url.QueryEscape(result.Token)
-		if s.cfg.AppPublicURL != "" {
-			signupURL = strings.TrimRight(s.cfg.AppPublicURL, "/") + signupURL
+		signupPath := "/signup?token=" + url.QueryEscape(result.Token)
+		signupURL := signupPath
+		if baseURL := s.requestBaseURL(r); baseURL != "" {
+			signupURL = baseURL + signupPath
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"invitation": result.Invitation, "token": result.Token, "signup_url": signupURL})
 	default:
@@ -628,9 +629,10 @@ func (s *Server) adminOwnerSetupToken(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	setupURL := "/owner/setup?token=" + url.QueryEscape(result.Token)
-	if s.cfg.AppPublicURL != "" {
-		setupURL = strings.TrimRight(s.cfg.AppPublicURL, "/") + setupURL
+	setupPath := "/owner/setup?token=" + url.QueryEscape(result.Token)
+	setupURL := setupPath
+	if baseURL := s.requestBaseURL(r); baseURL != "" {
+		setupURL = baseURL + setupPath
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"token":      result.Token,
@@ -1040,7 +1042,7 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 		if parts[1] != "setup" || !method(w, r, http.MethodGet) {
 			return
 		}
-		setup, err := s.service.RaycastInstallationSetup(r.Context(), *authContext, credentialID)
+		setup, err := s.service.RaycastInstallationSetup(r.Context(), *authContext, credentialID, s.requestBaseURL(r))
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -1065,7 +1067,7 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"revoked": credentialID})
 	case http.MethodPatch:
-		rotated, setup, err := s.service.RotateAPIKeyByID(r.Context(), *authContext, credentialID)
+		rotated, setup, err := s.service.RotateAPIKeyByID(r.Context(), *authContext, credentialID, s.requestBaseURL(r))
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -1077,25 +1079,29 @@ func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requestBaseURL(r *http.Request) string {
-	if strings.TrimSpace(s.cfg.AppPublicURL) != "" {
-		return strings.TrimRight(strings.TrimSpace(s.cfg.AppPublicURL), "/")
+	if origin, err := s.cfg.TrustedAppPublicURL(); err == nil && origin != "" {
+		return origin
 	}
-	scheme := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
-	if scheme == "" {
-		if r.TLS != nil {
-			scheme = "https"
-		} else {
-			scheme = "http"
-		}
+	if s.cfg.IsProduction() {
+		return ""
 	}
-	host := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
 	}
+	host := strings.TrimSpace(r.Host)
 	if host == "" {
 		return ""
 	}
-	return scheme + "://" + host
+	// Development fallback deliberately ignores Forwarded and X-Forwarded-*
+	// headers. Production requires AGENTBOX_APP_PUBLIC_URL, and the local
+	// fallback may trust only the host observed by the Go server itself.
+	fallback := config.Config{AppPublicURL: scheme + "://" + host}
+	origin, err := fallback.TrustedAppPublicURL()
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
