@@ -186,7 +186,7 @@ test("all five filters and search traverse opaque continuation pages without dup
   assert.equal(searchRequest?.searchParams.get("updated_after"), timestamp);
 });
 
-test("detail decoding exposes signed URLs and tombstones but rejects persistence fields", async () => {
+test("detail decoding exposes lazy attachment paths and tombstones but rejects persistence fields", async () => {
   const safeThread = {
     ...threadFixture("thr_detail", "Detail"),
     messages: [
@@ -205,8 +205,8 @@ test("detail decoding exposes signed URLs and tombstones but rejects persistence
             filename: "signed.png",
             mime_type: "image/png",
             size_bytes: 10,
-            download_url: "https://r2.example/signed",
-            preview_url: "https://r2.example/preview",
+            download_path: "/api/assets/asset_signed/download-url",
+            preview_path: "/api/assets/asset_signed/preview-url",
             created_at: timestamp,
             created_by: "Raycast",
           },
@@ -241,7 +241,8 @@ test("detail decoding exposes signed URLs and tombstones but rejects persistence
     json({ thread: safeThread }),
   );
   const thread = await client.getThread("thr_detail");
-  assert.equal(thread.messages[0].assets[0].preview_url, "https://r2.example/preview");
+  assert.equal(thread.messages[0].assets[0].preview_path, "/api/assets/asset_signed/preview-url");
+  assert.equal(thread.messages[0].assets[0].download_url, undefined);
   assert.deepEqual(assetAvailability(thread.messages[0].assets[1]), {
     available: false,
     label: "Attachment deleted by deployment owner",
@@ -385,6 +386,7 @@ test("create, post, and signed-download methods use the final envelopes", async 
     }
     if (url.pathname === "/api/assets/asset_1/download-url") {
       return json({
+        available: true,
         asset_id: "asset_1",
         file_name: "report.md",
         mime_type: "text/markdown",
@@ -426,6 +428,17 @@ test("create, post, and signed-download methods use the final envelopes", async 
   assert.equal(download.download_url, "https://r2.example/download");
   assert.equal(calls[2].url.searchParams.get("expires_in"), "600");
   assert.equal(calls[2].url.searchParams.get("key"), "secret");
+
+  const unavailable = new AgentboxClient({ baseUrl: "https://agentbox.example", apiKey: "secret" }, async () =>
+    json({ available: false, asset_id: "asset_missing", unavailable_reason: "Stored object is missing." }),
+  );
+  await assert.rejects(
+    () => unavailable.getAssetDownloadUrl("asset_missing"),
+    (error: unknown) =>
+      error instanceof AgentboxAPIError &&
+      error.code === "ATTACHMENT_UNAVAILABLE" &&
+      error.backendError === "Stored object is missing.",
+  );
 });
 
 test("batch upload validates response safety, metadata, ordering, and external PUT isolation", async () => {

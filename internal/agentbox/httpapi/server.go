@@ -339,11 +339,7 @@ func (s *Server) ownerContentThread(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	viewer, err := withOwnerContentAssetURLs(r, s.service, ownerContext, thread)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
+	viewer := withOwnerContentAssetPaths(thread)
 	writeJSON(w, http.StatusOK, map[string]any{"thread": viewer})
 }
 
@@ -354,7 +350,7 @@ func (s *Server) ownerContentAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/owner/content/assets/")
 	assetID, tail, pathOK := splitFirst(rest)
-	if !pathOK || tail != "download" {
+	if !pathOK || (tail != "download" && tail != "preview") {
 		http.NotFound(w, r)
 		return
 	}
@@ -362,16 +358,20 @@ func (s *Server) ownerContentAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	safeExpires := validate.ClampSignedURLExpiry(numberQuery(r, "expires_in", 300))
-	downloadURL, err := s.service.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, assetID, safeExpires)
-	if err != nil {
-		writeServiceError(w, err)
-		return
+	urlField := "download_url"
+	signedURL := ""
+	var err error
+	if tail == "preview" {
+		urlField = "preview_url"
+		signedURL, err = s.service.SignedOwnerContentAssetPreviewURL(r.Context(), ownerContext, assetID, safeExpires)
+	} else {
+		signedURL, err = s.service.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, assetID, safeExpires)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"asset_id":     assetID,
-		"expires_in":   safeExpires,
-		"download_url": downloadURL,
-	})
+	payload := map[string]any{
+		"asset_id":   assetID,
+		"expires_in": safeExpires,
+	}
+	writeAssetResolution(w, payload, urlField, signedURL, err)
 }
 
 func (s *Server) ownerTeams(w http.ResponseWriter, r *http.Request) {
@@ -1187,19 +1187,11 @@ func (s *Server) publicThreadSubroutes(w http.ResponseWriter, r *http.Request) {
 		switch parts[3] {
 		case "download":
 			downloadURL, err := s.service.PublicAssetDownloadURL(r.Context(), parts[0], parts[2])
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"download_url": downloadURL})
+			writeAssetResolution(w, map[string]any{"asset_id": parts[2]}, "download_url", downloadURL, err)
 			return
 		case "preview":
 			previewURL, err := s.service.PublicAssetPreviewURL(r.Context(), parts[0], parts[2])
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			http.Redirect(w, r, previewURL, http.StatusTemporaryRedirect)
+			writeAssetResolution(w, map[string]any{"asset_id": parts[2]}, "preview_url", previewURL, err)
 			return
 		}
 	}
@@ -1349,7 +1341,7 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, au
 func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/assets/")
 	assetID, tail, ok := splitFirst(rest)
-	if !ok || (tail != "download-url" && tail != "download") {
+	if !ok || (tail != "download-url" && tail != "download" && tail != "preview-url" && tail != "preview") {
 		http.NotFound(w, r)
 		return
 	}
@@ -1371,19 +1363,22 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := numberQuery(r, "expires_in", 300)
 	safeExpires := validate.ClampSignedURLExpiry(expires)
-	downloadURL, err := s.service.SignedAssetDownloadURL(r.Context(), *authContext, asset.ID, safeExpires)
-	if err != nil {
-		writeServiceError(w, err)
-		return
+	urlField := "download_url"
+	signedURL := ""
+	if tail == "preview-url" || tail == "preview" {
+		urlField = "preview_url"
+		signedURL, err = s.service.SignedAssetPreviewURL(r.Context(), *authContext, asset.ID, safeExpires)
+	} else {
+		signedURL, err = s.service.SignedAssetDownloadURL(r.Context(), *authContext, asset.ID, safeExpires)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"asset_id":     asset.ID,
-		"file_name":    asset.FileName,
-		"mime_type":    asset.MimeType,
-		"size_bytes":   asset.SizeBytes,
-		"expires_in":   safeExpires,
-		"download_url": downloadURL,
-	})
+	payload := map[string]any{
+		"asset_id":   asset.ID,
+		"file_name":  asset.FileName,
+		"mime_type":  asset.MimeType,
+		"size_bytes": asset.SizeBytes,
+		"expires_in": safeExpires,
+	}
+	writeAssetResolution(w, payload, urlField, signedURL, err)
 }
 
 func (s *Server) threadView(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -1394,16 +1389,16 @@ func (s *Server) threadView(w http.ResponseWriter, r *http.Request, threadID str
 	if !ok {
 		return
 	}
+	if authContext.SubjectType == types.AuthSubjectAPIKey && len(authContext.Scopes) > 0 && !hasScope(*authContext, "assets:read") {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "assets:read scope is required.")
+		return
+	}
 	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-	viewer, err := withViewerAssetURLs(r, s.service, *authContext, thread)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
+	viewer := withViewerAssetPaths(thread)
 	writeJSON(w, http.StatusOK, map[string]any{"thread": viewer})
 }
 
@@ -1754,8 +1749,8 @@ type viewerMessage struct {
 
 type viewerAsset struct {
 	types.Asset
-	DownloadURL *string `json:"download_url,omitempty"`
-	PreviewURL  *string `json:"preview_url,omitempty"`
+	DownloadPath string `json:"download_path,omitempty"`
+	PreviewPath  string `json:"preview_path,omitempty"`
 }
 
 type uploadIntentResponse struct {
@@ -1786,7 +1781,7 @@ func safeUploadIntentResponses(uploads []types.PresignedUpload) []uploadIntentRe
 	return result
 }
 
-func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext types.AuthContext, thread *types.ThreadWithMessages) (viewerThread, error) {
+func withViewerAssetPaths(thread *types.ThreadWithMessages) viewerThread {
 	result := viewerThread{Thread: thread.Thread, Messages: []viewerMessage{}}
 	for _, message := range thread.Messages {
 		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
@@ -1795,38 +1790,19 @@ func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext type
 				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
 				continue
 			}
-			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset.ID, 300)
-			if serviceErrorCode(err) == "ATTACHMENT_UNAVAILABLE" {
-				asset.Unavailable = true
-				asset.UnavailableReason = "Attachment unavailable"
-				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
-				continue
-			}
-			if err != nil {
-				return viewerThread{}, err
-			}
-			var previewURL *string
+			basePath := "/api/assets/" + url.PathEscape(asset.ID)
+			viewer := viewerAsset{Asset: asset, DownloadPath: basePath + "/download-url"}
 			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
-				preview, err := svc.SignedAssetPreviewURL(r.Context(), authContext, asset.ID, 900)
-				if serviceErrorCode(err) == "ATTACHMENT_UNAVAILABLE" {
-					asset.Unavailable = true
-					asset.UnavailableReason = "Attachment unavailable"
-					vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
-					continue
-				}
-				if err != nil {
-					return viewerThread{}, err
-				}
-				previewURL = &preview
+				viewer.PreviewPath = basePath + "/preview-url"
 			}
-			vm.Assets = append(vm.Assets, viewerAsset{Asset: asset, DownloadURL: &downloadURL, PreviewURL: previewURL})
+			vm.Assets = append(vm.Assets, viewer)
 		}
 		result.Messages = append(result.Messages, vm)
 	}
-	return result, nil
+	return result
 }
 
-func withOwnerContentAssetURLs(r *http.Request, svc *service.Service, ownerContext service.OwnerWebContext, thread *types.OwnerContentThreadDetail) (ownerViewerThread, error) {
+func withOwnerContentAssetPaths(thread *types.OwnerContentThreadDetail) ownerViewerThread {
 	result := ownerViewerThread{Thread: thread.Thread, Owner: thread.Owner, Messages: []viewerMessage{}, Visibility: thread.Visibility}
 	for _, message := range thread.Messages {
 		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
@@ -1835,34 +1811,31 @@ func withOwnerContentAssetURLs(r *http.Request, svc *service.Service, ownerConte
 				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
 				continue
 			}
-			downloadURL, err := svc.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, asset.ID, 300)
-			if serviceErrorCode(err) == "ATTACHMENT_UNAVAILABLE" {
-				asset.Unavailable = true
-				asset.UnavailableReason = "Attachment unavailable"
-				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
-				continue
-			}
-			if err != nil {
-				return ownerViewerThread{}, err
-			}
-			var previewURL *string
+			basePath := "/api/owner/content/assets/" + url.PathEscape(asset.ID)
+			viewer := viewerAsset{Asset: asset, DownloadPath: basePath + "/download"}
 			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
-				previewURL = &downloadURL
+				viewer.PreviewPath = basePath + "/preview"
 			}
-			vm.Assets = append(vm.Assets, viewerAsset{Asset: asset, DownloadURL: &downloadURL, PreviewURL: previewURL})
+			vm.Assets = append(vm.Assets, viewer)
 		}
 		result.Messages = append(result.Messages, vm)
 	}
-	return result, nil
+	return result
 }
 
-func serviceErrorCode(err error) string {
+func writeAssetResolution(w http.ResponseWriter, payload map[string]any, urlField string, signedURL string, err error) {
 	if err == nil {
-		return ""
+		payload["available"] = true
+		payload[urlField] = signedURL
+		writeJSON(w, http.StatusOK, payload)
+		return
 	}
 	var coded service.CodedError
-	if errors.As(err, &coded) {
-		return coded.Code
+	if errors.As(err, &coded) && coded.Code == "ATTACHMENT_UNAVAILABLE" {
+		payload["available"] = false
+		payload["unavailable_reason"] = coded.Message
+		writeJSON(w, http.StatusOK, payload)
+		return
 	}
-	return ""
+	writeServiceError(w, err)
 }

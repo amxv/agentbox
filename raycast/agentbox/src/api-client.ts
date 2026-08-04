@@ -92,6 +92,8 @@ export type Asset = AttributionSnapshot & {
   size_bytes: number;
   download_url?: string;
   preview_url?: string;
+  download_path?: string;
+  preview_path?: string;
   created_at: string;
   created_by: string;
   created_by_user_id?: string;
@@ -414,6 +416,11 @@ export class AgentboxClient {
     );
     const record = expectRecord(data, "download");
     rejectForbiddenKeys(record, "download", ["storage_key", "public_url"]);
+    if (optionalBoolean(record.available, "download.available") === false) {
+      const reason =
+        optionalString(record.unavailable_reason, "download.unavailable_reason") || "Attachment unavailable";
+      throw new AgentboxAPIError(410, { code: "ATTACHMENT_UNAVAILABLE", error: reason });
+    }
     return {
       asset_id: expectString(record.asset_id, "download.asset_id"),
       file_name: expectString(record.file_name, "download.file_name"),
@@ -651,6 +658,8 @@ function decodeAsset(value: unknown, path: string): Asset {
     size_bytes: expectNumber(record.size_bytes, `${path}.size_bytes`),
     download_url: optionalString(record.download_url, `${path}.download_url`),
     preview_url: optionalString(record.preview_url, `${path}.preview_url`),
+    download_path: optionalString(record.download_path, `${path}.download_path`),
+    preview_path: optionalString(record.preview_path, `${path}.preview_path`),
     created_at: expectString(record.created_at, `${path}.created_at`),
     created_by: expectString(record.created_by, `${path}.created_by`),
     created_by_user_id: optionalString(record.created_by_user_id, `${path}.created_by_user_id`),

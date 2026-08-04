@@ -17,10 +17,17 @@ type Asset = {
   file_name: string;
   mime_type: string | null;
   size_bytes: number;
-  download_url?: string | null;
-  preview_url?: string | null;
+  download_path?: string | null;
+  preview_path?: string | null;
   purged_at?: string | null;
   unavailable?: boolean;
+  unavailable_reason?: string;
+};
+
+type AssetResolution = {
+  available: boolean;
+  download_url?: string;
+  preview_url?: string;
   unavailable_reason?: string;
 };
 
@@ -81,6 +88,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [showReplyComposer, setShowReplyComposer] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
+  const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
+  const [assetBusy, setAssetBusy] = useState<string | null>(null);
 
   const loadThread = useCallback(async function loadThread() {
     setLoading(true);
@@ -96,6 +105,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setThread(data.thread);
+      setAssetResolutions({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -137,6 +147,43 @@ export function ThreadView({ threadId }: { threadId: string }) {
       }
       return next;
     });
+  }
+
+  async function resolveAsset(asset: Asset, kind: "download" | "preview") {
+    const path = kind === "preview" ? asset.preview_path : asset.download_path;
+    if (!path || asset.purged_at) return;
+    const busyKey = `${kind}:${asset.id}`;
+    setAssetBusy(busyKey);
+    setError(null);
+    try {
+      const response = await fetch(path, { cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (data.available === false) {
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: {
+            available: false,
+            unavailable_reason: data.unavailable_reason || "Attachment unavailable"
+          }
+        }));
+        return;
+      }
+      const field = kind === "preview" ? "preview_url" : "download_url";
+      const signedURL = data[field];
+      if (typeof signedURL !== "string" || signedURL === "") {
+        throw new Error(`The attachment ${kind} URL was not returned.`);
+      }
+      setAssetResolutions((current) => ({
+        ...current,
+        [asset.id]: { ...current[asset.id], available: true, [field]: signedURL }
+      }));
+      if (kind === "download") window.location.assign(signedURL);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAssetBusy((current) => current === busyKey ? null : current);
+    }
   }
 
   return (
@@ -274,27 +321,45 @@ export function ThreadView({ threadId }: { threadId: string }) {
                     {message.assets.length > 0 && (
                       <div className="asset-list">
                         <span className="asset-label">Attachments</span>
-                        {message.assets.map((asset) => (
-                          <div key={asset.id} className="asset-card">
-                            {!asset.purged_at && !asset.unavailable && asset.preview_url && (
-                              <a className="preview-link" href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img className="preview-image" src={asset.preview_url} alt={asset.file_name} loading="lazy" />
-                              </a>
-                            )}
-                            <div className="asset-row">
-                              <span className="thread-title">{asset.file_name}</span>
-                              <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+                        {message.assets.map((asset) => {
+                          const resolution = assetResolutions[asset.id];
+                          const unavailable = asset.unavailable || resolution?.available === false;
+                          const unavailableReason = resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable";
+                          const previewBusy = assetBusy === `preview:${asset.id}`;
+                          const downloadBusy = assetBusy === `download:${asset.id}`;
+                          return (
+                            <div key={asset.id} className="asset-card">
+                              {!asset.purged_at && !unavailable && resolution?.preview_url && (
+                                <div className="preview-link">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img className="preview-image" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
+                                </div>
+                              )}
+                              <div className="asset-row">
+                                <span className="thread-title">{asset.file_name}</span>
+                                <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+                              </div>
+                              {asset.purged_at ? (
+                                <span className="asset-tombstone">Attachment deleted by deployment owner</span>
+                              ) : unavailable ? (
+                                <span className="asset-tombstone">{unavailableReason}</span>
+                              ) : (
+                                <div className="asset-row">
+                                  {asset.preview_path && !resolution?.preview_url && (
+                                    <button className="download-link" type="button" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
+                                      {previewBusy ? "Loading preview…" : "Load preview"}
+                                    </button>
+                                  )}
+                                  {asset.download_path && (
+                                    <button className="download-link" type="button" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
+                                      {downloadBusy ? "Signing…" : "Open attachment"}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                            {asset.purged_at ? (
-                              <span className="asset-tombstone">Attachment deleted by deployment owner</span>
-                            ) : asset.unavailable ? (
-                              <span className="asset-tombstone">{asset.unavailable_reason || "Attachment unavailable"}</span>
-                            ) : asset.download_url && (
-                              <a className="download-link" href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>

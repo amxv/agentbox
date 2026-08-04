@@ -404,7 +404,7 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 }
 
-func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) {
+func TestThreadViewRequiresNormalAuthenticationAndResolvesAssetsLazily(t *testing.T) {
 	imageType := "image/png"
 	repo := &db.MemoryRepository{}
 	store := &assets.FakeStore{}
@@ -432,6 +432,7 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 		t.Fatal(err)
 	}
 	store.PutAssetObject("agentbox/thread/message/image.png", 10, &imageType)
+	store.HeadFailures = map[string]error{"assets\x00agentbox/thread/message/image.png": errors.New("thread detail must not inspect storage")}
 	server := NewServer(config.Config{AdminKey: "adm", Environment: "production", SessionCookieName: config.DefaultSessionCookieName}, svc)
 
 	unauthorized := httptest.NewRecorder()
@@ -458,8 +459,8 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 		Thread struct {
 			Messages []struct {
 				Assets []struct {
-					DownloadURL string  `json:"download_url"`
-					PreviewURL  *string `json:"preview_url"`
+					DownloadPath string `json:"download_path"`
+					PreviewPath  string `json:"preview_path"`
 				} `json:"assets"`
 			} `json:"messages"`
 		} `json:"thread"`
@@ -468,8 +469,16 @@ func TestThreadViewRequiresNormalAuthenticationAndAddsPreviewURLs(t *testing.T) 
 		t.Fatal(err)
 	}
 	asset := payload.Thread.Messages[0].Assets[0]
-	if asset.DownloadURL == "" || asset.PreviewURL == nil || *asset.PreviewURL == asset.DownloadURL || !strings.Contains(*asset.PreviewURL, "inline") {
+	if asset.DownloadPath == "" || asset.PreviewPath == "" || strings.Contains(recorder.Body.String(), "download_url") || strings.Contains(recorder.Body.String(), "preview_url") {
 		t.Fatalf("viewer asset = %#v", asset)
+	}
+	delete(store.HeadFailures, "assets\x00agentbox/thread/message/image.png")
+	previewRequest := httptest.NewRequest(http.MethodGet, asset.PreviewPath, nil)
+	previewRequest.AddCookie(sessionCookie)
+	previewResponse := httptest.NewRecorder()
+	server.ServeHTTP(previewResponse, previewRequest)
+	if previewResponse.Code != http.StatusOK || !strings.Contains(previewResponse.Body.String(), `"available":true`) || !strings.Contains(previewResponse.Body.String(), `"preview_url"`) || !strings.Contains(previewResponse.Body.String(), "inline") {
+		t.Fatalf("lazy preview status=%d body=%s", previewResponse.Code, previewResponse.Body.String())
 	}
 }
 
@@ -1098,6 +1107,7 @@ func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *tes
 		t.Fatal(err)
 	}
 	store.PutAssetObject(message.Assets[0].StorageKey, 21, nil)
+	store.HeadFailures = map[string]error{"assets\x00" + message.Assets[0].StorageKey: errors.New("thread detail must not inspect storage")}
 	ownerKeySecret := "owner-content-api-key"
 	if _, err := repo.CreateAPIKey(t.Context(), owner.ID, "owner-content-key", "custom", dbHashForTest(ownerKeySecret), "owner-cont", []string{"threads:read", "assets:read"}); err != nil {
 		t.Fatal(err)
@@ -1136,7 +1146,7 @@ func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *tes
 		t.Fatalf("owner API key normal bypass status=%d body=%s", ownerKeyNormal.Code, ownerKeyNormal.Body.String())
 	}
 	memberView := request(http.MethodGet, "/api/threads/"+privateThread.ID+"/view", memberCookie, "", "")
-	if memberView.Code != http.StatusOK || !strings.Contains(memberView.Body.String(), "secret.txt") || !strings.Contains(memberView.Body.String(), "download_url") {
+	if memberView.Code != http.StatusOK || !strings.Contains(memberView.Body.String(), "secret.txt") || !strings.Contains(memberView.Body.String(), "download_path") || strings.Contains(memberView.Body.String(), "download_url") {
 		t.Fatalf("member normal view status=%d body=%s", memberView.Code, memberView.Body.String())
 	}
 	legacyViewer := request(http.MethodGet, "/api/viewer/threads/"+privateThread.ID, memberCookie, "", "")
@@ -1157,9 +1167,10 @@ func TestOwnerContentHTTPIsReadOnlyBrowserOnlyAndSeparateFromNormalAccess(t *tes
 		t.Fatalf("owner content search status=%d body=%s", ownerSearch.Code, ownerSearch.Body.String())
 	}
 	ownerDetail := request(http.MethodGet, "/api/owner/content/threads/"+privateThread.ID, ownerCookie, "", "")
-	if ownerDetail.Code != http.StatusOK || !strings.Contains(ownerDetail.Body.String(), message.ID) || !strings.Contains(ownerDetail.Body.String(), `"owner":{"id":"`+member.ID+`"`) || !strings.Contains(ownerDetail.Body.String(), "download_url") || strings.Contains(ownerDetail.Body.String(), "storage_key") {
+	if ownerDetail.Code != http.StatusOK || !strings.Contains(ownerDetail.Body.String(), message.ID) || !strings.Contains(ownerDetail.Body.String(), `"owner":{"id":"`+member.ID+`"`) || !strings.Contains(ownerDetail.Body.String(), "download_path") || strings.Contains(ownerDetail.Body.String(), "download_url") || strings.Contains(ownerDetail.Body.String(), "storage_key") {
 		t.Fatalf("owner content detail status=%d body=%s", ownerDetail.Code, ownerDetail.Body.String())
 	}
+	delete(store.HeadFailures, "assets\x00"+message.Assets[0].StorageKey)
 	ownerAsset := request(http.MethodGet, "/api/owner/content/assets/"+message.Assets[0].ID+"/download", ownerCookie, "", "")
 	if ownerAsset.Code != http.StatusOK || !strings.Contains(ownerAsset.Body.String(), "download_url") {
 		t.Fatalf("owner content asset status=%d body=%s", ownerAsset.Code, ownerAsset.Body.String())
@@ -2163,8 +2174,28 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 		t.Fatalf("public download status=%d body=%s", publicDownload.Code, publicDownload.Body.String())
 	}
 	publicPreview := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/preview", "", "")
-	if publicPreview.Code != http.StatusTemporaryRedirect || !strings.Contains(publicPreview.Header().Get("Location"), "inline") {
+	if publicPreview.Code != http.StatusOK || !strings.Contains(publicPreview.Body.String(), `"available":true`) || !strings.Contains(publicPreview.Body.String(), `"preview_url"`) || !strings.Contains(publicPreview.Body.String(), "inline") {
 		t.Fatalf("public preview status=%d location=%q body=%s", publicPreview.Code, publicPreview.Header().Get("Location"), publicPreview.Body.String())
+	}
+
+	if err := store.DeleteAssetObject(t.Context(), message.Assets[0].StorageKey); err != nil {
+		t.Fatal(err)
+	}
+	missingView := request(http.MethodGet, "/api/public/threads/"+createdToken, "", "")
+	if missingView.Code != http.StatusOK || !strings.Contains(missingView.Body.String(), `"download_path"`) || !strings.Contains(missingView.Body.String(), `"preview_path"`) {
+		t.Fatalf("public thread failed because one object is missing: status=%d body=%s", missingView.Code, missingView.Body.String())
+	}
+	missingDownload := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/download", "", "")
+	if missingDownload.Code != http.StatusOK || !strings.Contains(missingDownload.Body.String(), `"available":false`) || !strings.Contains(missingDownload.Body.String(), `"unavailable_reason"`) || strings.Contains(missingDownload.Body.String(), `"download_url"`) {
+		t.Fatalf("missing public download was not asset-scoped: status=%d body=%s", missingDownload.Code, missingDownload.Body.String())
+	}
+	missingPreview := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/preview", "", "")
+	if missingPreview.Code != http.StatusOK || !strings.Contains(missingPreview.Body.String(), `"available":false`) || strings.Contains(missingPreview.Body.String(), `"preview_url"`) {
+		t.Fatalf("missing public preview was not asset-scoped: status=%d body=%s", missingPreview.Code, missingPreview.Body.String())
+	}
+	stillReadable := request(http.MethodGet, "/api/public/threads/"+createdToken, "", "")
+	if stillReadable.Code != http.StatusOK || !strings.Contains(stillReadable.Body.String(), "HTTP public marker") {
+		t.Fatalf("missing object invalidated public thread: status=%d body=%s", stillReadable.Code, stillReadable.Body.String())
 	}
 	crossThreadDownload := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+otherMessage.Assets[0].ID+"/download", "", "")
 	if crossThreadDownload.Code != http.StatusNotFound || !strings.Contains(crossThreadDownload.Body.String(), "PUBLIC_ASSET_NOT_FOUND") {
@@ -2291,8 +2322,8 @@ func TestAPIKeyScopesConstrainThreadAndAssetRoutes(t *testing.T) {
 	if viewerScoped.Code != http.StatusOK {
 		t.Fatalf("scoped viewer status=%d body=%s", viewerScoped.Code, viewerScoped.Body.String())
 	}
-	if !strings.Contains(viewerScoped.Body.String(), `"download_url"`) || !strings.Contains(viewerScoped.Body.String(), "seed.txt") {
-		t.Fatalf("scoped viewer missing signed asset data: %s", viewerScoped.Body.String())
+	if !strings.Contains(viewerScoped.Body.String(), `"download_path"`) || strings.Contains(viewerScoped.Body.String(), `"download_url"`) || !strings.Contains(viewerScoped.Body.String(), "seed.txt") {
+		t.Fatalf("scoped viewer missing lazy asset data: %s", viewerScoped.Body.String())
 	}
 }
 

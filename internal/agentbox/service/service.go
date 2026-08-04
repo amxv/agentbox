@@ -861,6 +861,9 @@ func (s *Service) signedAssetURL(ctx context.Context, auth types.AuthContext, as
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
+	if inline && (asset.MimeType == nil || !strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/")) {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "This attachment type does not support inline preview."}
+	}
 	if err := s.inspectAvailableAsset(ctx, asset); err != nil {
 		return "", err
 	}
@@ -1470,6 +1473,14 @@ func (s *Service) GetOwnerContentThread(ctx context.Context, ownerContext OwnerW
 }
 
 func (s *Service) SignedOwnerContentAssetDownloadURL(ctx context.Context, ownerContext OwnerWebContext, assetID string, expiresSeconds int) (string, error) {
+	return s.signedOwnerContentAssetURL(ctx, ownerContext, assetID, expiresSeconds, false)
+}
+
+func (s *Service) SignedOwnerContentAssetPreviewURL(ctx context.Context, ownerContext OwnerWebContext, assetID string, expiresSeconds int) (string, error) {
+	return s.signedOwnerContentAssetURL(ctx, ownerContext, assetID, expiresSeconds, true)
+}
+
+func (s *Service) signedOwnerContentAssetURL(ctx context.Context, ownerContext OwnerWebContext, assetID string, expiresSeconds int, inline bool) (string, error) {
 	if err := requireOwnerWebContext(ownerContext); err != nil {
 		return "", err
 	}
@@ -1487,10 +1498,13 @@ func (s *Service) SignedOwnerContentAssetDownloadURL(ctx context.Context, ownerC
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
+	if inline && (asset.MimeType == nil || !strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/")) {
+		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "This attachment type does not support inline preview."}
+	}
 	if err := s.inspectAvailableAsset(ctx, *asset); err != nil {
 		return "", err
 	}
-	return s.createSignedAssetURL(ctx, *asset, validate.ClampSignedURLExpiry(expiresSeconds), false)
+	return s.createSignedAssetURL(ctx, *asset, validate.ClampSignedURLExpiry(expiresSeconds), inline)
 }
 
 func (s *Service) ListOwnerAPIKeys(ctx context.Context, authContext types.AuthContext) ([]types.APIKey, error) {

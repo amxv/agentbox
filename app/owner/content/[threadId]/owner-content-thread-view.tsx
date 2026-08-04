@@ -13,10 +13,17 @@ type Asset = {
   file_name: string;
   mime_type?: string;
   size_bytes: number;
-  download_url?: string;
-  preview_url?: string;
+  download_path?: string;
+  preview_path?: string;
   purged_at?: string;
   unavailable?: boolean;
+  unavailable_reason?: string;
+};
+
+type AssetResolution = {
+  available: boolean;
+  download_url?: string;
+  preview_url?: string;
   unavailable_reason?: string;
 };
 
@@ -63,6 +70,8 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
+  const [assetBusy, setAssetBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,6 +94,7 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setThread(data.thread);
+      setAssetResolutions({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -96,6 +106,38 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  async function resolveAsset(asset: Asset, kind: "download" | "preview") {
+    const path = kind === "preview" ? asset.preview_path : asset.download_path;
+    if (!path || asset.purged_at) return;
+    const busyKey = `${kind}:${asset.id}`;
+    setAssetBusy(busyKey);
+    setError(null);
+    try {
+      const response = await fetch(path, { cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (data.available === false) {
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: { available: false, unavailable_reason: data.unavailable_reason || "Attachment unavailable" }
+        }));
+        return;
+      }
+      const field = kind === "preview" ? "preview_url" : "download_url";
+      const signedURL = data[field];
+      if (typeof signedURL !== "string" || signedURL === "") throw new Error(`The attachment ${kind} URL was not returned.`);
+      setAssetResolutions((current) => ({
+        ...current,
+        [asset.id]: { ...current[asset.id], available: true, [field]: signedURL }
+      }));
+      if (kind === "download") window.location.assign(signedURL);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAssetBusy((current) => current === busyKey ? null : current);
+    }
+  }
 
   return <main className={styles.page}>
     <header className={styles.topbar}><Link href="/owner/content">← Deployment content</Link><span>OWNER VIEW · READ ONLY</span><Link href="/threads">Normal inbox</Link></header>
@@ -120,14 +162,21 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
           {thread.messages.map((message, index) => <article className={styles.message} key={message.id}>
             <header><div><strong>{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong><span>Message {index + 1}</span></div><time dateTime={message.created_at}>{formatDate(message.created_at)}</time></header>
             <MessageContent body={message.body} contentType={message.body_content_type} />
-            {message.assets.length > 0 && <div className={styles.assets}>{message.assets.map((asset) => <div className={styles.asset} key={asset.id}>
-              {!asset.purged_at && !asset.unavailable && asset.preview_url && <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={asset.preview_url} alt={asset.file_name} loading="lazy" />
-              </>}
-              <div><strong>{asset.file_name}</strong><span>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</span></div>
-              {asset.purged_at ? <em>Attachment deleted by deployment owner</em> : asset.unavailable ? <em>{asset.unavailable_reason || "Attachment unavailable"}</em> : asset.download_url && <a href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>}
-            </div>)}</div>}
+            {message.assets.length > 0 && <div className={styles.assets}>{message.assets.map((asset) => {
+              const resolution = assetResolutions[asset.id];
+              const unavailable = asset.unavailable || resolution?.available === false;
+              return <div className={styles.asset} key={asset.id}>
+                {!asset.purged_at && !unavailable && resolution?.preview_url && <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
+                </>}
+                <div><strong>{asset.file_name}</strong><span>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</span></div>
+                {asset.purged_at ? <em>Attachment deleted by deployment owner</em> : unavailable ? <em>{resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable"}</em> : <>
+                  {asset.preview_path && !resolution?.preview_url && <button type="button" disabled={assetBusy === `preview:${asset.id}`} onClick={() => void resolveAsset(asset, "preview")}>{assetBusy === `preview:${asset.id}` ? "Loading preview…" : "Load preview"}</button>}
+                  {asset.download_path && <button type="button" disabled={assetBusy === `download:${asset.id}`} onClick={() => void resolveAsset(asset, "download")}>{assetBusy === `download:${asset.id}` ? "Signing…" : "Open attachment"}</button>}
+                </>}
+              </div>;
+            })}</div>}
           </article>)}
         </section>
       </>}

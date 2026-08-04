@@ -24,6 +24,13 @@ type PublicAsset = {
   preview_path?: string;
 };
 
+type AssetResolution = {
+  available: boolean;
+  download_url?: string;
+  preview_url?: string;
+  unavailable_reason?: string;
+};
+
 type PublicMessage = {
   id: string;
   author: string;
@@ -69,6 +76,8 @@ export function PublicThreadView({ token }: { token: string }) {
   const [unavailable, setUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
+  const [previewBusy, setPreviewBusy] = useState<string | null>(null);
+  const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,6 +91,7 @@ export function PublicThreadView({ token }: { token: string }) {
       }
       const data = await responseJSON(response);
       setThread(data.thread);
+      setAssetResolutions({});
       setUnavailable(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -101,20 +111,54 @@ export function PublicThreadView({ token }: { token: string }) {
     setError(null);
     try {
       const response = await fetch(asset.download_path, { cache: "no-store" });
-      if (response.status === 404) {
-        setUnavailable(true);
-        setThread(null);
+      const data = await responseJSON(response);
+      if (data.available === false) {
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: { available: false, unavailable_reason: data.unavailable_reason || "Attachment unavailable" }
+        }));
         return;
       }
-      const data = await responseJSON(response);
       if (typeof data.download_url !== "string" || data.download_url === "") {
         throw new Error("The attachment download URL was not returned.");
       }
+      setAssetResolutions((current) => ({
+        ...current,
+        [asset.id]: { ...current[asset.id], available: true, download_url: data.download_url }
+      }));
       window.location.assign(data.download_url);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDownloadBusy(null);
+    }
+  }
+
+  async function preview(asset: PublicAsset) {
+    if (!asset.preview_path || asset.purged_at) return;
+    setPreviewBusy(asset.id);
+    setError(null);
+    try {
+      const response = await fetch(asset.preview_path, { cache: "no-store" });
+      const data = await responseJSON(response);
+      if (data.available === false) {
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: { available: false, unavailable_reason: data.unavailable_reason || "Attachment unavailable" }
+        }));
+        return;
+      }
+      if (typeof data.preview_url !== "string" || data.preview_url === "") {
+        throw new Error("The attachment preview URL was not returned.");
+      }
+      setAssetResolutions((current) => ({
+        ...current,
+        [asset.id]: { ...current[asset.id], available: true, preview_url: data.preview_url }
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewBusy(null);
     }
   }
 
@@ -149,27 +193,38 @@ export function PublicThreadView({ token }: { token: string }) {
                     {message.body && <MessageContent body={message.body} contentType={message.body_content_type}/>}
                     {message.assets.length > 0 && (
                       <div className={styles.attachments}>
-                        {message.assets.map((asset) => (
-                          <div className={styles.attachmentGroup} key={asset.id}>
-                            {!asset.purged_at && !asset.unavailable && asset.preview_path && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img className={styles.attachmentPreview} src={asset.preview_path} alt={asset.file_name} loading="lazy" />
-                            )}
-                            {asset.purged_at ? <div className={`${styles.attachment} ${styles.attachmentPurged}`}>
-                              <span className={styles.fileIcon}>×</span>
-                              <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
-                              <em>Attachment deleted by deployment owner</em>
-                            </div> : asset.unavailable ? <div className={`${styles.attachment} ${styles.attachmentPurged}`}>
-                              <span className={styles.fileIcon}>!</span>
-                              <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
-                              <em>{asset.unavailable_reason || "Attachment unavailable"}</em>
-                            </div> : <button type="button" className={styles.attachment} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
-                              <span className={styles.fileIcon}>↧</span>
-                              <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
-                              <em>{downloadBusy === asset.id ? "Signing…" : "Download"}</em>
-                            </button>}
-                          </div>
-                        ))}
+                        {message.assets.map((asset) => {
+                          const resolution = assetResolutions[asset.id];
+                          const unavailableAsset = asset.unavailable || resolution?.available === false;
+                          return (
+                            <div className={styles.attachmentGroup} key={asset.id}>
+                              {!asset.purged_at && !unavailableAsset && resolution?.preview_url && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img className={styles.attachmentPreview} src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
+                              )}
+                              {asset.purged_at ? <div className={`${styles.attachment} ${styles.attachmentPurged}`}>
+                                <span className={styles.fileIcon}>×</span>
+                                <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                                <em>Attachment deleted by deployment owner</em>
+                              </div> : unavailableAsset ? <div className={`${styles.attachment} ${styles.attachmentPurged}`}>
+                                <span className={styles.fileIcon}>!</span>
+                                <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                                <em>{resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable"}</em>
+                              </div> : <>
+                                {asset.preview_path && !resolution?.preview_url && <button type="button" className={styles.attachment} onClick={() => void preview(asset)} disabled={previewBusy === asset.id}>
+                                  <span className={styles.fileIcon}>◫</span>
+                                  <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                                  <em>{previewBusy === asset.id ? "Loading…" : "Load preview"}</em>
+                                </button>}
+                                <button type="button" className={styles.attachment} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
+                                  <span className={styles.fileIcon}>↧</span>
+                                  <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
+                                  <em>{downloadBusy === asset.id ? "Signing…" : "Download"}</em>
+                                </button>
+                              </>}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
