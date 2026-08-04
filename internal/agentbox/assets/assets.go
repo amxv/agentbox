@@ -3,6 +3,9 @@ package assets
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"mime"
@@ -20,6 +23,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 )
@@ -48,6 +52,7 @@ type PresignedUploadParams struct {
 	FileName         string
 	MimeType         *string
 	SizeBytes        int64
+	SHA256           string
 	ExpiresInSeconds int
 }
 
@@ -57,6 +62,7 @@ type AssetStore interface {
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
 	HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error)
+	CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error)
 	DeleteAssetObject(ctx context.Context, storageKey string) error
 	UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
@@ -66,8 +72,9 @@ func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (ba
 		return backup.ObjectMetadata{}, errors.New("R2 bucket is required")
 	}
 	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(key),
+		ChecksumMode: s3types.ChecksumModeEnabled,
 	})
 	if err != nil {
 		if isObjectNotFound(err) {
@@ -76,12 +83,14 @@ func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (ba
 		return backup.ObjectMetadata{}, err
 	}
 	return backup.ObjectMetadata{
-		Bucket:       bucket,
-		Key:          key,
-		SizeBytes:    aws.ToInt64(output.ContentLength),
-		ETag:         normalizeETag(aws.ToString(output.ETag)),
-		ContentType:  output.ContentType,
-		LastModified: output.LastModified,
+		Bucket:         bucket,
+		Key:            key,
+		SizeBytes:      aws.ToInt64(output.ContentLength),
+		ETag:           normalizeETag(aws.ToString(output.ETag)),
+		ContentType:    output.ContentType,
+		ChecksumSHA256: aws.ToString(output.ChecksumSHA256),
+		Metadata:       cloneMetadata(output.Metadata),
+		LastModified:   output.LastModified,
 	}, nil
 }
 
@@ -193,27 +202,34 @@ func (s *R2Store) UploadAssetBytes(ctx context.Context, params UploadBytesParams
 
 	fileName := SanitizeFilename(params.FileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
-	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
+	digest := sha256.Sum256(params.Bytes)
+	digestHex := hex.EncodeToString(digest[:])
+	digestBase64 := base64.StdEncoding.EncodeToString(digest[:])
+	storageKey := MakeFinalStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName, digestHex)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
 		contentType = *mimeType
 	}
 
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(s.cfg.R2Bucket),
-		Key:         aws.String(storageKey),
-		Body:        bytes.NewReader(params.Bytes),
-		ContentType: aws.String(contentType),
+		Bucket:         aws.String(s.cfg.R2Bucket),
+		Key:            aws.String(storageKey),
+		Body:           bytes.NewReader(params.Bytes),
+		ContentType:    aws.String(contentType),
+		ContentLength:  aws.Int64(int64(len(params.Bytes))),
+		ChecksumSHA256: aws.String(digestBase64),
+		Metadata:       map[string]string{"agentbox-sha256": digestHex},
 	})
 	if err != nil {
 		return agenttypes.NewAsset{}, err
 	}
 
 	return agenttypes.NewAsset{
-		StorageKey: storageKey,
-		FileName:   fileName,
-		MimeType:   mimeType,
-		SizeBytes:  int64(len(params.Bytes)),
+		StorageKey:    storageKey,
+		FileName:      fileName,
+		MimeType:      mimeType,
+		SizeBytes:     int64(len(params.Bytes)),
+		ContentSHA256: digestHex,
 	}, nil
 }
 
@@ -223,6 +239,10 @@ func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params Pres
 	}
 	if params.SizeBytes > s.cfg.MaxFileSizeBytes {
 		return agenttypes.PresignedUpload{}, fmt.Errorf("File is too large. Max size is %d bytes.", s.cfg.MaxFileSizeBytes)
+	}
+	digestHex, digestBase64, err := normalizeSHA256(params.SHA256)
+	if err != nil {
+		return agenttypes.PresignedUpload{}, err
 	}
 	expires := params.ExpiresInSeconds
 	if expires == 0 {
@@ -236,15 +256,18 @@ func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params Pres
 	}
 	fileName := SanitizeFilename(params.FileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
-	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+	storageKey := MakeStagingStorageKey(params.UserID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
 		contentType = *mimeType
 	}
 	input := &s3.PutObjectInput{
-		Bucket:      aws.String(s.cfg.R2Bucket),
-		Key:         aws.String(storageKey),
-		ContentType: aws.String(contentType),
+		Bucket:         aws.String(s.cfg.R2Bucket),
+		Key:            aws.String(storageKey),
+		ContentType:    aws.String(contentType),
+		ContentLength:  aws.Int64(params.SizeBytes),
+		ChecksumSHA256: aws.String(digestBase64),
+		Metadata:       map[string]string{"agentbox-sha256": digestHex},
 	}
 	out, err := s.presigner.PresignPutObject(ctx, input, func(opts *s3.PresignOptions) {
 		opts.Expires = time.Duration(expires) * time.Second
@@ -258,10 +281,12 @@ func (s *R2Store) CreatePresignedAssetUploadURL(ctx context.Context, params Pres
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  params.SizeBytes,
+		SHA256:     digestHex,
 		UploadURL:  out.URL,
 		ExpiresIn:  expires,
 		RequiredHeaders: map[string]string{
-			"content-type": contentType,
+			"content-type":               contentType,
+			"x-amz-meta-agentbox-sha256": digestHex,
 		},
 	}, nil
 }
@@ -304,6 +329,19 @@ func (s *R2Store) HeadAssetObject(ctx context.Context, storageKey string) (backu
 		return backup.ObjectMetadata{}, errors.New("R2_BUCKET is required for asset inspection.")
 	}
 	return s.HeadObject(ctx, s.cfg.R2Bucket, strings.TrimSpace(storageKey))
+}
+
+func (s *R2Store) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
+	if strings.TrimSpace(s.cfg.R2Bucket) == "" {
+		return backup.ObjectMetadata{}, errors.New("R2_BUCKET is required for asset copies.")
+	}
+	return s.CopyObject(ctx, backup.CopyObjectRequest{
+		SourceBucket:      s.cfg.R2Bucket,
+		SourceKey:         strings.TrimSpace(sourceStorageKey),
+		DestinationBucket: s.cfg.R2Bucket,
+		DestinationKey:    strings.TrimSpace(destinationStorageKey),
+		ExpectedETag:      strings.TrimSpace(expectedETag),
+	})
 }
 
 func (s *R2Store) DeleteAssetObject(ctx context.Context, storageKey string) error {
@@ -382,6 +420,42 @@ func MakeStorageKey(userID string, threadID string, messageHint string, fileName
 	}, "/")
 }
 
+func MakeStagingStorageKey(userID string, threadID string, uploadID string, fileName string) string {
+	return strings.Join([]string{
+		"agentbox",
+		"staging",
+		userID,
+		threadID,
+		uploadID,
+		uuid.NewString() + "-" + SanitizeFilename(fileName),
+	}, "/")
+}
+
+func MakeFinalStorageKey(userID string, threadID string, messageHint string, fileName string, digestHex string) string {
+	return strings.Join([]string{
+		"agentbox",
+		"final",
+		"sha256",
+		strings.ToLower(strings.TrimSpace(digestHex)),
+		userID,
+		threadID,
+		messageHint,
+		uuid.NewString() + "-" + SanitizeFilename(fileName),
+	}, "/")
+}
+
+func SHA256FromFinalStorageKey(storageKey string) string {
+	parts := strings.Split(strings.TrimSpace(storageKey), "/")
+	if len(parts) < 5 || parts[0] != "agentbox" || parts[1] != "final" || parts[2] != "sha256" {
+		return ""
+	}
+	digestHex, _, err := normalizeSHA256(parts[3])
+	if err != nil {
+		return ""
+	}
+	return digestHex
+}
+
 func NormalizeChatGPTFileInput(input ChatGPTFileInput) (ChatGPTFileInput, error) {
 	input.DownloadURL = strings.TrimSpace(input.DownloadURL)
 	input.FileID = strings.TrimSpace(input.FileID)
@@ -416,6 +490,26 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func normalizeSHA256(value string) (string, string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", "", errors.New("sha256 must be exactly 64 hexadecimal characters")
+	}
+	return value, base64.StdEncoding.EncodeToString(decoded), nil
+}
+
+func cloneMetadata(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[strings.ToLower(key)] = value
+	}
+	return result
 }
 
 func normalizeETag(value string) string {

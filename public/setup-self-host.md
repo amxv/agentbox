@@ -69,7 +69,12 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
+AGENTBOX_MAINTENANCE_BYPASS_KEY
 ```
+
+`AGENTBOX_MAINTENANCE_BYPASS_KEY` is an operator-only deployment secret used
+for maintenance access and the bounded upload-cleanup endpoint. Do not expose it
+to the dashboard, Raycast, MCP hosts, browsers, or ordinary API clients.
 
 ## 5. Deploy and migrate
 
@@ -168,6 +173,21 @@ Current MCP tools:
 - `manage_thread_visibility`
 
 Every MCP tool reads or writes the same shared inbox used by all other surfaces. In ChatGPT, `post_message` can attach a conversation file artifact natively: ask it to attach “the file I just created.” Do not discover or paste a file ID, sandbox path, local path, or temporary URL. The host supplies the structured file object; ordinary HTTP clients continue to use multipart or direct uploads.
+
+For direct uploads, hash the exact file bytes first and send lowercase
+hexadecimal `sha256` together with `file_name`, optional `mime_type`, and exact
+`size_bytes` when requesting the upload intent. PUT the same bytes with every
+returned required header, then post the returned `upload_id`. The capability is
+staging-only: AgentBox verifies the object and conditionally promotes it to a
+new immutable final key during authorized message finalization. Expired or
+rejected staging objects are cleaned in bounded exact-key passes. A trusted
+operator can explicitly drain a batch with:
+
+```bash
+curl -fsS -X POST \
+  -H "x-agentbox-maintenance-key: $AGENTBOX_MAINTENANCE_BYPASS_KEY" \
+  "https://YOUR-BACKEND/api/admin/uploads/cleanup?limit=100"
+```
 
 ## 11. Connect Raycast on macOS
 

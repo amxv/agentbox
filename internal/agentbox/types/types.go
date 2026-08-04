@@ -23,6 +23,8 @@ var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
 var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
 var ErrThreadVisibilityConflict = errors.New("the same team cannot be added and removed in one visibility change")
 var ErrPendingUploadUnavailable = errors.New("pending upload is unavailable, expired, or already consumed")
+var ErrPendingUploadQuotaExceeded = errors.New("pending upload quota exceeded")
+var ErrPendingUploadFinalizing = errors.New("pending upload is already finalizing")
 var ErrCredentialLabelConflict = errors.New("an active credential already uses that label")
 
 type Actor struct {
@@ -407,10 +409,11 @@ type ChatGPTFileReference struct {
 }
 
 type NewAsset struct {
-	StorageKey string
-	FileName   string
-	MimeType   *string
-	SizeBytes  int64
+	StorageKey    string
+	FileName      string
+	MimeType      *string
+	SizeBytes     int64
+	ContentSHA256 string
 }
 
 type PendingUpload struct {
@@ -420,6 +423,13 @@ type PendingUpload struct {
 	FileName                 string  `json:"file_name"`
 	MimeType                 *string `json:"mime_type"`
 	SizeBytes                int64   `json:"size_bytes"`
+	ExpectedSHA256           string  `json:"sha256,omitempty"`
+	Status                   string  `json:"status,omitempty"`
+	FinalStorageKey          string  `json:"-"`
+	FinalizationToken        string  `json:"-"`
+	FinalizationStartedAt    *string `json:"-"`
+	RejectedAt               *string `json:"rejected_at,omitempty"`
+	RejectionReason          string  `json:"rejection_reason,omitempty"`
 	CreatedAt                string  `json:"created_at"`
 	ExpiresAt                string  `json:"expires_at"`
 	CreatedBy                string  `json:"created_by"`
@@ -434,6 +444,7 @@ type UploadIntentFile struct {
 	FileName  string  `json:"file_name"`
 	MimeType  *string `json:"mime_type"`
 	SizeBytes int64   `json:"size_bytes"`
+	SHA256    string  `json:"sha256"`
 }
 
 type PresignedUpload struct {
@@ -442,6 +453,7 @@ type PresignedUpload struct {
 	FileName        string            `json:"file_name"`
 	MimeType        *string           `json:"mime_type"`
 	SizeBytes       int64             `json:"size_bytes"`
+	SHA256          string            `json:"sha256"`
 	UploadURL       string            `json:"upload_url"`
 	ExpiresIn       int               `json:"expires_in"`
 	RequiredHeaders map[string]string `json:"required_headers"`
@@ -449,6 +461,25 @@ type PresignedUpload struct {
 
 type UploadedAssetReference struct {
 	UploadID string `json:"upload_id"`
+}
+
+type UploadFinalizationTarget struct {
+	UploadID        string
+	FinalStorageKey string
+}
+
+type UploadCleanupCandidate struct {
+	ID         string `json:"id"`
+	UploadID   string `json:"upload_id,omitempty"`
+	StorageKey string `json:"-"`
+	ObjectKind string `json:"object_kind"`
+}
+
+type UploadCleanupResult struct {
+	Attempted int      `json:"attempted"`
+	Cleaned   int      `json:"cleaned"`
+	Failed    int      `json:"failed"`
+	Failures  []string `json:"failures"`
 }
 
 type SearchThreadResult struct {

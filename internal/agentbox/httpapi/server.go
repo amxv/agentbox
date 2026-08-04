@@ -87,6 +87,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
 	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
 	s.mux.HandleFunc("/api/admin/owner/setup-token", s.adminOwnerSetupToken)
+	s.mux.HandleFunc("/api/admin/uploads/cleanup", s.adminUploadCleanup)
 	s.mux.HandleFunc("/api/owner/invitations", s.ownerInvitations)
 	s.mux.HandleFunc("/api/owner/invitations/", s.ownerInvitation)
 	s.mux.HandleFunc("/api/owner/users", s.ownerUsers)
@@ -162,6 +163,31 @@ func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) adminUploadCleanup(w http.ResponseWriter, r *http.Request) {
+	if !s.hasMaintenanceBypass(r) {
+		writeCodedError(w, http.StatusUnauthorized, "UNAUTHORIZED", "A valid maintenance key is required.")
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "limit must be between 1 and 100.")
+			return
+		}
+		limit = parsed
+	}
+	result, err := s.service.CleanupPendingUploads(r.Context(), limit)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) ownerInvitation(w http.ResponseWriter, r *http.Request) {
@@ -1584,13 +1610,13 @@ func writeServiceError(w http.ResponseWriter, err error) {
 			status = http.StatusNotFound
 		case "PERMISSION_DENIED", "BROWSER_SESSION_REQUIRED", "OWNER_BROWSER_REQUIRED":
 			status = http.StatusForbidden
-		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS", "CREDENTIAL_LABEL_CONFLICT":
+		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS", "CREDENTIAL_LABEL_CONFLICT", "UPLOAD_FINALIZING":
 			status = http.StatusConflict
 		case "ATTACHMENT_PURGED", "ATTACHMENT_UNAVAILABLE":
 			status = http.StatusGone
 		case "TEAM_SLUG_CONFLICT":
 			status = http.StatusConflict
-		case "RATE_LIMITED":
+		case "RATE_LIMITED", "UPLOAD_QUOTA_EXCEEDED":
 			status = http.StatusTooManyRequests
 		case "INTERNAL_ERROR":
 			status = http.StatusInternalServerError
@@ -1731,6 +1757,7 @@ type uploadIntentResponse struct {
 	FileName        string            `json:"file_name"`
 	MimeType        *string           `json:"mime_type"`
 	SizeBytes       int64             `json:"size_bytes"`
+	SHA256          string            `json:"sha256"`
 	UploadURL       string            `json:"upload_url"`
 	ExpiresIn       int               `json:"expires_in"`
 	RequiredHeaders map[string]string `json:"required_headers"`
@@ -1744,6 +1771,7 @@ func safeUploadIntentResponses(uploads []types.PresignedUpload) []uploadIntentRe
 			FileName:        upload.FileName,
 			MimeType:        upload.MimeType,
 			SizeBytes:       upload.SizeBytes,
+			SHA256:          upload.SHA256,
 			UploadURL:       upload.UploadURL,
 			ExpiresIn:       upload.ExpiresIn,
 			RequiredHeaders: upload.RequiredHeaders,

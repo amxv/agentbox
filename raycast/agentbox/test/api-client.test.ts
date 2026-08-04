@@ -429,9 +429,11 @@ test("create, post, and signed-download methods use the final envelopes", async 
 });
 
 test("batch upload validates response safety, metadata, ordering, and external PUT isolation", async () => {
+  const shaOne = "a".repeat(64);
+  const shaTwo = "b".repeat(64);
   const files = [
-    { file_name: "one.md", mime_type: "text/markdown", size_bytes: 11 },
-    { file_name: "two.txt", mime_type: "text/plain", size_bytes: 22 },
+    { file_name: "one.md", mime_type: "text/markdown", size_bytes: 11, sha256: shaOne },
+    { file_name: "two.txt", mime_type: "text/plain", size_bytes: 22, sha256: shaTwo },
   ];
   const puts: Array<{ url: string; init?: RequestInit }> = [];
   const uploads: PresignedUpload[] = files.map((file, index) => ({
@@ -439,9 +441,10 @@ test("batch upload validates response safety, metadata, ordering, and external P
     file_name: file.file_name,
     mime_type: file.mime_type,
     size_bytes: file.size_bytes,
+    sha256: file.sha256,
     upload_url: `https://uploads.example/${index + 1}`,
     expires_in: 900,
-    required_headers: { "content-type": file.mime_type },
+    required_headers: { "content-type": file.mime_type, "x-amz-meta-agentbox-sha256": file.sha256 },
   }));
   const client = new AgentboxClient({ baseUrl: "https://agentbox.example", apiKey: "secret" }, async (input, init) => {
     const url = new URL(String(input));
@@ -462,7 +465,10 @@ test("batch upload validates response safety, metadata, ordering, and external P
   await client.uploadBytesToPresignedUrl(prepared[0], new Uint8Array([1, 2, 3]));
   assert.equal(puts[0].url, "https://uploads.example/1");
   assert.equal(new URL(puts[0].url).searchParams.has("key"), false);
-  assert.deepEqual(puts[0].init?.headers, { "content-type": "text/markdown" });
+  assert.deepEqual(puts[0].init?.headers, {
+    "content-type": "text/markdown",
+    "x-amz-meta-agentbox-sha256": shaOne,
+  });
 
   const reordered = new AgentboxClient({ baseUrl: "https://agentbox.example", apiKey: "secret" }, async () =>
     json({ uploads: [uploads[1], uploads[0]] }, 201),

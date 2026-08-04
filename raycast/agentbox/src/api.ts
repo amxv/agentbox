@@ -120,15 +120,18 @@ export function getAssetDownloadUrl(assetId: string, expiresIn?: number): Promis
   return client().getAssetDownloadUrl(assetId, expiresIn);
 }
 
-export function uploadIntentFileFromPath(
+export async function uploadIntentFileFromPath(
   filePath: string,
   sizeBytes: number,
   mimeType?: string | null,
-): UploadIntentFile {
+): Promise<UploadIntentFile> {
+  const bytes = await readFile(filePath);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   return {
     file_name: path.basename(filePath),
     mime_type: mimeType ?? mimeTypeForPath(filePath),
     size_bytes: sizeBytes,
+    sha256: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
   };
 }
 

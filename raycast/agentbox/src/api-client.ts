@@ -158,6 +158,7 @@ export type UploadIntentFile = {
   file_name: string;
   mime_type?: string | null;
   size_bytes: number;
+  sha256: string;
 };
 
 export type PresignedUpload = {
@@ -165,6 +166,7 @@ export type PresignedUpload = {
   file_name: string;
   mime_type: string | null;
   size_bytes: number;
+  sha256: string;
   upload_url: string;
   expires_in: number;
   required_headers: Record<string, string>;
@@ -380,6 +382,7 @@ export class AgentboxClient {
       if (
         upload.file_name !== requested.file_name ||
         upload.size_bytes !== requested.size_bytes ||
+        upload.sha256 !== requested.sha256 ||
         (upload.mime_type ?? null) !== (requested.mime_type ?? null)
       ) {
         throw new Error(`Upload preparation changed file metadata at index ${index}.`);
@@ -672,6 +675,7 @@ function decodePresignedUpload(value: unknown, index: number): PresignedUpload {
     file_name: expectString(record.file_name, `${path}.file_name`),
     mime_type: nullableString(record.mime_type, `${path}.mime_type`),
     size_bytes: expectNumber(record.size_bytes, `${path}.size_bytes`),
+    sha256: expectString(record.sha256, `${path}.sha256`),
     upload_url: expectString(record.upload_url, `${path}.upload_url`),
     expires_in: expectNumber(record.expires_in, `${path}.expires_in`),
     required_headers: expectStringRecord(record.required_headers, `${path}.required_headers`),

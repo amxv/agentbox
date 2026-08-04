@@ -15,7 +15,10 @@ The cutover is intentionally split around migration `0017`. Migrations through
 `0016` create the replacement identity, team, visibility, and purge structures
 while retaining temporary legacy schema. The permanent owner must then be
 created explicitly. Migration `0017` verifies that every preserved thread has
-that owner before removing the temporary schema. There is no down migration.
+that owner before removing the temporary schema; the same migration command
+then continues through the reviewed additive migrations, including `0021`
+credential inventory and `0022` immutable staged uploads. There is no down
+migration.
 
 ## 1. Pin the reviewed branch state
 
@@ -145,8 +148,9 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 ```
 
 Migration `0017` refuses to run if owner backfill is incomplete. The postcheck
-then proves the final migration is recorded, exactly one enabled owner exists,
-all content relationships are intact, and no legacy table or column remains.
+then requires migration `0022`, proves exactly one enabled owner exists, checks
+all content relationships, validates the pending-upload state machine and exact
+staging cleanup inventory, and confirms that no legacy table or column remains.
 
 Compare the postcheck thread/message/asset/pending-upload counts with the backup
 manifest. Also compare stable IDs, message ordering, bodies, content types,
@@ -166,8 +170,14 @@ new product paths:
    `x-agentbox-maintenance-key`; the header never replaces normal auth.
 3. Use `agentbox login` for each test user and create distinct ChatGPT, Claude,
    local, Raycast, and automation credentials.
-4. Exercise private thread create/list/search/get/post, multipart uploads,
-   pending-upload finalization, signed previews/downloads, and CLI download.
+4. Exercise private thread create/list/search/get/post, multipart uploads, and
+   checksum-bound direct uploads. For each direct upload, calculate lowercase
+   hexadecimal SHA-256 over the exact bytes, send it with exact size/MIME in the
+   intent, PUT the unchanged body with the returned headers, finalize by
+   `upload_id`, and verify the persisted asset uses a distinct immutable final
+   key. Replay the original PUT after finalization and prove the attachment and
+   signed download identity do not change. Also exercise signed
+   previews/downloads and CLI download.
 5. Share one thread with one team and another with overlapping teams. Remove a
    membership and a share independently and prove access disappears immediately.
 6. Use direct foreign thread and asset IDs from another user and require denial
@@ -184,6 +194,16 @@ new product paths:
 10. Confirm every timeline entry still shows stable `User · Actor` attribution.
 11. Execute [`raycast-developer-mode-smoke.md`](raycast-developer-mode-smoke.md) on the local Mac against this exact deployed commit. Preserve sanitized evidence for all five filters, private creation, replies, ordered/colliding attachments, signed and unavailable states, visibility/self-revocation, per-installation rotation, owner non-bypass, and disabled-user invalidation.
 12. Execute [`chatgpt-file-attachment-smoke.md`](chatgpt-file-attachment-smoke.md) against this exact deployed commit. Refresh/recreate the connector, run Scan Tools when available, attach “the file I just created” without exposing an ID/path/URL, compare exact bytes, verify filename/MIME plus `User · ChatGPT` message/asset attribution and private R2 persistence, prove text-only posting still works, and prove a literal sandbox path creates no partial state.
+13. Drain the upload cleanup inventory in bounded batches before removing the
+    operator secret. Repeat until `attempted` is zero, then verify that expired,
+    rejected, abandoned, and stale-finalization staging/final-candidate keys are
+    gone while every asset-backed final key remains:
+
+    ```bash
+    curl -fsS -X POST \
+      -H "x-agentbox-maintenance-key: $AGENTBOX_MAINTENANCE_BYPASS_KEY" \
+      "https://YOUR-BACKEND/api/admin/uploads/cleanup?limit=100"
+    ```
 
 Useful trusted-shell checks include:
 

@@ -3,10 +3,12 @@ package assets
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
 	"agentbox/internal/agentbox/backup"
+	"agentbox/internal/agentbox/config"
 )
 
 func TestFilenameMimeAndStorageHelpers(t *testing.T) {
@@ -70,7 +72,7 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	if asset.FileName != "report-one.txt" || asset.SizeBytes != 5 {
 		t.Fatalf("unexpected asset: %#v", asset)
 	}
-	if !strings.HasPrefix(asset.StorageKey, "agentbox/usr_1/thr_1/message/") {
+	if !strings.HasPrefix(asset.StorageKey, "agentbox/final/sha256/") || !strings.Contains(asset.StorageKey, "/usr_1/thr_1/message/") || asset.ContentSHA256 != "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" {
 		t.Fatalf("storage key = %q", asset.StorageKey)
 	}
 	url, err := store.CreateSignedAssetDownloadURL(context.Background(), SignedURLParams{
@@ -84,6 +86,47 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	}
 	if !strings.Contains(url, "X-Amz-Expires=60") {
 		t.Fatalf("signed URL = %q", url)
+	}
+}
+
+func TestR2PresignedUploadBindsActualLengthTypeAndSHA256AtStorageBoundary(t *testing.T) {
+	store, err := NewR2Store(t.Context(), config.Config{
+		R2AccountID:       "example-account",
+		R2AccessKeyID:     "test-access-key",
+		R2SecretAccessKey: "test-secret-key",
+		R2Bucket:          "private-assets",
+		MaxFileSizeBytes:  1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mimeType := "application/octet-stream"
+	digest := strings.Repeat("a", 64)
+	upload, err := store.CreatePresignedAssetUploadURL(t.Context(), PresignedUploadParams{
+		UserID: "usr_boundary", ThreadID: "thr_boundary", UploadID: "upl_boundary",
+		FileName: "payload.bin", MimeType: &mimeType, SizeBytes: 17, SHA256: digest, ExpiresInSeconds: 300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(upload.UploadURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedHeaders := ";" + parsed.Query().Get("X-Amz-SignedHeaders") + ";"
+	for _, required := range []string{";content-length;", ";content-type;", ";host;", ";x-amz-meta-agentbox-sha256;"} {
+		if !strings.Contains(signedHeaders, required) {
+			t.Fatalf("signed headers %q omit %q", signedHeaders, required)
+		}
+	}
+	if parsed.Query().Get("X-Amz-Checksum-Sha256") == "" || parsed.Query().Get("x-id") != "PutObject" {
+		t.Fatalf("presigned checksum/action query=%q", parsed.RawQuery)
+	}
+	if upload.RequiredHeaders["content-type"] != mimeType || upload.RequiredHeaders["x-amz-meta-agentbox-sha256"] != digest || upload.SizeBytes != 17 || upload.SHA256 != digest {
+		t.Fatalf("required upload contract=%#v", upload)
+	}
+	if !strings.HasPrefix(upload.StorageKey, "agentbox/staging/usr_boundary/thr_boundary/upl_boundary/") || strings.Contains(upload.StorageKey, "/final/") {
+		t.Fatalf("presigned upload used a canonical key: %q", upload.StorageKey)
 	}
 }
 

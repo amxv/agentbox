@@ -49,6 +49,7 @@ func TestR2StoreChatGPTFilePersistsFetchedBytesAndMetadata(t *testing.T) {
 	var method string
 	var requestPath string
 	var contentType string
+	var checksumMetadata string
 	var body []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		contents, err := io.ReadAll(request.Body)
@@ -61,6 +62,7 @@ func TestR2StoreChatGPTFilePersistsFetchedBytesAndMetadata(t *testing.T) {
 		method = request.Method
 		requestPath = request.URL.Path
 		contentType = request.Header.Get("content-type")
+		checksumMetadata = request.Header.Get("x-amz-meta-agentbox-sha256")
 		body = contents
 		mutex.Unlock()
 		w.Header().Set("ETag", `"test-etag"`)
@@ -94,13 +96,13 @@ func TestR2StoreChatGPTFilePersistsFetchedBytesAndMetadata(t *testing.T) {
 	if asset.FileName != "handoff-plan.md" || asset.MimeType == nil || *asset.MimeType != mimeType || asset.SizeBytes != int64(len(fetcher.contents)) {
 		t.Fatalf("asset = %#v", asset)
 	}
-	if !strings.HasPrefix(asset.StorageKey, "agentbox/usr_chatgpt/thr_chatgpt/file_handoff/") || !strings.HasSuffix(asset.StorageKey, "-handoff-plan.md") {
+	if !strings.HasPrefix(asset.StorageKey, "agentbox/final/sha256/") || !strings.Contains(asset.StorageKey, "/usr_chatgpt/thr_chatgpt/file_handoff/") || !strings.HasSuffix(asset.StorageKey, "-handoff-plan.md") || asset.ContentSHA256 == "" {
 		t.Fatalf("storage key = %q", asset.StorageKey)
 	}
 	mutex.Lock()
 	defer mutex.Unlock()
-	if method != http.MethodPut || !strings.HasSuffix(requestPath, "/"+asset.StorageKey) || contentType != mimeType || string(body) != string(fetcher.contents) {
-		t.Fatalf("R2 request method=%q path=%q content-type=%q body=%q", method, requestPath, contentType, body)
+	if method != http.MethodPut || !strings.HasSuffix(requestPath, "/"+asset.StorageKey) || contentType != mimeType || checksumMetadata != asset.ContentSHA256 || string(body) != string(fetcher.contents) {
+		t.Fatalf("R2 request method=%q path=%q content-type=%q checksum=%q body=%q", method, requestPath, contentType, checksumMetadata, body)
 	}
 }
 

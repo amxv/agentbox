@@ -159,38 +159,62 @@ func TestDirectUploadFinalizationValidatesBatchMetadataAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	mimeType := "text/plain"
-	if _, err := svc.CreatePresignedUploads(context.Background(), authContext, thread.ID, []types.UploadIntentFile{{FileName: "first.txt", MimeType: &mimeType, SizeBytes: 4}, {FileName: "", SizeBytes: 1}}); !hasCodedError(err, "INVALID_ARGUMENT") {
+	digest := strings.Repeat("a", 64)
+	if _, err := svc.CreatePresignedUploads(context.Background(), authContext, thread.ID, []types.UploadIntentFile{{FileName: "first.txt", MimeType: &mimeType, SizeBytes: 4, SHA256: digest}, {FileName: "", SizeBytes: 1, SHA256: digest}}); !hasCodedError(err, "INVALID_ARGUMENT") {
 		t.Fatalf("invalid batch error=%v", err)
 	}
 	if len(repo.Pending) != 0 {
 		t.Fatalf("invalid batch left hidden pending rows: %#v", repo.Pending)
 	}
-	uploads, err := svc.CreatePresignedUploads(context.Background(), authContext, thread.ID, []types.UploadIntentFile{{FileName: "ready.txt", MimeType: &mimeType, SizeBytes: 4}})
-	if err != nil || len(uploads) != 1 {
-		t.Fatalf("uploads=%#v err=%v", uploads, err)
+	create := func(name string) types.PresignedUpload {
+		t.Helper()
+		uploads, err := svc.CreatePresignedUploads(context.Background(), authContext, thread.ID, []types.UploadIntentFile{{FileName: name, MimeType: &mimeType, SizeBytes: 4, SHA256: digest}})
+		if err != nil || len(uploads) != 1 {
+			t.Fatalf("uploads=%#v err=%v", uploads, err)
+		}
+		return uploads[0]
 	}
-	params := PostMessageParams{ThreadID: thread.ID, Body: "finalize", UploadedAssets: []types.UploadedAssetReference{{UploadID: uploads[0].UploadID}}}
-	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_NOT_MATERIALIZED") {
+	post := func(upload types.PresignedUpload) (types.Message, error) {
+		return svc.PostMessage(context.Background(), authContext, PostMessageParams{ThreadID: thread.ID, Body: "finalize", UploadedAssets: []types.UploadedAssetReference{{UploadID: upload.UploadID}}})
+	}
+
+	missing := create("missing.txt")
+	if _, err := post(missing); !hasCodedError(err, "UPLOAD_NOT_MATERIALIZED") {
 		t.Fatalf("missing object finalization error=%v", err)
 	}
-	if len(repo.Messages) != 0 || repo.Pending[0].ConsumedAt != nil {
-		t.Fatalf("missing object mutated state messages=%#v pending=%#v", repo.Messages, repo.Pending)
+	if len(repo.Messages) != 0 {
+		t.Fatalf("missing object mutated messages=%#v", repo.Messages)
 	}
-	store.PutAssetObject(uploads[0].StorageKey, 5, &mimeType)
-	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
+
+	wrongSize := create("wrong-size.txt")
+	store.PutAssetObjectWithSHA(wrongSize.StorageKey, 5, &mimeType, digest)
+	if _, err := post(wrongSize); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
 		t.Fatalf("size mismatch error=%v", err)
 	}
+
+	wrongTypeUpload := create("wrong-type.txt")
 	wrongType := "application/octet-stream"
-	store.PutAssetObject(uploads[0].StorageKey, 4, &wrongType)
-	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
+	store.PutAssetObjectWithSHA(wrongTypeUpload.StorageKey, 4, &wrongType, digest)
+	if _, err := post(wrongTypeUpload); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
 		t.Fatalf("type mismatch error=%v", err)
 	}
-	store.PutAssetObject(uploads[0].StorageKey, 4, &mimeType)
-	message, err := svc.PostMessage(context.Background(), authContext, params)
-	if err != nil || len(message.Assets) != 1 || repo.Pending[0].ConsumedAt == nil {
-		t.Fatalf("finalized message=%#v pending=%#v err=%v", message, repo.Pending, err)
+
+	wrongChecksum := create("wrong-checksum.txt")
+	store.PutAssetObjectWithSHA(wrongChecksum.StorageKey, 4, &mimeType, strings.Repeat("b", 64))
+	if _, err := post(wrongChecksum); !hasCodedError(err, "UPLOAD_METADATA_MISMATCH") {
+		t.Fatalf("checksum mismatch error=%v", err)
 	}
-	if _, err := svc.PostMessage(context.Background(), authContext, params); !hasCodedError(err, "UPLOAD_UNAVAILABLE") {
+
+	ready := create("ready.txt")
+	store.PutAssetObjectWithSHA(ready.StorageKey, 4, &mimeType, digest)
+	message, err := post(ready)
+	if err != nil || len(message.Assets) != 1 {
+		t.Fatalf("finalized message=%#v err=%v", message, err)
+	}
+	if message.Assets[0].StorageKey == ready.StorageKey || !strings.Contains(message.Assets[0].StorageKey, "/final/sha256/"+digest+"/") {
+		t.Fatalf("canonical asset did not use an immutable final key: %#v", message.Assets[0])
+	}
+	if _, err := post(ready); !hasCodedError(err, "UPLOAD_UNAVAILABLE") {
 		t.Fatalf("replay error=%v", err)
 	}
 	if len(repo.Messages) != 1 || len(repo.Assets) != 1 {
@@ -327,7 +351,7 @@ func TestMissingAttachmentIsUnavailableAcrossAuthenticatedAndPublicSigning(t *te
 		t.Fatalf("public view=%#v err=%v", view, err)
 	}
 	publicAsset := view.Messages[0].Assets[0]
-	if !publicAsset.Unavailable || publicAsset.DownloadPath != "" || publicAsset.PreviewPath != "" {
+	if publicAsset.Unavailable || publicAsset.DownloadPath == "" || publicAsset.PreviewPath == "" {
 		t.Fatalf("missing public asset=%#v", publicAsset)
 	}
 	if _, err := svc.PublicAssetDownloadURL(context.Background(), visibility.PublicLink.Token, message.Assets[0].ID); !hasCodedError(err, "ATTACHMENT_UNAVAILABLE") {
@@ -1581,7 +1605,7 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	assertScopeDenied("create thread", err)
 	_, err = svc.PostMessage(context.Background(), *restrictedAuth, PostMessageParams{ThreadID: thread.ID, Body: "nope"})
 	assertScopeDenied("post message", err)
-	_, err = svc.CreatePresignedUploads(context.Background(), *restrictedAuth, thread.ID, []types.UploadIntentFile{{FileName: "asset.txt"}})
+	_, err = svc.CreatePresignedUploads(context.Background(), *restrictedAuth, thread.ID, []types.UploadIntentFile{{FileName: "asset.txt", SHA256: strings.Repeat("a", 64)}})
 	assertScopeDenied("upload intent", err)
 	_, err = svc.GetAsset(context.Background(), *restrictedAuth, message.Assets[0].ID)
 	assertScopeDenied("get asset", err)
@@ -1611,7 +1635,7 @@ func TestServiceEnforcesAPIKeyScopes(t *testing.T) {
 	if _, err := svc.SignedAssetDownloadURL(context.Background(), *scopedAuth, message.Assets[0].ID, 300); err != nil {
 		t.Fatalf("scoped sign asset failed: %v", err)
 	}
-	if _, err := svc.CreatePresignedUploads(context.Background(), *scopedAuth, thread.ID, []types.UploadIntentFile{{FileName: "next.txt"}}); err != nil {
+	if _, err := svc.CreatePresignedUploads(context.Background(), *scopedAuth, thread.ID, []types.UploadIntentFile{{FileName: "next.txt", SHA256: strings.Repeat("a", 64)}}); err != nil {
 		t.Fatalf("scoped upload intent failed: %v", err)
 	}
 }

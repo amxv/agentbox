@@ -78,7 +78,11 @@ exports its snapshot to `pg_dump`, and records counts from that same snapshot fo
 - pending uploads.
 
 It also reports relational orphan counts and enumerates every exact
-`storage_key` referenced by assets and pending uploads. For each distinct key it:
+`storage_key` referenced by non-purged finalized assets and by the upload
+cleanup inventory. The latter represents temporary staging objects and
+uncommitted final candidates for pending, rejected, expired, or interrupted
+uploads; it never substitutes those keys for the canonical asset inventory. For
+each distinct key the command:
 
 1. verifies that the source object exists;
 2. compares the database size with R2 metadata;
@@ -89,11 +93,14 @@ The original opaque object key is preserved as the suffix of the recovery key.
 No production object is renamed or deleted.
 
 An existing recovery object with matching size and ETag is accepted, making a
-rerun with the same run ID idempotent. A missing referenced object, size mismatch,
-copy failure, dump failure, or relational orphan makes `ready` false and exits
-non-zero. Objects present in the source inventory but absent from PostgreSQL are
-recorded as warnings for investigation; they do not by themselves make the
-content backup incomplete.
+rerun with the same run ID idempotent. A missing finalized asset object, size
+mismatch, copy failure, dump failure, or relational orphan makes `ready` false
+and exits non-zero. A cleanup-tracked staging/final-candidate object may
+legitimately be absent because an intent was never materialized or an idempotent
+cleanup already deleted it; that condition is recorded as a non-blocking
+pending-upload warning. Objects present in the source inventory but absent from
+PostgreSQL are also recorded as warnings for investigation; they do not by
+themselves make the content backup incomplete.
 
 ## Output
 

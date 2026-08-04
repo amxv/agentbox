@@ -32,6 +32,7 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 		{sql: `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by) values ('ast_snapshot', 'msg_snapshot', 'agentbox/existing.bin', 'existing.bin', 12, 'test')`},
 		{sql: `insert into assets (id, message_id, storage_key, file_name, size_bytes, created_by, created_by_user_id, purged_at, purged_by_user_id) values ('ast_snapshot_purged', 'msg_snapshot', 'agentbox/deleted.bin', 'deleted.bin', 9, 'test', $1, now(), $1)`, args: []any{owner.ID}},
 		{sql: `insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_snapshot', 'thr_snapshot', 'agentbox/pending.bin', 'pending.bin', 15, now() + interval '1 hour', 'test')`},
+		{sql: `insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_snapshot', 'upl_snapshot', 'agentbox/pending.bin', 'staging', now() + interval '1 hour')`},
 	}
 	for _, statement := range statements {
 		if _, err := repository.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -59,7 +60,7 @@ func TestOpenContentSnapshotReportsCountsReferencesAndOrphans(t *testing.T) {
 	if data.References[0] != (backup.ObjectReference{Kind: "asset", RecordID: "ast_snapshot", StorageKey: "agentbox/existing.bin", SizeBytes: 12, MissingBlocks: true}) {
 		t.Fatalf("unexpected asset reference: %#v", data.References[0])
 	}
-	if data.References[1] != (backup.ObjectReference{Kind: "pending_upload", RecordID: "upl_snapshot", StorageKey: "agentbox/pending.bin", SizeBytes: 15, MissingBlocks: false}) {
+	if data.References[1] != (backup.ObjectReference{Kind: "pending_upload", RecordID: "upl_snapshot:staging", StorageKey: "agentbox/pending.bin", SizeBytes: 15, MissingBlocks: false}) {
 		t.Fatalf("unexpected pending-upload reference: %#v", data.References[1])
 	}
 	if err := snapshot.Close(ctx); err != nil {
@@ -103,7 +104,7 @@ func TestOpenContentSnapshotRunsAgainstExactLegacy0005Schema(t *testing.T) {
 	}
 }
 
-func TestOpenContentSnapshotExcludesExpiredConsumedAndAssetBackedPendingRows(t *testing.T) {
+func TestOpenContentSnapshotRepresentsStagingAndFinalCleanupStates(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatal(err)
@@ -126,6 +127,12 @@ func TestOpenContentSnapshotExcludesExpiredConsumedAndAssetBackedPendingRows(t *
 		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_expired', 'thr_pending_inventory', 'expired/key.bin', 'expired.bin', 1, now()-interval '1 minute', 'test')`,
 		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_asset_backed', 'thr_pending_inventory', 'shared/key.bin', 'shared.bin', 3, now()+interval '1 hour', 'test')`,
 		`insert into pending_uploads (id, thread_id, storage_key, file_name, size_bytes, expires_at, created_by) values ('upl_active', 'thr_pending_inventory', 'active/key.bin', 'active.bin', 2, now()+interval '1 hour', 'test')`,
+		`insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_consumed', 'upl_consumed', 'consumed/key.bin', 'staging', now())`,
+		`insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_expired', 'upl_expired', 'expired/key.bin', 'staging', now())`,
+		`insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_asset_backed', 'upl_asset_backed', 'shared/key.bin', 'staging', now())`,
+		`insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_active_staging', 'upl_active', 'active/key.bin', 'staging', now()+interval '1 hour')`,
+		`insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before) values ('ucl_active_final', 'upl_active', 'final/key.bin', 'final_candidate', now()+interval '10 minutes')`,
+		`insert into upload_cleanup_objects (id, upload_id, storage_key, object_kind, not_before, cleaned_at) values ('ucl_cleaned', 'upl_expired', 'cleaned/key.bin', 'staging', now(), now())`,
 	}
 	for _, statement := range statements {
 		if _, err := repository.pool.Exec(ctx, statement); err != nil {
@@ -138,13 +145,23 @@ func TestOpenContentSnapshotExcludesExpiredConsumedAndAssetBackedPendingRows(t *
 	}
 	defer snapshot.Close(ctx)
 	data := snapshot.Data()
-	if len(data.References) != 2 {
-		t.Fatalf("inventory should contain one asset and one active intent: %#v", data.References)
+	if len(data.References) != 5 {
+		t.Fatalf("inventory should contain one asset and four unmanaged cleanup objects: %#v", data.References)
 	}
+	references := map[string]backup.ObjectReference{}
 	for _, reference := range data.References {
-		if reference.RecordID == "upl_consumed" || reference.RecordID == "upl_expired" || reference.RecordID == "upl_asset_backed" {
-			t.Fatalf("retired pending row remained in backup inventory: %#v", reference)
+		references[reference.RecordID] = reference
+	}
+	for _, expected := range []string{"ast_pending_inventory", "upl_consumed:staging", "upl_expired:staging", "upl_active:staging", "upl_active:final_candidate"} {
+		if _, ok := references[expected]; !ok {
+			t.Fatalf("cleanup state %q missing from backup inventory: %#v", expected, data.References)
 		}
+	}
+	if _, ok := references["upl_asset_backed:staging"]; ok {
+		t.Fatalf("canonical asset-backed cleanup key was duplicated: %#v", data.References)
+	}
+	if _, ok := references["upl_expired:cleaned"]; ok {
+		t.Fatalf("cleaned object remained in backup inventory: %#v", data.References)
 	}
 }
 func TestPGDumpCreatesReadableArchiveFromExportedSnapshot(t *testing.T) {

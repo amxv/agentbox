@@ -57,7 +57,18 @@ echo 'Checking ChatGPT file-attachment readiness...'
 bash scripts/verify-chatgpt-file-attachments.sh
 
 echo 'Running Go tests and static analysis...'
-go test ./...
+if [[ -z "${TEST_DATABASE_URL:-}" ]]; then
+  echo 'TEST_DATABASE_URL is required for the user/team cutover verification.' >&2
+  exit 1
+fi
+export AGENTBOX_REQUIRE_POSTGRES_TESTS=1
+go_test_log="$(mktemp)"
+trap 'rm -f "$go_test_log"' EXIT
+go test -count=1 -v ./... | tee "$go_test_log"
+if grep -E -- '--- SKIP:|^SKIP$' "$go_test_log"; then
+  echo 'User/team cutover verification contained a skipped Go test.' >&2
+  exit 1
+fi
 go vet ./...
 
 echo 'Running dashboard checks and builds...'
@@ -77,13 +88,6 @@ echo 'Running clean Raycast package verification...'
 echo 'Checking patch hygiene...'
 git diff --check
 
-if [[ "${AGENTBOX_REQUIRE_POSTGRES_TESTS:-}" == "1" && -z "${TEST_DATABASE_URL:-}" ]]; then
-  echo 'TEST_DATABASE_URL is required because AGENTBOX_REQUIRE_POSTGRES_TESTS=1.' >&2
-  exit 1
-elif [[ -n "${TEST_DATABASE_URL:-}" ]]; then
-  echo 'PostgreSQL integration tests ran through go test ./... using TEST_DATABASE_URL.'
-else
-  echo 'TEST_DATABASE_URL is not set; PostgreSQL integration tests were compiled and discovered but require CI or local verification.'
-fi
+echo 'PostgreSQL integration tests ran with AGENTBOX_REQUIRE_POSTGRES_TESTS=1 and no skips.'
 
 echo 'User/team cutover verification passed.'

@@ -168,7 +168,27 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
+AGENTBOX_MAINTENANCE_BYPASS_KEY
 ```
+
+Direct-upload clients must calculate the lowercase hexadecimal SHA-256 digest
+of each file before requesting an upload intent. Send `file_name`, optional
+`mime_type`, exact `size_bytes`, and `sha256` to
+`POST /api/threads/:threadId/uploads`, PUT the unchanged bytes with the returned
+signed headers, then finalize the message with the returned `upload_id`. The
+presigned URL writes only to a temporary staging key. Authorized finalization
+verifies length, MIME type, SHA-256 metadata/checksum, and source ETag before a
+conditional copy to a new content-addressed final key; only that final key is
+persisted as the attachment. Replaying the original PUT URL can therefore alter
+or recreate only the staging object, never the canonical attachment.
+
+Expired, rejected, abandoned, and stale-finalization objects are drained in
+bounded exact-key cleanup passes. Normal upload traffic performs a small
+opportunistic pass. A trusted operator can drain a larger batch with
+`POST /api/admin/uploads/cleanup?limit=100` and the
+`x-agentbox-maintenance-key` header. The maintenance key is a deployment
+operator secret, not a user credential, and the endpoint never accepts an
+object prefix or caller-supplied storage key.
 
 Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. The permanent-owner browser can inspect deployment-wide credential metadata and force-revoke any credential from `/owner/users`, but secrets are never recoverable. Disabling a user revokes sessions, credentials, and pending CLI codes and removes every team membership in one transaction without deleting that user's threads, messages, assets, shares, or attribution snapshots. Enabling the account does not restore any of those access paths. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
 

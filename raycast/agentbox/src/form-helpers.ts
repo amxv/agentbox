@@ -40,7 +40,7 @@ export async function uploadFilesForThread(
         throw new Error(`${filePath} is not a file.`);
       }
       return {
-        ...uploadIntentFileFromPath(filePath, info.size),
+        ...(await uploadIntentFileFromPath(filePath, info.size)),
         file_name: displayNames[index],
       };
     }),

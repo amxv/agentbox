@@ -54,8 +54,13 @@ type Repository interface {
 	CreatePendingUploads(ctx context.Context, userID string, uploads []types.PendingUpload) ([]types.PendingUpload, error)
 	GetPendingUploads(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) ([]types.PendingUpload, error)
 	MarkPendingUploadsConsumed(ctx context.Context, userID string, threadID string, uploadIDs []string, actor types.AuthContext) error
+	ClaimPendingUploadsForFinalization(ctx context.Context, userID string, threadID string, actor types.AuthContext, token string, targets []types.UploadFinalizationTarget) ([]types.PendingUpload, error)
+	ReleasePendingUploadsFinalization(ctx context.Context, userID string, threadID string, actor types.AuthContext, token string, uploadIDs []string, rejectReason string) error
 	PostMessage(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset) (types.Message, error)
-	PostMessageWithPendingUploads(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset, pendingUploadIDs []string) (types.Message, error)
+	PostMessageWithFinalizedUploads(ctx context.Context, userID string, threadID string, auth types.AuthContext, body string, bodyContentType *string, assets []types.NewAsset, finalizedUploads []types.NewAsset, pendingUploadIDs []string, token string) (types.Message, error)
+	ListUploadCleanupCandidates(ctx context.Context, limit int) ([]types.UploadCleanupCandidate, error)
+	MarkUploadCleanupSuccess(ctx context.Context, cleanupID string) error
+	MarkUploadCleanupFailure(ctx context.Context, cleanupID string, message string) error
 	CreateAPIKey(ctx context.Context, userID string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string) (types.APIKey, error)
 	CreateRaycastAPIKey(ctx context.Context, userID string, name string, tokenHash string, tokenPrefix string, scopes []string, setupBaseURL string) (types.APIKey, error)
 	CreateOnboardingCredential(ctx context.Context, userID string, connector string, name string, purpose string, tokenHash string, tokenPrefix string, scopes []string, rotate bool) (types.APIKey, types.OnboardingState, error)
@@ -106,6 +111,7 @@ type Repository interface {
 }
 
 var teamSlugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type Service struct {
 	repo   Repository
@@ -372,8 +378,11 @@ func (s *Service) GetPublicThread(ctx context.Context, token string) (*types.Pub
 	if lease == nil {
 		return nil, CodedError{Code: "PUBLIC_LINK_NOT_FOUND", Message: "Shared thread not found."}
 	}
-	defer func() { _ = lease.Close(ctx) }()
-	view := s.sanitizePublicThread(ctx, token, lease.Thread())
+	thread := lease.Thread()
+	if err := lease.Close(ctx); err != nil {
+		return nil, fmt.Errorf("close public thread authorization snapshot: %w", err)
+	}
+	view := s.sanitizePublicThread(token, thread)
 	return &view, nil
 }
 
@@ -391,22 +400,62 @@ func (s *Service) publicAssetURL(ctx context.Context, token string, assetID stri
 	if token == "" || assetID == "" {
 		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
 	}
-	lease, err := s.repo.AcquirePublicAssetSigningLease(ctx, hashSecret(token), assetID)
+	tokenHash := hashSecret(token)
+	lease, err := s.repo.AcquirePublicAssetSigningLease(ctx, tokenHash, assetID)
 	if err != nil {
 		return "", err
 	}
 	if lease == nil {
 		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
 	}
-	defer func() { _ = lease.Close(ctx) }()
 	asset := lease.Asset()
+	if err := lease.Close(ctx); err != nil {
+		return "", fmt.Errorf("close public attachment authorization snapshot: %w", err)
+	}
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
 	if inline && (asset.MimeType == nil || !strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/")) {
 		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "This attachment type does not support inline preview."}
 	}
-	return s.signAvailableAsset(ctx, asset, 300, inline)
+	if err := s.inspectAvailableAsset(ctx, asset); err != nil {
+		return "", err
+	}
+
+	// Reauthorize immediately before signing so a token revocation or purge that
+	// races the external storage inspection cannot turn a stale snapshot into a
+	// fresh signed URL. URL generation itself is local and does not wait on R2.
+	signingLease, err := s.repo.AcquirePublicAssetSigningLease(ctx, tokenHash, assetID)
+	if err != nil {
+		return "", err
+	}
+	if signingLease == nil {
+		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment not found."}
+	}
+	signingAsset := signingLease.Asset()
+	if !sameAssetIdentity(asset, signingAsset) {
+		if err := signingLease.Close(ctx); err != nil {
+			return "", fmt.Errorf("close changed public attachment signing authorization: %w", err)
+		}
+		return "", CodedError{Code: "PUBLIC_ASSET_NOT_FOUND", Message: "Public attachment changed before signing."}
+	}
+	if signingAsset.PurgedAt != nil {
+		if err := signingLease.Close(ctx); err != nil {
+			return "", fmt.Errorf("close purged public attachment signing authorization: %w", err)
+		}
+		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
+	}
+	signedURL, err := s.createSignedAssetURL(ctx, signingAsset, 300, inline)
+	if err != nil {
+		if closeErr := signingLease.Close(ctx); closeErr != nil {
+			return "", fmt.Errorf("sign public attachment: %v; close signing authorization: %w", err, closeErr)
+		}
+		return "", err
+	}
+	if err := signingLease.Close(ctx); err != nil {
+		return "", fmt.Errorf("close public attachment signing authorization: %w", err)
+	}
+	return signedURL, nil
 }
 
 func (s *Service) GetAsset(ctx context.Context, auth types.AuthContext, assetID string) (*types.Asset, error) {
@@ -452,25 +501,35 @@ func (s *Service) PostMessage(ctx context.Context, auth types.AuthContext, param
 		return types.Message{}, s.compensateUploadedAssets(ctx, newAssets, cause)
 	}
 
-	pendingUploadIDs := []string{}
-	if len(params.UploadedAssets) > 0 {
-		_, pendingUploadIDs, err = s.verifyPendingUploads(ctx, auth, params.ThreadID, params.UploadedAssets)
+	if len(params.UploadedAssets) == 0 {
+		message, err := s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
 		if err != nil {
 			return cleanupAndReturn(err)
 		}
+		return message, nil
 	}
 
-	var message types.Message
-	if len(pendingUploadIDs) > 0 {
-		message, err = s.repo.PostMessageWithPendingUploads(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets, pendingUploadIDs)
-	} else {
-		message, err = s.repo.PostMessage(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets)
-	}
-	if errors.Is(err, types.ErrPendingUploadUnavailable) {
-		return cleanupAndReturn(CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "One or more uploads were already consumed, expired, or changed before finalization.", Err: err})
-	}
+	claimed, finalized, pendingUploadIDs, token, err := s.finalizePendingUploads(ctx, auth, params.ThreadID, params.UploadedAssets)
 	if err != nil {
 		return cleanupAndReturn(err)
+	}
+	message, err := s.repo.PostMessageWithFinalizedUploads(ctx, auth.UserID, params.ThreadID, auth, params.Body, &bodyContentType, newAssets, finalized, pendingUploadIDs, token)
+	if err != nil {
+		// Commit failures are deliberately not followed by eager final-object
+		// deletion: the commit outcome can be ambiguous. The pre-registered
+		// final-candidate cleanup rows delete only keys not referenced by an
+		// active asset, so a committed canonical object is never removed.
+		_ = s.repo.ReleasePendingUploadsFinalization(ctx, auth.UserID, params.ThreadID, auth, token, pendingUploadIDs, "")
+		if errors.Is(err, types.ErrPendingUploadUnavailable) || errors.Is(err, types.ErrThreadNotFound) {
+			return cleanupAndReturn(CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "One or more uploads lost authorization or changed before finalization completed.", Err: err})
+		}
+		return cleanupAndReturn(err)
+	}
+	for _, upload := range claimed {
+		// Delete staging immediately, but retain the due-at-expiry cleanup row.
+		// If the still-valid presigned URL is replayed, the final expiry pass
+		// deletes the recreated staging object without touching the final key.
+		_ = s.assets.DeleteAssetObject(ctx, upload.StorageKey)
 	}
 	return message, nil
 }
@@ -542,15 +601,20 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 	if len(files) > 10 {
 		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "At most 10 files can be uploaded at once."}
 	}
+	_, _ = s.cleanupPendingUploads(ctx, 10)
 
 	validated := make([]types.UploadIntentFile, len(files))
 	for index, file := range files {
 		file.FileName = strings.TrimSpace(file.FileName)
+		file.SHA256 = strings.ToLower(strings.TrimSpace(file.SHA256))
 		if file.FileName == "" {
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "file_name is required."}
 		}
 		if file.SizeBytes < 0 {
 			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "size_bytes must be >= 0."}
+		}
+		if !sha256HexPattern.MatchString(file.SHA256) {
+			return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "sha256 must be exactly 64 hexadecimal characters."}
 		}
 		validated[index] = file
 	}
@@ -566,6 +630,7 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 			FileName:         file.FileName,
 			MimeType:         file.MimeType,
 			SizeBytes:        file.SizeBytes,
+			SHA256:           file.SHA256,
 			ExpiresInSeconds: 900,
 		})
 		if err != nil {
@@ -579,6 +644,8 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 			FileName:                 presigned.FileName,
 			MimeType:                 presigned.MimeType,
 			SizeBytes:                presigned.SizeBytes,
+			ExpectedSHA256:           presigned.SHA256,
+			Status:                   "pending",
 			ExpiresAt:                expiresAt,
 			CreatedBy:                auth.ActorName,
 			CreatedByUserID:          optionalString(auth.UserID),
@@ -592,63 +659,156 @@ func (s *Service) CreatePresignedUploads(ctx context.Context, auth types.AuthCon
 		if errors.Is(err, types.ErrThreadNotFound) {
 			return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
 		}
+		if errors.Is(err, types.ErrPendingUploadQuotaExceeded) {
+			return nil, CodedError{Code: "UPLOAD_QUOTA_EXCEEDED", Message: "Too many unconsumed uploads are active. Wait for expiry or finalize existing uploads.", Err: err}
+		}
 		return nil, err
 	}
 	return uploads, nil
 }
 
-func (s *Service) verifyPendingUploads(ctx context.Context, auth types.AuthContext, threadID string, refs []types.UploadedAssetReference) ([]types.NewAsset, []string, error) {
+func (s *Service) finalizePendingUploads(ctx context.Context, auth types.AuthContext, threadID string, refs []types.UploadedAssetReference) ([]types.PendingUpload, []types.NewAsset, []string, string, error) {
 	ids := make([]string, 0, len(refs))
 	seen := map[string]bool{}
 	for _, ref := range refs {
 		id := strings.TrimSpace(ref.UploadID)
 		if id == "" {
-			return nil, nil, CodedError{Code: "INVALID_ARGUMENT", Message: "upload_id is required."}
+			return nil, nil, nil, "", CodedError{Code: "INVALID_ARGUMENT", Message: "upload_id is required."}
 		}
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
+		if seen[id] {
+			return nil, nil, nil, "", CodedError{Code: "INVALID_ARGUMENT", Message: "upload_id values must be unique."}
 		}
-	}
-	if len(ids) == 0 {
-		return []types.NewAsset{}, []string{}, nil
+		seen[id] = true
+		ids = append(ids, id)
 	}
 	pending, err := s.repo.GetPendingUploads(ctx, auth.UserID, threadID, ids, auth)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, "", err
 	}
 	byID := map[string]types.PendingUpload{}
 	for _, upload := range pending {
 		byID[upload.ID] = upload
 	}
-	now := time.Now().UTC()
-	verified := make([]types.NewAsset, 0, len(ids))
+	targets := make([]types.UploadFinalizationTarget, 0, len(ids))
 	for _, id := range ids {
 		upload, ok := byID[id]
-		if !ok || upload.ConsumedAt != nil {
-			return nil, nil, CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "Upload was not found or has already been used."}
+		if !ok || upload.ConsumedAt != nil || upload.Status != "pending" || !sha256HexPattern.MatchString(upload.ExpectedSHA256) {
+			return nil, nil, nil, "", CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "Upload was not found, is not pending, or has already been used."}
 		}
-		if parsed, err := time.Parse(time.RFC3339, upload.ExpiresAt); err == nil && !parsed.After(now) {
-			return nil, nil, CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "Upload has expired."}
+		targets = append(targets, types.UploadFinalizationTarget{
+			UploadID:        id,
+			FinalStorageKey: assets.MakeFinalStorageKey(auth.UserID, threadID, id, upload.FileName, upload.ExpectedSHA256),
+		})
+	}
+	token := "fin_" + uuid.NewString()
+	claimed, err := s.repo.ClaimPendingUploadsForFinalization(ctx, auth.UserID, threadID, auth, token, targets)
+	if errors.Is(err, types.ErrPendingUploadFinalizing) {
+		return nil, nil, nil, "", CodedError{Code: "UPLOAD_FINALIZING", Message: "One or more uploads are already being finalized.", Err: err}
+	}
+	if errors.Is(err, types.ErrPendingUploadUnavailable) || errors.Is(err, types.ErrThreadNotFound) {
+		return nil, nil, nil, "", CodedError{Code: "UPLOAD_UNAVAILABLE", Message: "One or more uploads expired, changed, or lost authorization before finalization.", Err: err}
+	}
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	copied := []types.NewAsset{}
+	fail := func(cause error, reject bool) ([]types.PendingUpload, []types.NewAsset, []string, string, error) {
+		for _, asset := range copied {
+			_ = s.assets.DeleteAssetObject(ctx, asset.StorageKey)
 		}
+		reason := ""
+		if reject {
+			reason = cause.Error()
+		}
+		_ = s.repo.ReleasePendingUploadsFinalization(ctx, auth.UserID, threadID, auth, token, ids, reason)
+		if reject {
+			_, _ = s.cleanupPendingUploads(ctx, 10)
+		}
+		return nil, nil, nil, "", cause
+	}
+	for _, upload := range claimed {
 		metadata, err := s.assets.HeadAssetObject(ctx, upload.StorageKey)
 		if errors.Is(err, backup.ErrObjectNotFound) {
-			return nil, nil, CodedError{Code: "UPLOAD_NOT_MATERIALIZED", Message: "The uploaded object does not exist yet. Retry the upload before finalizing."}
+			return fail(CodedError{Code: "UPLOAD_NOT_MATERIALIZED", Message: "The staging object does not exist yet. Retry the upload before finalizing.", Err: err}, false)
 		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("inspect uploaded object %s: %w", id, err)
+			return fail(fmt.Errorf("inspect staging upload %s: %w", upload.ID, err), false)
 		}
-		if metadata.SizeBytes != upload.SizeBytes {
-			return nil, nil, CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: fmt.Sprintf("Uploaded object size %d does not match declared size %d.", metadata.SizeBytes, upload.SizeBytes)}
+		if err := verifyUploadObject(upload, metadata); err != nil {
+			return fail(CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: err.Error(), Err: err}, true)
 		}
-		if upload.MimeType != nil {
-			if metadata.ContentType == nil || normalizeContentType(*metadata.ContentType) != normalizeContentType(*upload.MimeType) {
-				return nil, nil, CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: "Uploaded object content type does not match the declared content type."}
-			}
+		if strings.TrimSpace(metadata.ETag) == "" {
+			return fail(CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: "Uploaded staging object has no stable ETag for conditional promotion."}, true)
 		}
-		verified = append(verified, types.NewAsset{StorageKey: upload.StorageKey, FileName: upload.FileName, MimeType: upload.MimeType, SizeBytes: upload.SizeBytes})
+		finalMetadata, err := s.assets.CopyAssetObject(ctx, upload.StorageKey, upload.FinalStorageKey, metadata.ETag)
+		if err != nil {
+			return fail(fmt.Errorf("promote staging upload %s: %w", upload.ID, err), false)
+		}
+		if err := verifyUploadObject(upload, finalMetadata); err != nil {
+			return fail(CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: "Promoted object failed identity verification: " + err.Error(), Err: err}, true)
+		}
+		if assets.SHA256FromFinalStorageKey(upload.FinalStorageKey) != upload.ExpectedSHA256 {
+			return fail(CodedError{Code: "UPLOAD_METADATA_MISMATCH", Message: "Promoted object key does not encode the expected SHA-256 identity."}, true)
+		}
+		asset := types.NewAsset{
+			StorageKey:    upload.FinalStorageKey,
+			FileName:      upload.FileName,
+			MimeType:      upload.MimeType,
+			SizeBytes:     upload.SizeBytes,
+			ContentSHA256: upload.ExpectedSHA256,
+		}
+		copied = append(copied, asset)
 	}
-	return verified, ids, nil
+	return claimed, copied, ids, token, nil
+}
+
+func verifyUploadObject(upload types.PendingUpload, metadata backup.ObjectMetadata) error {
+	if metadata.SizeBytes != upload.SizeBytes {
+		return fmt.Errorf("uploaded object size %d does not match the signed size %d", metadata.SizeBytes, upload.SizeBytes)
+	}
+	if upload.MimeType != nil && (metadata.ContentType == nil || normalizeContentType(*metadata.ContentType) != normalizeContentType(*upload.MimeType)) {
+		return errors.New("uploaded object content type does not match the signed content type")
+	}
+	actualSHA256 := strings.ToLower(strings.TrimSpace(metadata.Metadata["agentbox-sha256"]))
+	if actualSHA256 != upload.ExpectedSHA256 {
+		return errors.New("uploaded object SHA-256 identity does not match the signed checksum")
+	}
+	if metadata.ChecksumSHA256 != "" {
+		expectedBytes, _ := hex.DecodeString(upload.ExpectedSHA256)
+		expectedBase64 := base64.StdEncoding.EncodeToString(expectedBytes)
+		if strings.TrimSpace(metadata.ChecksumSHA256) != expectedBase64 {
+			return errors.New("storage-reported SHA-256 checksum does not match the signed checksum")
+		}
+	}
+	return nil
+}
+
+func (s *Service) CleanupPendingUploads(ctx context.Context, limit int) (types.UploadCleanupResult, error) {
+	return s.cleanupPendingUploads(ctx, limit)
+}
+
+func (s *Service) cleanupPendingUploads(ctx context.Context, limit int) (types.UploadCleanupResult, error) {
+	candidates, err := s.repo.ListUploadCleanupCandidates(ctx, limit)
+	if err != nil {
+		return types.UploadCleanupResult{}, err
+	}
+	result := types.UploadCleanupResult{Failures: []string{}}
+	for _, candidate := range candidates {
+		result.Attempted++
+		if err := s.assets.DeleteAssetObject(ctx, candidate.StorageKey); err != nil {
+			result.Failed++
+			result.Failures = append(result.Failures, candidate.ID+": "+err.Error())
+			_ = s.repo.MarkUploadCleanupFailure(ctx, candidate.ID, err.Error())
+			continue
+		}
+		if err := s.repo.MarkUploadCleanupSuccess(ctx, candidate.ID); err != nil {
+			result.Failed++
+			result.Failures = append(result.Failures, candidate.ID+": "+err.Error())
+			continue
+		}
+		result.Cleaned++
+	}
+	return result, nil
 }
 
 func normalizeContentType(value string) string {
@@ -694,25 +854,77 @@ func (s *Service) signedAssetURL(ctx context.Context, auth types.AuthContext, as
 	if lease == nil {
 		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset not found."}
 	}
-	defer func() { _ = lease.Close(ctx) }()
 	asset := lease.Asset()
+	if err := lease.Close(ctx); err != nil {
+		return "", fmt.Errorf("close attachment authorization snapshot: %w", err)
+	}
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
-	return s.signAvailableAsset(ctx, asset, validate.ClampSignedURLExpiry(expiresInSeconds), inline)
+	if err := s.inspectAvailableAsset(ctx, asset); err != nil {
+		return "", err
+	}
+
+	signingLease, err := s.repo.AcquireAssetSigningLease(ctx, auth.UserID, assetID)
+	if err != nil {
+		return "", err
+	}
+	if signingLease == nil {
+		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset not found."}
+	}
+	signingAsset := signingLease.Asset()
+	if !sameAssetIdentity(asset, signingAsset) {
+		if err := signingLease.Close(ctx); err != nil {
+			return "", fmt.Errorf("close changed attachment signing authorization: %w", err)
+		}
+		return "", CodedError{Code: "ATTACHMENT_NOT_FOUND", Message: "Asset changed before signing."}
+	}
+	if signingAsset.PurgedAt != nil {
+		if err := signingLease.Close(ctx); err != nil {
+			return "", fmt.Errorf("close purged attachment signing authorization: %w", err)
+		}
+		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
+	}
+	signedURL, err := s.createSignedAssetURL(ctx, signingAsset, validate.ClampSignedURLExpiry(expiresInSeconds), inline)
+	if err != nil {
+		if closeErr := signingLease.Close(ctx); closeErr != nil {
+			return "", fmt.Errorf("sign attachment: %v; close signing authorization: %w", err, closeErr)
+		}
+		return "", err
+	}
+	if err := signingLease.Close(ctx); err != nil {
+		return "", fmt.Errorf("close attachment signing authorization: %w", err)
+	}
+	return signedURL, nil
 }
 
-func (s *Service) signAvailableAsset(ctx context.Context, asset types.Asset, expiresInSeconds int, inline bool) (string, error) {
+func (s *Service) inspectAvailableAsset(ctx context.Context, asset types.Asset) error {
 	metadata, err := s.assets.HeadAssetObject(ctx, asset.StorageKey)
 	if errors.Is(err, backup.ErrObjectNotFound) {
-		return "", CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object is missing.", Err: err}
+		return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object is missing.", Err: err}
 	}
 	if err != nil {
-		return "", fmt.Errorf("inspect attachment object: %w", err)
+		return fmt.Errorf("inspect attachment object: %w", err)
 	}
 	if metadata.SizeBytes != asset.SizeBytes {
-		return "", CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object does not match the recorded metadata."}
+		return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object does not match the recorded metadata."}
 	}
+	if expectedSHA256 := assets.SHA256FromFinalStorageKey(asset.StorageKey); expectedSHA256 != "" {
+		actualSHA256 := strings.ToLower(strings.TrimSpace(metadata.Metadata["agentbox-sha256"]))
+		if actualSHA256 != expectedSHA256 {
+			return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object failed SHA-256 identity verification."}
+		}
+		if metadata.ChecksumSHA256 != "" {
+			expectedBytes, _ := hex.DecodeString(expectedSHA256)
+			if strings.TrimSpace(metadata.ChecksumSHA256) != base64.StdEncoding.EncodeToString(expectedBytes) {
+				return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its storage checksum failed identity verification."}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) createSignedAssetURL(ctx context.Context, asset types.Asset, expiresInSeconds int, inline bool) (string, error) {
 	return s.assets.CreateSignedAssetDownloadURL(ctx, assets.SignedURLParams{
 		StorageKey:       asset.StorageKey,
 		FileName:         asset.FileName,
@@ -720,6 +932,22 @@ func (s *Service) signAvailableAsset(ctx context.Context, asset types.Asset, exp
 		ExpiresInSeconds: expiresInSeconds,
 		Inline:           inline,
 	})
+}
+
+func sameAssetIdentity(left types.Asset, right types.Asset) bool {
+	return left.ID == right.ID &&
+		left.MessageID == right.MessageID &&
+		left.StorageKey == right.StorageKey &&
+		left.FileName == right.FileName &&
+		left.SizeBytes == right.SizeBytes &&
+		sameOptionalText(left.MimeType, right.MimeType)
+}
+
+func sameOptionalText(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return strings.TrimSpace(*left) == strings.TrimSpace(*right)
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, auth types.AuthContext, name string) (types.APIKey, error) {
@@ -1250,7 +1478,10 @@ func (s *Service) SignedOwnerContentAssetDownloadURL(ctx context.Context, ownerC
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
-	return s.signAvailableAsset(ctx, *asset, validate.ClampSignedURLExpiry(expiresSeconds), false)
+	if err := s.inspectAvailableAsset(ctx, *asset); err != nil {
+		return "", err
+	}
+	return s.createSignedAssetURL(ctx, *asset, validate.ClampSignedURLExpiry(expiresSeconds), false)
 }
 
 func (s *Service) ListOwnerAPIKeys(ctx context.Context, authContext types.AuthContext) ([]types.APIKey, error) {
@@ -1691,7 +1922,7 @@ func generatePublicToken() (string, error) {
 	return "agpub_" + hex.EncodeToString(buffer), nil
 }
 
-func (s *Service) sanitizePublicThread(ctx context.Context, token string, thread types.ThreadWithMessages) types.PublicThreadView {
+func (s *Service) sanitizePublicThread(token string, thread types.ThreadWithMessages) types.PublicThreadView {
 	view := types.PublicThreadView{
 		ID:                       thread.ID,
 		Title:                    thread.Title,
@@ -1726,16 +1957,10 @@ func (s *Service) sanitizePublicThread(ctx context.Context, token string, thread
 				PurgedAt:                 asset.PurgedAt,
 			}
 			if asset.PurgedAt == nil {
-				metadata, err := s.assets.HeadAssetObject(ctx, asset.StorageKey)
-				if err != nil || metadata.SizeBytes != asset.SizeBytes {
-					publicAsset.Unavailable = true
-					publicAsset.UnavailableReason = "Attachment unavailable"
-				} else {
-					basePath := "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID)
-					publicAsset.DownloadPath = basePath + "/download"
-					if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
-						publicAsset.PreviewPath = basePath + "/preview"
-					}
+				basePath := "/api/public/threads/" + url.PathEscape(token) + "/assets/" + url.PathEscape(asset.ID)
+				publicAsset.DownloadPath = basePath + "/download"
+				if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
+					publicAsset.PreviewPath = basePath + "/preview"
 				}
 			}
 			publicMessage.Assets = append(publicMessage.Assets, publicAsset)

@@ -2,6 +2,8 @@ package assets
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"sort"
@@ -43,8 +45,11 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 		return types.NewAsset{}, errTooLarge(limit)
 	}
 	fileName := SanitizeFilename(params.FileName)
-	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName)
+	digest := sha256.Sum256(params.Bytes)
+	digestHex := hex.EncodeToString(digest[:])
+	storageKey := MakeFinalStorageKey(params.UserID, params.ThreadID, defaultString(params.MessageHint, "message"), fileName, digestHex)
 	asset := types.NewAsset{StorageKey: storageKey, FileName: fileName, MimeType: InferMimeType(fileName, params.MimeType), SizeBytes: int64(len(params.Bytes))}
+	asset.ContentSHA256 = digestHex
 	f.Uploads = append(f.Uploads, asset)
 	bucket := f.AssetBucket
 	if bucket == "" {
@@ -52,7 +57,7 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 	}
 	f.ensureBucket(bucket)
 	now := time.Now().UTC()
-	f.Buckets[bucket][storageKey] = backup.ObjectMetadata{Bucket: bucket, Key: storageKey, SizeBytes: asset.SizeBytes, ContentType: asset.MimeType, LastModified: &now}
+	f.Buckets[bucket][storageKey] = backup.ObjectMetadata{Bucket: bucket, Key: storageKey, SizeBytes: asset.SizeBytes, ETag: digestHex, ContentType: asset.MimeType, Metadata: map[string]string{"agentbox-sha256": digestHex}, LastModified: &now}
 	hook := f.AfterUpload
 	f.mutex.Unlock()
 	if hook != nil {
@@ -76,6 +81,10 @@ func (f *FakeStore) PutObject(bucket string, key string, sizeBytes int64, etag s
 }
 
 func (f *FakeStore) PutAssetObject(key string, sizeBytes int64, contentType *string) {
+	f.PutAssetObjectWithSHA(key, sizeBytes, contentType, "")
+}
+
+func (f *FakeStore) PutAssetObjectWithSHA(key string, sizeBytes int64, contentType *string, digestHex string) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	bucket := f.AssetBucket
@@ -84,11 +93,17 @@ func (f *FakeStore) PutAssetObject(key string, sizeBytes int64, contentType *str
 	}
 	f.ensureBucket(bucket)
 	now := time.Now().UTC()
+	metadata := map[string]string{}
+	if strings.TrimSpace(digestHex) != "" {
+		metadata["agentbox-sha256"] = strings.ToLower(strings.TrimSpace(digestHex))
+	}
 	f.Buckets[bucket][key] = backup.ObjectMetadata{
 		Bucket:       bucket,
 		Key:          key,
 		SizeBytes:    sizeBytes,
+		ETag:         defaultString(strings.TrimSpace(digestHex), "etag-"+strings.ReplaceAll(key, "/", "-")),
 		ContentType:  contentType,
+		Metadata:     metadata,
 		LastModified: &now,
 	}
 }
@@ -157,8 +172,12 @@ func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params Pres
 	if params.SizeBytes > limit {
 		return types.PresignedUpload{}, errTooLarge(limit)
 	}
+	digestHex, _, err := normalizeSHA256(params.SHA256)
+	if err != nil {
+		return types.PresignedUpload{}, err
+	}
 	fileName := SanitizeFilename(params.FileName)
-	storageKey := MakeStorageKey(params.UserID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
+	storageKey := MakeStagingStorageKey(params.UserID, params.ThreadID, defaultString(params.UploadID, "upload"), fileName)
 	mimeType := InferMimeType(fileName, params.MimeType)
 	contentType := "application/octet-stream"
 	if mimeType != nil {
@@ -170,10 +189,12 @@ func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params Pres
 		FileName:   fileName,
 		MimeType:   mimeType,
 		SizeBytes:  params.SizeBytes,
+		SHA256:     digestHex,
 		UploadURL:  "https://r2-upload.test/" + storageKey,
 		ExpiresIn:  900,
 		RequiredHeaders: map[string]string{
-			"content-type": contentType,
+			"content-type":               contentType,
+			"x-amz-meta-agentbox-sha256": digestHex,
 		},
 	}, nil
 }
@@ -204,6 +225,20 @@ func (f *FakeStore) HeadAssetObject(ctx context.Context, storageKey string) (bac
 		bucket = "assets"
 	}
 	return f.HeadObject(ctx, bucket, storageKey)
+}
+
+func (f *FakeStore) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
+	bucket := f.AssetBucket
+	if bucket == "" {
+		bucket = "assets"
+	}
+	return f.CopyObject(ctx, backup.CopyObjectRequest{
+		SourceBucket:      bucket,
+		SourceKey:         sourceStorageKey,
+		DestinationBucket: bucket,
+		DestinationKey:    destinationStorageKey,
+		ExpectedETag:      expectedETag,
+	})
 }
 
 func (f *FakeStore) DeleteAssetObject(_ context.Context, storageKey string) error {

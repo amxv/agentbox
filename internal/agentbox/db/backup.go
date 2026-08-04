@@ -68,12 +68,33 @@ select
 	if err != nil {
 		return fail(err)
 	}
+	hasUploadCleanupObjects, err := snapshotTableExists(ctx, transaction, "upload_cleanup_objects")
+	if err != nil {
+		return fail(err)
+	}
 
 	assetPredicate := "true"
 	if hasPurgedAt {
 		assetPredicate = "purged_at is null"
 	}
-	rows, err := transaction.Query(ctx, fmt.Sprintf(`
+	referenceQuery := fmt.Sprintf(`
+select 'asset' as kind, id, storage_key, size_bytes::bigint, true as missing_blocks_readiness
+from assets
+where %s
+union all
+select 'pending_upload' as kind,
+       p.id || ':' || c.object_kind as id,
+       c.storage_key,
+       p.size_bytes::bigint,
+       false as missing_blocks_readiness
+from upload_cleanup_objects c
+join pending_uploads p on p.id = c.upload_id
+where c.cleaned_at is null
+  and not exists (select 1 from assets a where a.storage_key = c.storage_key and %s)
+order by kind, id
+`, assetPredicate, assetPredicate)
+	if !hasUploadCleanupObjects {
+		referenceQuery = fmt.Sprintf(`
 select 'asset' as kind, id, storage_key, size_bytes::bigint, true as missing_blocks_readiness
 from assets
 where %s
@@ -82,9 +103,11 @@ select 'pending_upload' as kind, p.id, p.storage_key, p.size_bytes::bigint, fals
 from pending_uploads p
 where p.consumed_at is null
   and p.expires_at > now()
-  and not exists (select 1 from assets a where a.storage_key = p.storage_key)
+  and not exists (select 1 from assets a where a.storage_key = p.storage_key and %s)
 order by kind, id
-`, assetPredicate))
+`, assetPredicate, assetPredicate)
+	}
+	rows, err := transaction.Query(ctx, referenceQuery)
 	if err != nil {
 		return fail(fmt.Errorf("list content object references: %w", err))
 	}
@@ -139,6 +162,21 @@ select exists (
 )
 `, tableName, columnName).Scan(&exists); err != nil {
 		return false, fmt.Errorf("inspect %s.%s: %w", tableName, columnName, err)
+	}
+	return exists, nil
+}
+
+func snapshotTableExists(ctx context.Context, transaction pgx.Tx, tableName string) (bool, error) {
+	var exists bool
+	if err := transaction.QueryRow(ctx, `
+select exists (
+  select 1
+  from information_schema.tables
+  where table_schema = current_schema()
+    and table_name = $1
+)
+`, tableName).Scan(&exists); err != nil {
+		return false, fmt.Errorf("inspect table %s: %w", tableName, err)
 	}
 	return exists, nil
 }

@@ -61,12 +61,14 @@ type DatabaseDumper interface {
 }
 
 type ObjectMetadata struct {
-	Bucket       string     `json:"bucket"`
-	Key          string     `json:"key"`
-	SizeBytes    int64      `json:"size_bytes"`
-	ETag         string     `json:"etag,omitempty"`
-	ContentType  *string    `json:"content_type,omitempty"`
-	LastModified *time.Time `json:"last_modified,omitempty"`
+	Bucket         string            `json:"bucket"`
+	Key            string            `json:"key"`
+	SizeBytes      int64             `json:"size_bytes"`
+	ETag           string            `json:"etag,omitempty"`
+	ContentType    *string           `json:"content_type,omitempty"`
+	ChecksumSHA256 string            `json:"checksum_sha256,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	LastModified   *time.Time        `json:"last_modified,omitempty"`
 }
 
 type CopyObjectRequest struct {

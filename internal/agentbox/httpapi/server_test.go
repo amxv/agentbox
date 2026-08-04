@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -13,9 +14,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"agentbox/internal/agentbox/assets"
 	authpkg "agentbox/internal/agentbox/auth"
+	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/service"
@@ -143,6 +146,72 @@ func TestMaintenanceModeBlocksProductRoutesButAllowsCutoverPathsAndExplicitBypas
 	server.ServeHTTP(ownerKeyResponse, ownerKeyRequest)
 	if ownerKeyResponse.Code != http.StatusServiceUnavailable {
 		t.Fatalf("owner API key bypassed maintenance: status=%d body=%s", ownerKeyResponse.Code, ownerKeyResponse.Body.String())
+	}
+}
+
+func TestUploadCleanupEndpointIsDeploymentSecretOnlyBoundedAndIdempotent(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
+	user := types.User{ID: "usr_http_upload_cleanup", Email: "cleanup@example.invalid", DisplayName: "Cleanup"}
+	repo.Users = append(repo.Users, user)
+	auth := types.AuthContext{
+		UserID: user.ID, UserDisplayName: user.DisplayName, SubjectType: types.AuthSubjectUserSession,
+		SessionID: "sess_http_upload_cleanup", ActorName: "Web dashboard",
+	}
+	thread, err := svc.CreateThread(t.Context(), auth, "HTTP upload cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("abandoned")
+	sum := sha256.Sum256(contents)
+	digest := hex.EncodeToString(sum[:])
+	uploads, err := svc.CreatePresignedUploads(t.Context(), auth, thread.ID, []types.UploadIntentFile{{
+		FileName: "abandoned.bin", SizeBytes: int64(len(contents)), SHA256: digest,
+	}})
+	if err != nil || len(uploads) != 1 {
+		t.Fatalf("uploads=%#v err=%v", uploads, err)
+	}
+	store.PutAssetObjectWithSHA(uploads[0].StorageKey, int64(len(contents)), nil, digest)
+	store.PutAssetObject("agentbox/unrelated/keep.bin", 99, nil)
+	repo.UploadCleanup[0].NotBefore = time.Now().UTC().Add(-time.Minute)
+
+	server := NewServer(config.Config{MaintenanceBypassKey: "deployment-maintenance-secret"}, svc)
+
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/admin/uploads/cleanup?limit=1", nil))
+	if unauthorized.Code != http.StatusUnauthorized || !strings.Contains(unauthorized.Body.String(), `"code":"UNAUTHORIZED"`) {
+		t.Fatalf("unauthorized status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/admin/uploads/cleanup?limit=101", nil)
+	invalidRequest.Header.Set("x-agentbox-maintenance-key", "deployment-maintenance-secret")
+	server.ServeHTTP(invalid, invalidRequest)
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"INVALID_ARGUMENT"`) {
+		t.Fatalf("invalid limit status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+
+	cleaned := httptest.NewRecorder()
+	cleanupRequest := httptest.NewRequest(http.MethodPost, "/api/admin/uploads/cleanup?limit=1", nil)
+	cleanupRequest.Header.Set("x-agentbox-maintenance-key", "deployment-maintenance-secret")
+	server.ServeHTTP(cleaned, cleanupRequest)
+	if cleaned.Code != http.StatusOK || !strings.Contains(cleaned.Body.String(), `"cleaned":1`) || !strings.Contains(cleaned.Body.String(), `"failed":0`) {
+		t.Fatalf("cleanup status=%d body=%s", cleaned.Code, cleaned.Body.String())
+	}
+	if _, err := store.HeadAssetObject(t.Context(), uploads[0].StorageKey); !errors.Is(err, backup.ErrObjectNotFound) {
+		t.Fatalf("cleanup did not remove exact staging key: %v", err)
+	}
+	if _, err := store.HeadAssetObject(t.Context(), "agentbox/unrelated/keep.bin"); err != nil {
+		t.Fatalf("cleanup removed unrelated key: %v", err)
+	}
+
+	repeated := httptest.NewRecorder()
+	repeatRequest := httptest.NewRequest(http.MethodPost, "/api/admin/uploads/cleanup?limit=1", nil)
+	repeatRequest.Header.Set("x-agentbox-maintenance-key", "deployment-maintenance-secret")
+	server.ServeHTTP(repeated, repeatRequest)
+	if repeated.Code != http.StatusOK || !strings.Contains(repeated.Body.String(), `"attempted":0`) {
+		t.Fatalf("repeat cleanup status=%d body=%s", repeated.Code, repeated.Body.String())
 	}
 }
 
@@ -1499,7 +1568,7 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	}
 
 	intent := httptest.NewRecorder()
-	server.ServeHTTP(intent, httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/uploads?key=user-key", strings.NewReader(`{"files":[{"file_name":"note.md","mime_type":"text/markdown","size_bytes":12}]}`)))
+	server.ServeHTTP(intent, httptest.NewRequest(http.MethodPost, "/api/threads/"+created.Thread.ID+"/uploads?key=user-key", strings.NewReader(`{"files":[{"file_name":"note.md","mime_type":"text/markdown","size_bytes":12,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`)))
 	if intent.Code != http.StatusCreated {
 		t.Fatalf("intent status = %d body=%s", intent.Code, intent.Body.String())
 	}
@@ -1516,11 +1585,11 @@ func TestDirectUploadIntentAndFinalize(t *testing.T) {
 	if len(intentPayload.Uploads) != 1 || intentPayload.Uploads[0].UploadID == "" || intentPayload.Uploads[0].UploadURL == "" || intentPayload.Uploads[0].RequiredHeaders["content-type"] != "text/markdown" || strings.Contains(intent.Body.String(), "storage_key") {
 		t.Fatalf("intent payload = %#v", intentPayload)
 	}
-	if len(repo.Pending) != 1 || repo.Pending[0].ID != intentPayload.Uploads[0].UploadID || !strings.HasPrefix(repo.Pending[0].StorageKey, "agentbox/usr_user/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
+	if len(repo.Pending) != 1 || repo.Pending[0].ID != intentPayload.Uploads[0].UploadID || !strings.HasPrefix(repo.Pending[0].StorageKey, "agentbox/staging/usr_user/"+created.Thread.ID+"/"+intentPayload.Uploads[0].UploadID+"/") {
 		t.Fatalf("pending upload = %#v", repo.Pending)
 	}
 	contentType := "text/markdown"
-	store.PutAssetObject(repo.Pending[0].StorageKey, 12, &contentType)
+	store.PutAssetObjectWithSHA(repo.Pending[0].StorageKey, 12, &contentType, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	postBody := `{"body":"attached","uploaded_assets":[{"upload_id":"` + intentPayload.Uploads[0].UploadID + `"}]}`
 	post := httptest.NewRecorder()
@@ -1639,7 +1708,7 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	}
 
 	uploadBWithA := httptest.NewRecorder()
-	reqUploadBWithA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadB.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"blocked.txt","size_bytes":1}]}`))
+	reqUploadBWithA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadB.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"blocked.txt","size_bytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`))
 	reqUploadBWithA.Header.Set("authorization", "Bearer "+keyA.Key)
 	server.ServeHTTP(uploadBWithA, reqUploadBWithA)
 	if uploadBWithA.Code != http.StatusNotFound {
@@ -1647,7 +1716,7 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	}
 
 	intentA := httptest.NewRecorder()
-	reqIntentA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadA.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"user-a.txt","size_bytes":1}]}`))
+	reqIntentA := httptest.NewRequest(http.MethodPost, "/api/threads/"+payloadA.Thread.ID+"/uploads", strings.NewReader(`{"files":[{"file_name":"user-a.txt","size_bytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`))
 	reqIntentA.Header.Set("authorization", "Bearer "+keyA.Key)
 	server.ServeHTTP(intentA, reqIntentA)
 	if intentA.Code != http.StatusCreated {
@@ -1661,7 +1730,7 @@ func TestHTTPUserPrivateThreadAndAssetIsolation(t *testing.T) {
 	if err := json.Unmarshal(intentA.Body.Bytes(), &intentAPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(intentAPayload.Uploads) != 1 || strings.Contains(intentA.Body.String(), "storage_key") || len(repo.Pending) == 0 || !strings.HasPrefix(repo.Pending[len(repo.Pending)-1].StorageKey, "agentbox/"+authA.UserID+"/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
+	if len(intentAPayload.Uploads) != 1 || strings.Contains(intentA.Body.String(), "storage_key") || len(repo.Pending) == 0 || !strings.HasPrefix(repo.Pending[len(repo.Pending)-1].StorageKey, "agentbox/staging/"+authA.UserID+"/"+payloadA.Thread.ID+"/"+intentAPayload.Uploads[0].UploadID+"/") {
 		t.Fatalf("intentAPayload = %#v", intentAPayload)
 	}
 
@@ -1846,7 +1915,7 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 		t.Fatalf("team member post status=%d body=%s", postB.Code, postB.Body.String())
 	}
 
-	uploadIntent := request(http.MethodPost, "/api/threads/"+thread.ID+"/uploads", keyB.Key, `{"files":[{"file_name":"team-note.txt","mime_type":"text/plain","size_bytes":4}]}`)
+	uploadIntent := request(http.MethodPost, "/api/threads/"+thread.ID+"/uploads", keyB.Key, `{"files":[{"file_name":"team-note.txt","mime_type":"text/plain","size_bytes":4,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`)
 	if uploadIntent.Code != http.StatusCreated {
 		t.Fatalf("team upload intent status=%d body=%s", uploadIntent.Code, uploadIntent.Body.String())
 	}
@@ -1872,7 +1941,7 @@ func TestHTTPTeamSharedVisibilityIsImmediateAndParticipantMutable(t *testing.T) 
 	if pendingStorageKey == "" {
 		t.Fatalf("pending upload %s not found: %#v", uploadPayload.Uploads[0].UploadID, repo.Pending)
 	}
-	store.PutAssetObject(pendingStorageKey, 4, &teamContentType)
+	store.PutAssetObjectWithSHA(pendingStorageKey, 4, &teamContentType, strings.Repeat("a", 64))
 	finalizeBody, _ := json.Marshal(map[string]any{
 		"body":       "team upload finalization",
 		"upload_ids": []string{uploadPayload.Uploads[0].UploadID},
