@@ -804,6 +804,15 @@ YYYY-MM-DD — Phase N / short slice name
 - Remaining: All current-review blockers F1-F6 are implemented locally. Exact-head full repository verification, push, and required CI remain.
 - Next: Run the complete final validation matrix and gates on one clean candidate, update the final ledger, push, and verify the required GitHub Actions workflow for that exact SHA.
 
+
+2026-08-04 — Second Crucible acceptance follow-up / complete direct validation matrix
+- Status: Complete locally on clean pushed candidate `652799049a43bd22cb993eabb7c9520d6e2d2d99`; exact-head `verify:chatgpt-files`, `verify:cutover`, and required GitHub Actions remain for the ledger head created by this entry.
+- Go and PostgreSQL: With PostgreSQL `16.14`, `TEST_DATABASE_URL=postgres://127.0.0.1:55433/agentbox_test?sslmode=disable`, and `AGENTBOX_REQUIRE_POSTGRES_TESTS=1`, `git diff --check`, `go test -count=1 ./...`, `go vet ./...`, and `go build ./...` passed. The database package executed in 15.896 seconds rather than skipping; the earlier explicit JSON zero-skip run covers the same Go content, and the exact-head cutover verifier will repeat its enforced zero-skip check after this documentation-only commit.
+- Dashboard/root: `bun run test:parity` passed all six visibility/attachment proxy tests; `bun run typecheck`, `bun run lint`, `bun run build:api`, `bun run build:cli`, and `bun run build` passed. The optimized Next.js manifest includes 37 generated pages and both new lazy preview proxies: `/api/assets/[assetId]/preview-url` and `/api/owner/content/assets/[assetId]/preview`.
+- Raycast: A clean `npm ci` completed, `npm run test` passed 11/11 with zero skips, `npm run typecheck`, official `ray lint -I`, and native `ray build -I -e dist` passed. The clean install reported three existing transitive npm advisories (two low, one high), unchanged and outside blocker scope.
+- Blocker state: F1-F6 are all implemented and proven through focused lifecycle regressions plus the complete direct matrix. No production database, R2, Vercel, Raycast, ChatGPT, or deployment credential was used.
+- Remaining: Commit and push this final ledger, run both exact-head verification gates, then require the GitHub Actions workflow for that exact pushed SHA to conclude successfully. Phase 20 remains reserved.
+
 ## Raycast Migration Trace
 
 This trace was produced by reading the complete extension under `raycast/agentbox`, the current onboarding/credential code, the final user/team DTOs and HTTP routes, the dashboard visibility implementation, setup documentation, and the historical Raycast plan. It is the implementation map for Phases 15-18.
