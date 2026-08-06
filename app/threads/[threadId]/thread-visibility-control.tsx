@@ -1,8 +1,65 @@
 "use client";
 
+import {
+  CheckIcon,
+  ClipboardIcon,
+  Globe2Icon,
+  LockKeyholeIcon,
+  RotateCwIcon,
+  SaveIcon,
+  ShieldAlertIcon,
+  Trash2Icon,
+  UsersIcon
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import styles from "./thread-visibility-control.module.css";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet
+} from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput
+} from "@/components/ui/input-group";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger
+} from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 
 type Team = {
   id: string;
@@ -27,11 +84,11 @@ type ThreadPublicLink = {
   updated_at: string;
 };
 
+type PublicConfirmation = "rotate" | "revoke";
+
 async function responseJSON(response: Response) {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error ?? `HTTP ${response.status}`);
-  }
+  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
   return data;
 }
 
@@ -48,6 +105,7 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
   const [generatedPublicURL, setGeneratedPublicURL] = useState("");
   const [publicBusy, setPublicBusy] = useState<"create" | "rotate" | "revoke" | null>(null);
   const [copied, setCopied] = useState(false);
+  const [publicConfirmation, setPublicConfirmation] = useState<PublicConfirmation | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -146,9 +204,6 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
   }
 
   async function createPublicLink(rotate: boolean) {
-    if (rotate && !window.confirm("Rotate this public link? The current URL will stop working immediately.")) {
-      return;
-    }
     setPublicBusy(rotate ? "rotate" : "create");
     setError(null);
     setCopied(false);
@@ -169,6 +224,7 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
       setSelectedTeamIDs(nextVisibility.shared_teams.map((team) => team.id));
       setPublicLink(nextVisibility.public_link ?? null);
       setGeneratedPublicURL(nextVisibility.public_url ?? "");
+      setPublicConfirmation(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       await load();
@@ -178,9 +234,6 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
   }
 
   async function revokePublicLink() {
-    if (!window.confirm("Revoke this public link? Anyone using the current URL will lose access immediately.")) {
-      return;
-    }
     setPublicBusy("revoke");
     setError(null);
     try {
@@ -201,6 +254,7 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
       setPublicLink(nextVisibility.public_link ?? null);
       setGeneratedPublicURL(nextVisibility.public_url ?? "");
       setCopied(false);
+      setPublicConfirmation(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -217,92 +271,174 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
   const sharedCount = visibility?.shared_teams.length ?? 0;
   const isPublic = visibility?.public ?? false;
   const teamLabel = sharedCount === 0 ? "" : sharedCount === 1 ? visibility?.shared_teams[0]?.name ?? "1 team" : `${sharedCount} teams`;
-  const label = loading ? "Visibility" : isPublic && teamLabel ? `${teamLabel} · Public` : isPublic ? "Public" : teamLabel || "Private";
+  const label = loading ? "Visibility" : isPublic && teamLabel ? `${teamLabel} + public` : isPublic ? "Public" : teamLabel || "Private";
   const privateOnly = selectedTeamIDs.length === 0 && !isPublic;
 
   return (
-    <div className={styles.root}>
-      <button
-        className={`${styles.trigger} ${sharedCount > 0 || isPublic ? styles.shared : ""}`}
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-controls="thread-visibility-panel"
-      >
-        <span className={styles.triggerIcon}>{isPublic ? "◎" : sharedCount > 0 ? "◌" : "●"}</span>
-        <span><small>Visibility</small><strong>{label}</strong></span>
-      </button>
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger render={<Button variant="outline" />}>
+          {isPublic ? <Globe2Icon data-icon="inline-start" /> : sharedCount > 0 ? <UsersIcon data-icon="inline-start" /> : <LockKeyholeIcon data-icon="inline-start" />}
+          {label}
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-[min(38rem,calc(100vw-2rem))] gap-4 p-4">
+          <PopoverHeader>
+            <PopoverTitle>Thread visibility</PopoverTitle>
+            <PopoverDescription>
+              The owner always retains access. Selected teams can read, post, upload, download, and change visibility.
+            </PopoverDescription>
+          </PopoverHeader>
 
-      {open && (
-        <section className={styles.panel} id="thread-visibility-panel" aria-label="Thread visibility">
-          <div className={styles.heading}>
-            <div><p>Thread access</p><h2>Private, plus selected teams.</h2></div>
-            <button type="button" onClick={() => { reset(); setOpen(false); }} aria-label="Close visibility control">×</button>
+          {error ? (
+            <Alert variant="destructive">
+              <ShieldAlertIcon />
+              <AlertTitle>Visibility action failed</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <Alert>
+            {privateOnly ? <LockKeyholeIcon /> : <UsersIcon />}
+            <AlertTitle>{privateOnly ? "Private to the owner" : `${selectedTeamIDs.length} team${selectedTeamIDs.length === 1 ? "" : "s"} selected`}</AlertTitle>
+            <AlertDescription>
+              {isPublic ? "The public read-only link remains live until it is revoked below." : "Public access is currently off."}
+            </AlertDescription>
+          </Alert>
+
+          <FieldSet>
+            <FieldLegend>Team access</FieldLegend>
+            <FieldDescription>Select every team that should participate in this thread.</FieldDescription>
+            {loading ? <div className="flex justify-center py-8"><Spinner /></div> : null}
+            {!loading && availableTeams.length === 0 ? (
+              <Empty className="border py-10">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><UsersIcon /></EmptyMedia>
+                  <EmptyTitle>No teams available</EmptyTitle>
+                  <EmptyDescription>You do not belong to any teams yet.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
+            {!loading && availableTeams.length > 0 ? (
+              <FieldGroup className="grid sm:grid-cols-2">
+                {availableTeams.map((team) => {
+                  const checkboxID = `thread-team-${threadId}-${team.id}`;
+                  const currentShare = currentTeamIDs.has(team.id);
+                  const callerTeam = myTeamIDs.has(team.id);
+                  return (
+                    <Field orientation="horizontal" className="border p-3" key={team.id}>
+                      <Checkbox
+                        id={checkboxID}
+                        checked={selectedTeamIDs.includes(team.id)}
+                        onCheckedChange={() => toggleTeam(team.id)}
+                      />
+                      <FieldContent>
+                        <FieldLabel htmlFor={checkboxID}>{team.name}</FieldLabel>
+                        <FieldDescription>
+                          {team.slug} · {currentShare && !callerTeam ? "current share" : currentShare ? "shared" : "your team"}
+                        </FieldDescription>
+                      </FieldContent>
+                    </Field>
+                  );
+                })}
+              </FieldGroup>
+            ) : null}
+          </FieldSet>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" type="button" onClick={reset} disabled={!dirty || saving}>Reset</Button>
+            <Button type="button" onClick={() => void save()} disabled={!dirty || saving}>
+              {saving ? <Spinner data-icon="inline-start" /> : <SaveIcon data-icon="inline-start" />}
+              Save team access
+            </Button>
           </div>
-          <p className={styles.explainer}>The owner always retains access. Current members of every selected team can read, post, upload, download, and change this visibility.</p>
 
-          {error && <div className={styles.error}>{error}</div>}
+          <Separator />
 
-          <label className={`${styles.option} ${privateOnly ? styles.selected : ""}`}>
-            <input type="radio" name="thread-visibility-mode" checked={privateOnly} onChange={() => setSelectedTeamIDs([])}/>
-            <span><strong>{isPublic ? "No team access" : "Private"}</strong><small>{isPublic ? "The public read-only link remains live until revoked below." : "Only the owner and their credentials."}</small></span>
-          </label>
-
-          <div className={styles.teamSection}>
-            <div className={styles.sectionLabel}><span>Team access</span><small>{selectedTeamIDs.length} selected</small></div>
-            {loading && <p className={styles.empty}>Loading teams…</p>}
-            {!loading && availableTeams.length === 0 && <p className={styles.empty}>You do not belong to any teams yet.</p>}
-            <div className={styles.teamList}>
-              {availableTeams.map((team) => {
-                const currentShare = currentTeamIDs.has(team.id);
-                const callerTeam = myTeamIDs.has(team.id);
-                return (
-                  <label className={`${styles.teamOption} ${selectedTeamIDs.includes(team.id) ? styles.selected : ""}`} key={team.id}>
-                    <input type="checkbox" checked={selectedTeamIDs.includes(team.id)} onChange={() => toggleTeam(team.id)}/>
-                    <span className={styles.teamIdentity}><strong>{team.name}</strong><code>{team.slug}</code></span>
-                    <span className={styles.teamContext}>{currentShare && !callerTeam ? "Current share" : currentShare ? "Shared" : "Your team"}</span>
-                  </label>
-                );
-              })}
+          <section className="flex flex-col gap-3" aria-label="Public read-only link">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex flex-col gap-1">
+                <h3 className="font-heading text-sm font-semibold">Public read-only link</h3>
+                <p className="text-xs/relaxed text-muted-foreground">Anyone with the live URL can read the thread and download attachments. They cannot post or change visibility.</p>
+              </div>
+              <Badge variant={publicLink ? "default" : "outline"}>{publicLink ? "Live" : "Off"}</Badge>
             </div>
-          </div>
 
-          <div className={styles.publicSection}>
-            <div className={styles.sectionLabel}><span>Public read-only link</span><small>{publicLink ? "Live" : "Off"}</small></div>
-            <p className={styles.publicCopy}>Anyone with the live URL can read this thread and download its attachments. They cannot post, upload, or change visibility.</p>
-            {!publicLink && (
-              <button className={styles.publicCreate} type="button" onClick={() => void createPublicLink(false)} disabled={publicBusy !== null || saving}>
-                {publicBusy === "create" ? "Creating…" : "Create public link"}
-              </button>
-            )}
-            {publicLink && (
-              <div className={styles.publicMetadata}>
-                <div><span>Credential</span><code>{publicLink.token_prefix}…</code></div>
-                <div><span>Updated</span><strong>{new Date(publicLink.updated_at).toLocaleString()}</strong></div>
-              </div>
-            )}
-            {generatedPublicURL && (
-              <div className={styles.generatedURL}>
-                <div><span>Live URL</span><code>{generatedPublicURL}</code></div>
-                <div><button type="button" onClick={() => void copyPublicURL()}>{copied ? "Copied" : "Copy URL"}</button><a href={generatedPublicURL} target="_blank" rel="noreferrer">Open</a></div>
-                <p>This URL remains available to authenticated thread participants until it is rotated or revoked.</p>
-              </div>
-            )}
-            {publicLink && (
-              <div className={styles.publicActions}>
-                <button type="button" onClick={() => void createPublicLink(true)} disabled={publicBusy !== null || saving}>{publicBusy === "rotate" ? "Rotating…" : "Rotate URL"}</button>
-                <button type="button" onClick={() => void revokePublicLink()} disabled={publicBusy !== null || saving}>{publicBusy === "revoke" ? "Revoking…" : "Revoke"}</button>
-              </div>
-            )}
-          </div>
+            {!publicLink ? (
+              <Button type="button" onClick={() => void createPublicLink(false)} disabled={publicBusy !== null || saving}>
+                {publicBusy === "create" ? <Spinner data-icon="inline-start" /> : <Globe2Icon data-icon="inline-start" />}
+                Create public link
+              </Button>
+            ) : null}
 
-          <div className={styles.actions}>
-            <button className={styles.secondary} type="button" onClick={reset} disabled={!dirty || saving}>Reset</button>
-            <button className={styles.primary} type="button" onClick={() => void save()} disabled={!dirty || saving}>{saving ? "Saving…" : "Save visibility"}</button>
-          </div>
-          <p className={styles.warning}>Removing the team that currently grants your access may return you to the inbox immediately.</p>
-        </section>
-      )}
-    </div>
+            {publicLink ? (
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">{publicLink.token_prefix}…</Badge>
+                <Badge variant="outline">Updated {new Date(publicLink.updated_at).toLocaleString()}</Badge>
+              </div>
+            ) : null}
+
+            {generatedPublicURL ? (
+              <InputGroup>
+                <InputGroupInput readOnly value={generatedPublicURL} aria-label="Public thread URL" />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton size="icon-sm" aria-label="Copy public URL" onClick={() => void copyPublicURL()}>
+                    {copied ? <CheckIcon /> : <ClipboardIcon />}
+                  </InputGroupButton>
+                  <InputGroupButton size="sm" variant="outline" render={<a href={generatedPublicURL} target="_blank" rel="noreferrer" />}>
+                    Open
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            ) : null}
+
+            {publicLink ? (
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" type="button" onClick={() => setPublicConfirmation("rotate")} disabled={publicBusy !== null || saving}>
+                  <RotateCwIcon data-icon="inline-start" />
+                  Rotate URL
+                </Button>
+                <Button variant="destructive" type="button" onClick={() => setPublicConfirmation("revoke")} disabled={publicBusy !== null || saving}>
+                  <Trash2Icon data-icon="inline-start" />
+                  Revoke
+                </Button>
+              </div>
+            ) : null}
+          </section>
+
+          <Alert variant="destructive">
+            <AlertTitle>Access can change immediately</AlertTitle>
+            <AlertDescription>Removing the team that currently grants your access may return you to the inbox after saving.</AlertDescription>
+          </Alert>
+        </PopoverContent>
+      </Popover>
+
+      <AlertDialog open={Boolean(publicConfirmation)} onOpenChange={(open) => { if (!open) setPublicConfirmation(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>{publicConfirmation === "rotate" ? <RotateCwIcon /> : <Trash2Icon />}</AlertDialogMedia>
+            <AlertDialogTitle>{publicConfirmation === "rotate" ? "Rotate the public URL?" : "Revoke the public URL?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {publicConfirmation === "rotate"
+                ? "The current public URL will stop working immediately and a replacement will be generated."
+                : "Anyone using the current public URL will lose access immediately."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={publicBusy !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant={publicConfirmation === "revoke" ? "destructive" : "default"}
+              disabled={!publicConfirmation || publicBusy !== null}
+              onClick={() => {
+                if (publicConfirmation === "rotate") void createPublicLink(true);
+                if (publicConfirmation === "revoke") void revokePublicLink();
+              }}
+            >
+              {publicBusy ? <Spinner data-icon="inline-start" /> : publicConfirmation === "rotate" ? <RotateCwIcon data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
+              {publicConfirmation === "rotate" ? "Rotate URL" : "Revoke URL"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

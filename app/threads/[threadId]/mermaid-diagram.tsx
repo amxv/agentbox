@@ -1,7 +1,27 @@
 "use client";
 
+import { Maximize2Icon, ShieldAlertIcon, WorkflowIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
-import { CopyButton } from "./copy-button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CopyButton } from "../../components/copy-button";
 
 function getResolvedTheme() {
   if (typeof window === "undefined") return "light";
@@ -45,7 +65,6 @@ type MermaidState =
 export function MermaidDiagram({ chart }: { chart: string }) {
   const reactId = useId();
   const renderId = useMemo(() => `agentbox-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`, [reactId]);
-  const dialogTitleId = useMemo(() => `${renderId}-dialog-title`, [renderId]);
   const [state, setState] = useState<MermaidState>({ status: "loading" });
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme());
@@ -81,95 +100,73 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     };
   }, [chart, renderId, resolvedTheme]);
 
-  useEffect(() => {
-    if (!fullscreenOpen) return;
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setFullscreenOpen(false);
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [fullscreenOpen]);
-
   return (
     <>
-      <div className="mermaid-card">
-        <div className="message-toolbar">
-          <span className="format-badge">Mermaid diagram</span>
-          <div className="message-actions">
-            {state.status === "ready" && (
-              <button
+      <Card size="sm" className="my-4">
+        <CardHeader className="border-b">
+          <div className="flex min-w-0 items-center gap-2">
+            <WorkflowIcon />
+            <div>
+              <CardTitle>Mermaid diagram</CardTitle>
+              <CardDescription>Rendered from the message source.</CardDescription>
+            </div>
+          </div>
+          <CardAction className="flex items-center gap-2">
+            {state.status === "ready" ? (
+              <Button
                 aria-label="Open Mermaid diagram fullscreen"
-                className="mini-button icon-button"
                 title="Open Mermaid diagram fullscreen"
                 type="button"
+                variant="outline"
+                size="icon-sm"
                 onClick={() => setFullscreenOpen(true)}
               >
-                <ExpandIcon />
-              </button>
-            )}
+                <Maximize2Icon />
+              </Button>
+            ) : null}
             <CopyButton value={chart} label="Copy diagram code" />
-          </div>
-        </div>
-        {state.status === "loading" && <p className="empty-state compact">Rendering diagram…</p>}
-        {state.status === "ready" && <div className="mermaid-output" dangerouslySetInnerHTML={{ __html: state.svg }} />}
-        {state.status === "error" && (
-          <div className="mermaid-error">
-            <strong>Could not render Mermaid.</strong>
-            <span>{state.error}</span>
-            <pre className="message-body">{chart}</pre>
-          </div>
-        )}
-      </div>
-      {fullscreenOpen && state.status === "ready" && (
-        <div className="modal-backdrop mermaid-backdrop" role="presentation" onClick={() => setFullscreenOpen(false)}>
-          <div
-            aria-labelledby={dialogTitleId}
-            aria-modal="true"
-            className="modal-card mermaid-modal"
-            role="dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="message-toolbar">
-              <div>
-                <p className="section-label">Mermaid diagram</p>
-                <h2 className="card-title mermaid-modal__title" id={dialogTitleId}>Fullscreen view</h2>
-              </div>
-              <button
-                aria-label="Close Mermaid fullscreen"
-                className="mini-button icon-button"
-                title="Close Mermaid fullscreen"
-                type="button"
-                onClick={() => setFullscreenOpen(false)}
-              >
-                <CloseIcon />
-              </button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {state.status === "loading" ? <Skeleton className="h-64 w-full" /> : null}
+          {state.status === "ready" ? (
+            <div
+              className="min-h-48 overflow-x-auto border bg-card p-4 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full"
+              dangerouslySetInnerHTML={{ __html: state.svg }}
+            />
+          ) : null}
+          {state.status === "error" ? (
+            <div className="flex flex-col gap-3">
+              <Alert variant="destructive">
+                <ShieldAlertIcon />
+                <AlertTitle>Could not render Mermaid</AlertTitle>
+                <AlertDescription>{state.error}</AlertDescription>
+              </Alert>
+              <pre className="max-h-96 overflow-auto whitespace-pre-wrap border bg-muted/40 p-4 font-mono text-xs/relaxed">{chart}</pre>
             </div>
-            <div className="mermaid-output mermaid-output--fullscreen" dangerouslySetInnerHTML={{ __html: state.svg }} />
-          </div>
-        </div>
-      )}
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
+        <DialogContent className="max-h-[92vh] w-[min(96vw,75rem)] max-w-none grid-rows-[auto_minmax(0,1fr)] sm:max-w-none">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <WorkflowIcon />
+              Mermaid diagram
+            </DialogTitle>
+            <DialogDescription>Fullscreen view. Press Escape or use the close button to return.</DialogDescription>
+          </DialogHeader>
+          {state.status === "ready" ? (
+            <div
+              className="min-h-0 overflow-auto border bg-card p-6 [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-h-full [&_svg]:max-w-full"
+              dangerouslySetInnerHTML={{ __html: state.svg }}
+            />
+          ) : (
+            <div className="flex min-h-64 items-center justify-center"><Badge variant="secondary">Diagram unavailable</Badge></div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
-  );
-}
-
-function ExpandIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-      <path d="M14 4h6v6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-      <path d="m20 4-7 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-      <path d="M10 20H4v-6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-      <path d="m4 20 7-7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-      <path d="M18 6 6 18" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-      <path d="m6 6 12 12" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-    </svg>
   );
 }

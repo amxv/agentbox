@@ -1,7 +1,42 @@
 "use client";
 
+import {
+  ChevronDownIcon,
+  DownloadIcon,
+  EyeIcon,
+  FileTextIcon,
+  MessageSquareIcon,
+  PlusIcon,
+  ShieldAlertIcon
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger
+} from "@/components/ui/collapsible";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from "@/components/ui/empty";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 import { CopyButton } from "../../components/copy-button";
 import { MessageContent } from "./message-content";
 import { MessageComposer } from "../../components/message-composer";
@@ -10,6 +45,13 @@ import { AppNav } from "../../components/app-nav";
 import { AuthContext, fetchSession } from "../../components/session";
 import { ThreadVisibilityControl } from "./thread-visibility-control";
 import { attributionLabel } from "../../components/attribution";
+import {
+  MetricStrip,
+  MonoValue,
+  PanelHeader,
+  PanelMain,
+  PanelPage
+} from "../../components/panel-shell";
 
 type Asset = {
   id: string;
@@ -113,9 +155,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   }, [router, threadId]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      void loadThread();
-    }, 0);
+    const timeout = window.setTimeout(() => { void loadThread(); }, 0);
     return () => window.clearTimeout(timeout);
   }, [loadThread]);
 
@@ -125,18 +165,16 @@ export function ThreadView({ threadId }: { threadId: string }) {
     setShowReplyComposer(false);
   }
 
-  const assetCount = useMemo(() => {
-    return thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0;
-  }, [thread]);
+  const assetCount = useMemo(
+    () => thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0,
+    [thread]
+  );
 
   function toggleMessage(messageId: string) {
     setExpandedMessages((current) => {
       const next = new Set(current);
-      if (next.has(messageId)) {
-        next.delete(messageId);
-      } else {
-        next.add(messageId);
-      }
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
       return next;
     });
   }
@@ -154,18 +192,13 @@ export function ThreadView({ threadId }: { threadId: string }) {
       if (data.available === false) {
         setAssetResolutions((current) => ({
           ...current,
-          [asset.id]: {
-            available: false,
-            unavailable_reason: data.unavailable_reason || "Attachment unavailable"
-          }
+          [asset.id]: { available: false, unavailable_reason: data.unavailable_reason || "Attachment unavailable" }
         }));
         return;
       }
       const field = kind === "preview" ? "preview_url" : "download_url";
       const signedURL = data[field];
-      if (typeof signedURL !== "string" || signedURL === "") {
-        throw new Error(`The attachment ${kind} URL was not returned.`);
-      }
+      if (typeof signedURL !== "string" || signedURL === "") throw new Error(`The attachment ${kind} URL was not returned.`);
       setAssetResolutions((current) => ({
         ...current,
         [asset.id]: { ...current[asset.id], available: true, [field]: signedURL }
@@ -179,173 +212,191 @@ export function ThreadView({ threadId }: { threadId: string }) {
   }
 
   return (
-    <div className="dashboard-page">
+    <PanelPage>
       <AppNav title="Thread" auth={auth} />
-
-      <main className="dashboard-main shell">
-        <section className="dashboard-header">
-          <div className="dashboard-header__row">
-            <div>
-              <p className="section-label">Accessible thread</p>
-              <h1 className="dashboard-title">{thread?.title ?? "Thread"}</h1>
-              <div className="thread-id-row">
-                <p className="dashboard-copy mono">
-                  {thread?.id ?? threadId}{thread ? ` · Updated ${formatDate(thread.updated_at)}` : ""}
-                </p>
+      <PanelMain width="reading">
+        <PanelHeader
+          eyebrow="Accessible thread"
+          title={thread?.title ?? "Thread"}
+          description={
+            <span className="flex flex-col gap-2">
+              <span className="flex flex-wrap items-center gap-2">
+                <MonoValue>{thread?.id ?? threadId}</MonoValue>
                 <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" />
-              </div>
-              {thread && <p className="thread-meta">Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</p>}
-            </div>
-            {thread && (
-              <div className="card card--compact">
-                <p className="stat-label">Contents</p>
-                <h2 className="card-title">{thread.messages.length} messages</h2>
-                <p className="copy">{assetCount} attachments in this thread.</p>
-              </div>
-            )}
-          </div>
-        </section>
+              </span>
+              {thread ? (
+                <span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)} · Updated {formatDate(thread.updated_at)}</span>
+              ) : null}
+            </span>
+          }
+          actions={
+            <>
+              <Button type="button" onClick={() => setShowReplyComposer((value) => !value)}>
+                <PlusIcon data-icon="inline-start" />
+                {showReplyComposer ? "Close reply" : "Reply"}
+              </Button>
+              {thread ? <ThreadVisibilityControl threadId={thread.id} /> : null}
+            </>
+          }
+          aside={thread ? (
+            <MetricStrip
+              items={[
+                { label: "Messages", value: thread.messages.length },
+                { label: "Attachments", value: assetCount }
+              ]}
+            />
+          ) : null}
+        />
 
-        <div className="composer-toggle-row">
-          <button className="button button--solid" type="button" onClick={() => setShowReplyComposer((value) => !value)}>
-            {showReplyComposer ? "Close" : "+ Reply"}
-          </button>
-          {thread && <ThreadVisibilityControl threadId={thread.id} />}
-        </div>
-
-        {showReplyComposer && (
+        {showReplyComposer ? (
           <MessageComposer
             label="Reply"
             placeholder="Post a message. Markdown is detected automatically."
             submitLabel="Post message"
             onSubmit={postReply}
           />
-        )}
+        ) : null}
 
-        <section className="message-list" aria-label="Thread messages">
-          {loading && (
-            <div className="skeleton-list" aria-label="Loading thread" aria-busy="true">
-              {Array.from({ length: 3 }).map((_, index) => (
-                <div className="skeleton-message-card" aria-hidden="true" key={index}>
-                  <div className="skeleton-message-main">
-                    <span className="skeleton-pill skeleton-pill--small" />
-                    <div className="skeleton-stack">
-                      <span className="skeleton-line skeleton-line--medium" />
-                      <span className="skeleton-line skeleton-line--long" />
-                    </div>
-                  </div>
-                  <div className="skeleton-meta-row">
-                    <span className="skeleton-pill" />
-                    <span className="skeleton-pill" />
-                    <span className="skeleton-circle" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {error && (
-            <div className="error-card">
-              <strong>Could not load thread.</strong>
-              <span>{error}</span>
-            </div>
-          )}
-          {!loading && !error && thread?.messages.length === 0 && <p className="empty-state">No messages yet.</p>}
-          {!loading && !error && thread?.messages.map((message, index) => {
+        {error ? (
+          <Alert variant="destructive">
+            <ShieldAlertIcon />
+            <AlertTitle>Could not load thread</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <section className="flex flex-col gap-3" aria-label="Thread messages">
+          {loading ? <MessageSkeleton /> : null}
+          {!loading && !error && thread?.messages.length === 0 ? (
+            <Empty className="border py-16">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><MessageSquareIcon /></EmptyMedia>
+                <EmptyTitle>No messages yet</EmptyTitle>
+                <EmptyDescription>Post the first reply to begin the thread.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : null}
+          {!loading && !error ? thread?.messages.map((message, index) => {
             const isExpanded = expandedMessages.has(message.id);
-            const panelId = `message-panel-${message.id}`;
             return (
-              <article key={message.id} className={isExpanded ? "message-card message-card--expanded" : "message-card"}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className="message-toggle"
-                  aria-expanded={isExpanded}
-                  aria-controls={panelId}
-                  onClick={() => toggleMessage(message.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      toggleMessage(message.id);
+              <Collapsible open={isExpanded} onOpenChange={() => toggleMessage(message.id)} key={message.id}>
+                <Card>
+                  <CollapsibleTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-auto w-full items-start justify-between gap-4 p-4 text-left whitespace-normal hover:bg-muted/40"
+                      />
                     }
-                  }}
-                >
-                  <span className="message-toggle__main">
-                    <span className="message-index">#{index + 1}</span>
-                    <span className="message-heading">
-                      <span className="message-title-row">
-                        <strong className="message-author">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
-                        {message.id && (
-                          <span className="message-id-chip" onClick={(event) => event.stopPropagation()}>
-                            <span className="message-id-label">Message ID</span>
-                            <span className="message-id-value mono">{message.id}</span>
-                            <CopyButton value={message.id} label="Copy message ID" />
-                          </span>
-                        )}
+                  >
+                    <span className="flex min-w-0 items-start gap-3">
+                      <Badge variant="secondary">#{index + 1}</Badge>
+                      <span className="flex min-w-0 flex-col gap-2">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <strong className="font-heading text-sm font-semibold">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
+                          <Badge variant="outline">{getMessageKind(message.body_content_type)}</Badge>
+                          {message.assets.length > 0 ? <Badge variant="outline">{message.assets.length} attachment{message.assets.length === 1 ? "" : "s"}</Badge> : null}
+                        </span>
+                        <span className="line-clamp-2 text-xs/relaxed text-muted-foreground">{getMessagePreview(message.body)}</span>
+                        <span className="flex flex-wrap items-center gap-2">
+                          <MonoValue>{message.id}</MonoValue>
+                          <span onClick={(event) => event.stopPropagation()}><CopyButton value={message.id} label="Copy message ID" /></span>
+                        </span>
                       </span>
-                      <span className="message-preview">{getMessagePreview(message.body)}</span>
                     </span>
-                  </span>
-                  <span className="message-toggle__meta">
-                    <span>{getMessageKind(message.body_content_type)}</span>
-                    {message.assets.length > 0 && <span>{message.assets.length} attachments</span>}
-                    <span>{formatDate(message.created_at)}</span>
-                    <span className="message-chevron" aria-hidden="true" />
-                  </span>
-                </div>
-                {isExpanded && (
-                  <div id={panelId} className="message-panel">
-                    <MessageContent body={message.body} contentType={message.body_content_type} />
-                    {message.assets.length > 0 && (
-                      <div className="asset-list">
-                        <span className="asset-label">Attachments</span>
-                        {message.assets.map((asset) => {
-                          const resolution = assetResolutions[asset.id];
-                          const unavailable = asset.unavailable || resolution?.available === false;
-                          const unavailableReason = resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable";
-                          const previewBusy = assetBusy === `preview:${asset.id}`;
-                          const downloadBusy = assetBusy === `download:${asset.id}`;
-                          return (
-                            <div key={asset.id} className="asset-card">
-                              {!asset.purged_at && !unavailable && resolution?.preview_url && (
-                                <div className="preview-link">
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img className="preview-image" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
-                                </div>
-                              )}
-                              <div className="asset-row">
-                                <span className="thread-title">{asset.file_name}</span>
-                                <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
-                              </div>
-                              {asset.purged_at ? (
-                                <span className="asset-tombstone">Attachment deleted by deployment owner</span>
-                              ) : unavailable ? (
-                                <span className="asset-tombstone">{unavailableReason}</span>
-                              ) : (
-                                <div className="asset-row">
-                                  {asset.preview_path && !resolution?.preview_url && (
-                                    <button className="download-link" type="button" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
-                                      {previewBusy ? "Loading preview…" : "Load preview"}
-                                    </button>
-                                  )}
-                                  {asset.download_path && (
-                                    <button className="download-link" type="button" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
-                                      {downloadBusy ? "Signing…" : "Open attachment"}
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </article>
+                    <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                      <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
+                      <ChevronDownIcon className={cn("transition-transform", isExpanded && "rotate-180")} />
+                    </span>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <Separator />
+                    <CardContent className="flex flex-col gap-6 pt-4">
+                      <MessageContent body={message.body} contentType={message.body_content_type} />
+                      {message.assets.length > 0 ? (
+                        <section className="flex flex-col gap-3" aria-label="Attachments">
+                          <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Attachments</span>
+                          <div className="grid gap-3">
+                            {message.assets.map((asset) => {
+                              const resolution = assetResolutions[asset.id];
+                              const unavailable = asset.unavailable || resolution?.available === false;
+                              const unavailableReason = resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable";
+                              const previewBusy = assetBusy === `preview:${asset.id}`;
+                              const downloadBusy = assetBusy === `download:${asset.id}`;
+                              return (
+                                <Card size="sm" key={asset.id}>
+                                  {!asset.purged_at && !unavailable && resolution?.preview_url ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img className="max-h-[32rem] w-full border-b bg-muted object-contain" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
+                                  ) : null}
+                                  <CardHeader>
+                                    <div className="flex min-w-0 items-start gap-3">
+                                      <span className="flex size-8 shrink-0 items-center justify-center border bg-muted"><FileTextIcon /></span>
+                                      <div className="flex min-w-0 flex-col gap-1">
+                                        <CardTitle>{asset.file_name}</CardTitle>
+                                        <CardDescription>{asset.mime_type ?? "Unknown type"} · {formatBytes(asset.size_bytes)}</CardDescription>
+                                      </div>
+                                    </div>
+                                  </CardHeader>
+                                  <CardContent className="flex flex-col gap-3">
+                                    {asset.purged_at ? (
+                                      <Alert variant="destructive"><AlertTitle>Attachment deleted by deployment owner</AlertTitle></Alert>
+                                    ) : unavailable ? (
+                                      <Alert variant="destructive"><AlertTitle>Attachment unavailable</AlertTitle><AlertDescription>{unavailableReason}</AlertDescription></Alert>
+                                    ) : (
+                                      <div className="flex flex-wrap gap-2">
+                                        {asset.preview_path && !resolution?.preview_url ? (
+                                          <Button variant="outline" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
+                                            {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
+                                            Load preview
+                                          </Button>
+                                        ) : null}
+                                        {asset.download_path ? (
+                                          <Button variant="outline" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
+                                            {downloadBusy ? <Spinner data-icon="inline-start" /> : <DownloadIcon data-icon="inline-start" />}
+                                            Open attachment
+                                          </Button>
+                                        ) : null}
+                                      </div>
+                                    )}
+                                  </CardContent>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ) : null}
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
             );
-          })}
+          }) : null}
         </section>
-      </main>
+      </PanelMain>
+    </PanelPage>
+  );
+}
+
+function MessageSkeleton() {
+  return (
+    <div className="flex flex-col gap-3" aria-label="Loading thread" aria-busy="true">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <Card key={index}>
+          <CardContent className="flex items-start justify-between gap-4">
+            <div className="flex flex-1 items-start gap-3">
+              <Skeleton className="h-5 w-8" />
+              <div className="flex flex-1 flex-col gap-2">
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-2/3" />
+              </div>
+            </div>
+            <Skeleton className="h-4 w-28" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

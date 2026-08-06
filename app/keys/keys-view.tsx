@@ -1,10 +1,66 @@
 "use client";
 
+import {
+  CableIcon,
+  KeyRoundIcon,
+  LaptopIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  RotateCwIcon,
+  Settings2Icon,
+  ShieldAlertIcon,
+  TerminalIcon,
+  Trash2Icon,
+  XIcon
+} from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from "@/components/ui/empty";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "../components/copy-button";
 import { AppNav } from "../components/app-nav";
 import { AuthContext, fetchSession } from "../components/session";
+import {
+  DetailRow,
+  MetricStrip,
+  MonoValue,
+  PanelHeader,
+  PanelMain,
+  PanelPage
+} from "../components/panel-shell";
 
 type Credential = {
   id: string;
@@ -55,6 +111,11 @@ type SecretReveal = {
   raycastSetup?: RaycastSetup | null;
 };
 
+type CredentialConfirmation = {
+  action: "rotate" | "revoke";
+  credential: Credential;
+};
+
 function formatDate(value?: string | null) {
   if (!value) return "Never";
   return new Date(value).toLocaleString(undefined, {
@@ -88,6 +149,7 @@ export function KeysView() {
   const [actingCredentialID, setActingCredentialID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<CredentialConfirmation | null>(null);
 
   const loadCredentials = useCallback(async function loadCredentials(cursor?: string) {
     const firstPage = !cursor;
@@ -183,8 +245,6 @@ export function KeysView() {
   }
 
   async function rotateCredential(credential: Credential) {
-    const confirmed = window.confirm(`Rotate “${credential.name}” (${credential.id})? Its current secret will stop working immediately.`);
-    if (!confirmed) return;
     setActingCredentialID(credential.id);
     setError(null);
     setNotice(null);
@@ -195,6 +255,7 @@ export function KeysView() {
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setSecretReveal({ credential: data.credential, raycastSetup: data.raycast_setup });
       setNotice(`Rotated “${credential.name}”. Store the replacement secret now.`);
+      setConfirmation(null);
       await loadCredentials();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -204,8 +265,6 @@ export function KeysView() {
   }
 
   async function revokeCredential(credential: Credential) {
-    const confirmed = window.confirm(`Revoke “${credential.name}” (${credential.id})? This credential will stop working immediately, but its audit row will remain visible.`);
-    if (!confirmed) return;
     setActingCredentialID(credential.id);
     setError(null);
     setNotice(null);
@@ -215,6 +274,7 @@ export function KeysView() {
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setNotice(`Revoked credential ${data.revoked ?? credential.id}.`);
       if (secretReveal?.credential.id === credential.id) setSecretReveal(null);
+      setConfirmation(null);
       await loadCredentials();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -241,203 +301,313 @@ export function KeysView() {
   }
 
   return (
-    <div className="dashboard-page">
+    <PanelPage>
       <AppNav title="Credential management" auth={auth} />
+      <PanelMain>
+        <PanelHeader
+          eyebrow="User credentials"
+          title="Credentials and installations."
+          description="Create an independent credential for every actor surface, inspect safe usage metadata, and retain revoked rows as audit history."
+          aside={
+            <MetricStrip
+              items={[
+                { label: "Active", value: activeCount, detail: "currently authorized" },
+                { label: "Revoked history", value: revokedCount, detail: "retained for audit" }
+              ]}
+            />
+          }
+        />
 
-      <main className="dashboard-main shell">
-        <section className="dashboard-header">
-          <div className="dashboard-header__row">
-            <div>
-              <p className="section-label">User credentials</p>
-              <h1 className="dashboard-title">Credentials and installations</h1>
-              <p className="dashboard-copy">Create independent credentials for each actor surface, inspect safe usage metadata, and retain revoked rows as audit history.</p>
-            </div>
-            {auth && (
-              <div className="credential-stats" aria-label="Credential totals">
-                <div className="card">
-                  <p className="stat-label">Active</p>
-                  <h2 className="card-title">{activeCount}</h2>
-                </div>
-                <div className="card">
-                  <p className="stat-label">Revoked history</p>
-                  <h2 className="card-title">{revokedCount}</h2>
-                </div>
-              </div>
-            )}
-          </div>
+        {notice ? (
+          <Alert>
+            <KeyRoundIcon />
+            <AlertTitle>Credential inventory updated</AlertTitle>
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
+        ) : null}
+        {error ? (
+          <Alert variant="destructive">
+            <ShieldAlertIcon />
+            <AlertTitle>Could not manage credentials</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <section className="grid gap-4 lg:grid-cols-2" aria-label="Create credentials">
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>New API key</CardTitle>
+              <CardDescription>Use a clear label for a local agent, worker, or another supported client.</CardDescription>
+              <CardAction><TerminalIcon /></CardAction>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={createCustomKey}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="custom-credential-name">Credential label</FieldLabel>
+                    <Input
+                      id="custom-credential-name"
+                      value={newKeyName}
+                      onChange={(event) => setNewKeyName(event.target.value)}
+                      placeholder="Codex on MacBook"
+                    />
+                  </Field>
+                  <Button type="submit" disabled={creating !== null || !newKeyName.trim()}>
+                    {creating === "custom" ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                    Create API key
+                  </Button>
+                </FieldGroup>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>New Raycast installation</CardTitle>
+              <CardDescription>Give each Mac its own least-privilege key and developer-mode setup bundle.</CardDescription>
+              <CardAction><LaptopIcon /></CardAction>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={createRaycastInstallation}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="raycast-installation-label">Installation label</FieldLabel>
+                    <Input
+                      id="raycast-installation-label"
+                      value={raycastLabel}
+                      onChange={(event) => setRaycastLabel(event.target.value)}
+                      placeholder="MacBook Air"
+                    />
+                  </Field>
+                  <Button type="submit" disabled={creating !== null || !raycastLabel.trim()}>
+                    {creating === "raycast" ? <Spinner data-icon="inline-start" /> : <CableIcon data-icon="inline-start" />}
+                    Create Raycast installation
+                  </Button>
+                </FieldGroup>
+              </form>
+            </CardContent>
+          </Card>
         </section>
 
-        <div className="key-management-grid">
-          <div className="credential-create-stack">
-            <section className="sign-in-card key-create-card" aria-labelledby="create-key-title">
-              <div>
-                <p className="section-label">Custom actor</p>
-                <h2 id="create-key-title" className="card-title">New API key</h2>
-                <p className="copy">Use a clear label for a local agent, worker, or another supported client. Reusing an active custom label rotates that credential.</p>
-              </div>
-              <form className="key-create-form" onSubmit={createCustomKey}>
-                <input className="form-input" value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} placeholder="Codex on MacBook" type="text" />
-                <button className="button button--solid" type="submit" disabled={creating !== null || !newKeyName.trim()}>
-                  {creating === "custom" ? "Creating..." : "Create API key"}
-                </button>
-              </form>
-            </section>
+        {secretReveal ? (
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>Secret shown once</CardTitle>
+              <CardDescription>
+                Copy the secret now. Agentbox stores only its hash and safe prefix after this page is refreshed.
+              </CardDescription>
+              <CardAction><Badge>{secretReveal.credential.name}</Badge></CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-5">
+              <SecretRow label="API key" value={secretReveal.credential.key} />
+              {secretReveal.raycastSetup ? (
+                <RaycastSetupPanel setup={secretReveal.raycastSetup} />
+              ) : (
+                <SecretRow label="Authenticated MCP URL" value={getMCPURL(secretReveal.credential.key)} />
+              )}
+            </CardContent>
+            <CardFooter className="flex flex-wrap justify-between gap-3">
+              <MonoValue>{secretReveal.credential.id}</MonoValue>
+              <Button variant="outline" onClick={() => setSecretReveal(null)}>Dismiss</Button>
+            </CardFooter>
+          </Card>
+        ) : null}
 
-            <section className="sign-in-card key-create-card" aria-labelledby="create-raycast-title">
-              <div>
-                <p className="section-label">Raycast</p>
-                <h2 id="create-raycast-title" className="card-title">New installation</h2>
-                <p className="copy">Every Raycast installation receives its own label, secret, least-privilege scopes, and developer-mode setup bundle.</p>
-              </div>
-              <form className="key-create-form" onSubmit={createRaycastInstallation}>
-                <input className="form-input" value={raycastLabel} onChange={(event) => setRaycastLabel(event.target.value)} placeholder="MacBook Air" type="text" />
-                <button className="button button--solid" type="submit" disabled={creating !== null || !raycastLabel.trim()}>
-                  {creating === "raycast" ? "Creating..." : "Create Raycast installation"}
-                </button>
-              </form>
-            </section>
-          </div>
+        {setupPreview ? (
+          <Card>
+            <CardHeader className="border-b">
+              <CardTitle>{setupPreview.label}</CardTitle>
+              <CardDescription>Saved non-secret setup instructions for this Raycast installation.</CardDescription>
+              <CardAction>
+                <Button size="icon-sm" variant="ghost" aria-label="Close setup preview" onClick={() => setSetupPreview(null)}>
+                  <XIcon />
+                </Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              <RaycastSetupPanel setup={setupPreview} />
+            </CardContent>
+          </Card>
+        ) : null}
 
-          <section className="key-list-card" aria-labelledby="credential-inventory-title">
-            <div className="key-list-card__header">
-              <div>
-                <p className="section-label">Inventory</p>
-                <h2 id="credential-inventory-title" className="card-title">Active and revoked credentials</h2>
-              </div>
-              <button className="button button--ghost" type="button" onClick={() => void loadCredentials()} disabled={loading}>Refresh</button>
-            </div>
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>Credential inventory</CardTitle>
+            <CardDescription>Active and revoked credentials, including scopes and safe usage metadata.</CardDescription>
+            <CardAction>
+              <Button variant="outline" onClick={() => void loadCredentials()} disabled={loading}>
+                {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+                Refresh
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {loading ? <CredentialSkeleton /> : null}
+            {!loading && credentials.length === 0 ? (
+              <Empty className="border py-16">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><KeyRoundIcon /></EmptyMedia>
+                  <EmptyTitle>No credentials found</EmptyTitle>
+                  <EmptyDescription>Create a custom key or Raycast installation above.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
+            {!loading ? credentials.map((credential) => {
+              const revoked = Boolean(credential.revoked_at);
+              const acting = actingCredentialID === credential.id;
+              return (
+                <Card size="sm" key={credential.id}>
+                  <CardHeader className="border-b">
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <CardTitle className="flex flex-wrap items-center gap-2">
+                        {credential.name}
+                        <Badge variant={revoked ? "destructive" : "outline"}>{revoked ? "Revoked" : "Active"}</Badge>
+                        <Badge variant="secondary">{credential.purpose || "custom"}</Badge>
+                      </CardTitle>
+                      <MonoValue>{credential.id}</MonoValue>
+                    </div>
+                    <CardAction className="flex flex-wrap gap-2">
+                      {credential.purpose === "raycast" ? (
+                        <Button variant="outline" size="sm" onClick={() => void openRaycastSetup(credential)} disabled={acting}>
+                          {acting ? <Spinner data-icon="inline-start" /> : <Settings2Icon data-icon="inline-start" />}
+                          Setup
+                        </Button>
+                      ) : null}
+                      {!revoked ? (
+                        <>
+                          <Button variant="outline" size="sm" onClick={() => setConfirmation({ action: "rotate", credential })} disabled={acting}>
+                            <RotateCwIcon data-icon="inline-start" />
+                            Rotate
+                          </Button>
+                          <Button variant="destructive" size="sm" onClick={() => setConfirmation({ action: "revoke", credential })} disabled={acting}>
+                            <Trash2Icon data-icon="inline-start" />
+                            Revoke
+                          </Button>
+                        </>
+                      ) : null}
+                    </CardAction>
+                  </CardHeader>
+                  <CardContent>
+                    <dl>
+                      <DetailRow label="Masked token" value={<MonoValue>{credential.key_masked || credential.token_prefix}</MonoValue>} />
+                      <DetailRow label="Scopes" value={credential.scopes.length > 0 ? credential.scopes.join(", ") : "Legacy/default"} />
+                      <DetailRow label="Created" value={formatDate(credential.created_at)} />
+                      <DetailRow label="Last used" value={formatDate(credential.last_used_at)} />
+                      <DetailRow label="Revoked" value={credential.revoked_at ? formatDate(credential.revoked_at) : "No"} />
+                    </dl>
+                  </CardContent>
+                </Card>
+              );
+            }) : null}
+          </CardContent>
+          {page?.has_more && page.next_cursor ? (
+            <CardFooter>
+              <Button variant="outline" onClick={() => void loadCredentials(page.next_cursor ?? undefined)} disabled={loadingMore}>
+                {loadingMore ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                Load more credentials
+              </Button>
+            </CardFooter>
+          ) : null}
+        </Card>
+      </PanelMain>
 
-            {notice && <div className="notice-card">{notice}</div>}
-            {error && (
-              <div className="error-card">
-                <strong>Could not manage credentials.</strong>
-                <span>{error}</span>
-              </div>
-            )}
+      <AlertDialog open={Boolean(confirmation)} onOpenChange={(open) => { if (!open) setConfirmation(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>{confirmation?.action === "rotate" ? <RotateCwIcon /> : <Trash2Icon />}</AlertDialogMedia>
+            <AlertDialogTitle>{confirmation?.action === "rotate" ? "Rotate this credential?" : "Revoke this credential?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmation?.action === "rotate"
+                ? `The current secret for “${confirmation.credential.name}” will stop working immediately. A replacement secret will be shown once.`
+                : `“${confirmation?.credential.name ?? "This credential"}” will stop working immediately, but its audit row will remain visible.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(confirmation && actingCredentialID === confirmation.credential.id)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant={confirmation?.action === "revoke" ? "destructive" : "default"}
+              disabled={!confirmation || actingCredentialID === confirmation.credential.id}
+              onClick={() => {
+                if (!confirmation) return;
+                if (confirmation.action === "rotate") void rotateCredential(confirmation.credential);
+                else void revokeCredential(confirmation.credential);
+              }}
+            >
+              {confirmation && actingCredentialID === confirmation.credential.id ? <Spinner data-icon="inline-start" /> : confirmation?.action === "rotate" ? <RotateCwIcon data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
+              {confirmation?.action === "rotate" ? "Rotate credential" : "Revoke credential"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </PanelPage>
+  );
+}
 
-            {secretReveal && (
-              <div className="secret-card">
-                <div>
-                  <p className="section-label">Secret shown once</p>
-                  <h3>{secretReveal.credential.name}</h3>
-                  <p className="copy">Credential ID: <code>{secretReveal.credential.id}</code>. Copy the secret now; the inventory stores only its hash and safe prefix.</p>
-                </div>
-                <div className="secret-row">
-                  <code>{secretReveal.credential.key}</code>
-                  <CopyButton value={secretReveal.credential.key} label="Copy API key" />
-                </div>
-                {secretReveal.raycastSetup ? (
-                  <RaycastSetupPanel setup={secretReveal.raycastSetup} />
-                ) : (
-                  <div className="secret-row">
-                    <code>{getMCPURL(secretReveal.credential.key)}</code>
-                    <CopyButton value={getMCPURL(secretReveal.credential.key)} label="Copy MCP URL" />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {setupPreview && (
-              <div className="secret-card">
-                <div className="key-list-card__header">
-                  <div>
-                    <p className="section-label">Saved setup</p>
-                    <h3>{setupPreview.label}</h3>
-                    <p className="copy">These non-secret instructions remain available after refresh. Agentbox never redisplays the stored API key.</p>
-                  </div>
-                  <button className="mini-button" type="button" onClick={() => setSetupPreview(null)}>Close</button>
-                </div>
-                <RaycastSetupPanel setup={setupPreview} />
-              </div>
-            )}
-
-            {loading && <p className="empty-state" aria-busy="true">Loading credential inventory…</p>}
-            {!loading && credentials.length === 0 && <p className="empty-state">No credentials found.</p>}
-            {!loading && credentials.length > 0 && (
-              <div className="credential-inventory" aria-label="Credential inventory">
-                {credentials.map((credential) => {
-                  const revoked = Boolean(credential.revoked_at);
-                  const acting = actingCredentialID === credential.id;
-                  return (
-                    <article className="credential-card" key={credential.id}>
-                      <div className="credential-card__header">
-                        <div>
-                          <div className="credential-card__title-row">
-                            <h3>{credential.name}</h3>
-                            <span className={`credential-state ${revoked ? "credential-state--revoked" : "credential-state--active"}`}>{revoked ? "Revoked" : "Active"}</span>
-                          </div>
-                          <code className="credential-id">{credential.id}</code>
-                        </div>
-                        <div className="key-actions">
-                          {credential.purpose === "raycast" && <button className="mini-button" type="button" onClick={() => void openRaycastSetup(credential)} disabled={acting}>Setup</button>}
-                          {!revoked && <button className="mini-button" type="button" onClick={() => void rotateCredential(credential)} disabled={acting}>{acting ? "Working..." : "Rotate"}</button>}
-                          {!revoked && <button className="mini-button mini-button--danger" type="button" onClick={() => void revokeCredential(credential)} disabled={acting}>Revoke</button>}
-                        </div>
-                      </div>
-                      <dl className="credential-metadata">
-                        <div><dt>Purpose</dt><dd>{credential.purpose || "custom"}</dd></div>
-                        <div><dt>Masked token</dt><dd className="mono">{credential.key_masked || credential.token_prefix}</dd></div>
-                        <div><dt>Scopes</dt><dd>{credential.scopes.length > 0 ? credential.scopes.join(", ") : "Legacy/default"}</dd></div>
-                        <div><dt>Created</dt><dd>{formatDate(credential.created_at)}</dd></div>
-                        <div><dt>Last used</dt><dd>{formatDate(credential.last_used_at)}</dd></div>
-                        <div><dt>Revoked</dt><dd>{credential.revoked_at ? formatDate(credential.revoked_at) : "No"}</dd></div>
-                      </dl>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-
-            {page?.has_more && page.next_cursor && (
-              <button className="button button--ghost" type="button" onClick={() => void loadCredentials(page.next_cursor ?? undefined)} disabled={loadingMore}>
-                {loadingMore ? "Loading…" : "Load more credentials"}
-              </button>
-            )}
-          </section>
-        </div>
-      </main>
+function SecretRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">{label}</span>
+      <div className="flex min-w-0 items-center gap-2 border bg-muted/40 p-2">
+        <MonoValue className="flex-1 text-foreground">{value}</MonoValue>
+        <CopyButton value={value} label={`Copy ${label}`} />
+      </div>
     </div>
   );
 }
 
 function RaycastSetupPanel({ setup }: { setup: RaycastSetup }) {
   return (
-    <div className="raycast-setup-panel">
-      <div className="credential-metadata">
-        <div><dt>Repository</dt><dd><code>{setup.repository_url}</code></dd></div>
-        <div><dt>Extension path</dt><dd><code>{setup.extension_path}</code></dd></div>
-        <div><dt>Agentbox URL</dt><dd><code>{setup.base_url}</code></dd></div>
-      </div>
-      <div>
-        <p className="section-label">Install commands</p>
-        <div className="setup-command-list">
-          {setup.install_commands.map((command) => (
-            <div className="secret-row" key={command}>
-              <code>{command}</code>
-              <CopyButton value={command} label="Copy command" />
-            </div>
-          ))}
-        </div>
-      </div>
-      <div>
-        <p className="section-label">Raycast preferences</p>
-        <div className="setup-command-list">
-          {setup.preferences.map((preference) => {
-            const value = setupPreferenceValue(preference, setup);
-            const copyable = Boolean(preference.value);
-            return (
-              <div className="secret-row" key={preference.name}>
-                <div>
-                  <strong>{preference.title}</strong>
-                  <code>{value}</code>
-                </div>
-                {copyable && <CopyButton value={preference.value} label={`Copy ${preference.title}`} />}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      <p className="copy"><strong>Final check:</strong> {setup.final_check}</p>
+    <div className="flex flex-col gap-5">
+      <dl>
+        <DetailRow label="Repository" value={<MonoValue>{setup.repository_url}</MonoValue>} />
+        <DetailRow label="Extension path" value={<MonoValue>{setup.extension_path}</MonoValue>} />
+        <DetailRow label="Agentbox URL" value={<MonoValue>{setup.base_url}</MonoValue>} />
+      </dl>
+      <Separator />
+      <section className="flex flex-col gap-3">
+        <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Install commands</span>
+        {setup.install_commands.map((command) => <SecretRow key={command} label="Terminal" value={command} />)}
+      </section>
+      <Separator />
+      <section className="flex flex-col gap-3">
+        <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Raycast preferences</span>
+        {setup.preferences.map((preference) => {
+          const value = setupPreferenceValue(preference, setup);
+          return preference.value ? (
+            <SecretRow key={preference.name} label={preference.title} value={preference.value} />
+          ) : (
+            <Alert key={preference.name}>
+              <AlertTitle>{preference.title}</AlertTitle>
+              <AlertDescription>{value}</AlertDescription>
+            </Alert>
+          );
+        })}
+      </section>
+      <Alert>
+        <Settings2Icon />
+        <AlertTitle>Final check</AlertTitle>
+        <AlertDescription>{setup.final_check}</AlertDescription>
+      </Alert>
+    </div>
+  );
+}
+
+function CredentialSkeleton() {
+  return (
+    <div className="flex flex-col gap-3" aria-label="Loading credentials" aria-busy="true">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <Card size="sm" key={index}>
+          <CardHeader className="border-b">
+            <Skeleton className="h-4 w-48" />
+            <Skeleton className="h-3 w-72" />
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

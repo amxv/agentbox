@@ -1,7 +1,10 @@
 "use client";
 
+import { Code2Icon, EyeIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import { CopyButton } from "./copy-button";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { CopyButton } from "../../components/copy-button";
 import { MarkdownMessage } from "./markdown-message";
 import { inferBodyContentType, messageFormatLabel, normalizeContentType } from "./markdown-utils";
 
@@ -17,35 +20,57 @@ export function MessageContent({ body, contentType }: { body: string; contentTyp
 
   if (resolvedType === "text/plain" || showSource) {
     return (
-      <div className="message-content">
-        <div className="message-toolbar">
-          <span className="format-badge">{messageFormatLabel(resolvedType, wasInferred)}</span>
-          <div className="message-actions">
-            <CopyButton value={body} label="Copy message" />
-            {resolvedType === "text/markdown" && (
-              <button className="mini-button" type="button" onClick={() => setShowSource(false)}>
-                Rendered
-              </button>
-            )}
-          </div>
-        </div>
-        <pre className="message-body">{safeBody}</pre>
+      <div className="flex min-w-0 flex-col gap-3">
+        <MessageToolbar
+          label={messageFormatLabel(resolvedType, wasInferred)}
+          body={body}
+          action={resolvedType === "text/markdown" ? (
+            <Button variant="outline" size="sm" type="button" onClick={() => setShowSource(false)}>
+              <EyeIcon data-icon="inline-start" />
+              Rendered
+            </Button>
+          ) : null}
+        />
+        <pre className="max-h-[60rem] min-w-0 overflow-auto whitespace-pre-wrap break-words border bg-muted/40 p-4 font-mono text-xs/relaxed text-foreground">
+          {safeBody}
+        </pre>
       </div>
     );
   }
 
   return (
-    <div className="message-content">
-      <div className="message-toolbar">
-        <span className="format-badge">{messageFormatLabel(resolvedType, wasInferred)}</span>
-        <div className="message-actions">
-          <CopyButton value={body} label="Copy message" />
-          <button className="mini-button" type="button" onClick={() => setShowSource(true)}>
+    <div className="flex min-w-0 flex-col gap-3">
+      <MessageToolbar
+        label={messageFormatLabel(resolvedType, wasInferred)}
+        body={body}
+        action={
+          <Button variant="outline" size="sm" type="button" onClick={() => setShowSource(true)}>
+            <Code2Icon data-icon="inline-start" />
             Raw
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
       <MarkdownMessage body={body} />
+    </div>
+  );
+}
+
+function MessageToolbar({
+  label,
+  body,
+  action
+}: {
+  label: string;
+  body: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <Badge variant="secondary">{label}</Badge>
+      <div className="flex flex-wrap items-center gap-2">
+        <CopyButton value={body} label="Copy message" />
+        {action}
+      </div>
     </div>
   );
 }

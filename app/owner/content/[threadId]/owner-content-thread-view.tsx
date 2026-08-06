@@ -1,12 +1,22 @@
 "use client";
 
+import { ArrowLeftIcon, DownloadIcon, EyeIcon, FileWarningIcon, ShieldAlertIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { AppNav } from "../../../components/app-nav";
 import { attributionLabel } from "../../../components/attribution";
+import { MetricStrip, MonoValue, PanelHeader, PanelMain, PanelPage } from "../../../components/panel-shell";
 import { fetchSession } from "../../../components/session";
 import { MessageContent } from "../../../threads/[threadId]/message-content";
-import styles from "./owner-content-thread.module.css";
 
 type Asset = {
   id: string;
@@ -139,47 +149,164 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
     }
   }
 
-  return <main className={styles.page}>
-    <header className={styles.topbar}><Link href="/owner/content">← Deployment content</Link><span>OWNER VIEW · READ ONLY</span><Link href="/threads">Normal inbox</Link></header>
-    <section className={styles.shell}>
-      <div className={styles.warning}><strong>READ ONLY</strong><span>This thread may be private to another user. No reply, upload, or visibility action is available from this owner-only surface.</span></div>
-      {loading && <div className={styles.empty}>Loading owner content…</div>}
-      {error && <div className={styles.error}>{error}</div>}
-      {thread && <>
-        <section className={styles.hero}>
-          <p>Owned by {thread.owner.display_name}{thread.owner.disabled_at ? " · disabled" : ""}</p>
-          <h1>{thread.title}</h1>
-          <div><span>{thread.owner.email}</span><span>Updated {formatDate(thread.updated_at)}</span><code>{thread.id}</code></div>
-          <div className={styles.badges}>
-            {thread.visibility_summary.private && <em>Private</em>}
-            {thread.visibility.shared_teams.map((team) => <em key={team.id}>{team.name}</em>)}
-            {thread.visibility_summary.public && <em>Public</em>}
-          </div>
-          <span className={styles.creator}>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span>
-        </section>
-        <section className={styles.messages}>
-          {thread.messages.length === 0 && <div className={styles.empty}>No messages.</div>}
-          {thread.messages.map((message, index) => <article className={styles.message} key={message.id}>
-            <header><div><strong>{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong><span>Message {index + 1}</span></div><time dateTime={message.created_at}>{formatDate(message.created_at)}</time></header>
-            <MessageContent body={message.body} contentType={message.body_content_type} />
-            {message.assets.length > 0 && <div className={styles.assets}>{message.assets.map((asset) => {
-              const resolution = assetResolutions[asset.id];
-              const unavailable = asset.unavailable || resolution?.available === false;
-              return <div className={styles.asset} key={asset.id}>
-                {!asset.purged_at && !unavailable && resolution?.preview_url && <>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
-                </>}
-                <div><strong>{asset.file_name}</strong><span>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</span></div>
-                {asset.purged_at ? <em>Attachment deleted by deployment owner</em> : unavailable ? <em>{resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable"}</em> : <>
-                  {asset.preview_path && !resolution?.preview_url && <button type="button" disabled={assetBusy === `preview:${asset.id}`} onClick={() => void resolveAsset(asset, "preview")}>{assetBusy === `preview:${asset.id}` ? "Loading preview…" : "Load preview"}</button>}
-                  {asset.download_path && <button type="button" disabled={assetBusy === `download:${asset.id}`} onClick={() => void resolveAsset(asset, "download")}>{assetBusy === `download:${asset.id}` ? "Signing…" : "Open attachment"}</button>}
-                </>}
-              </div>;
-            })}</div>}
-          </article>)}
-        </section>
-      </>}
-    </section>
-  </main>;
+  return (
+    <PanelPage>
+      <AppNav title="Owner thread" />
+      <PanelMain width="reading">
+        <div>
+          <Link className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "-ml-2")} href="/owner/content">
+            <ArrowLeftIcon data-icon="inline-start" />
+            Deployment content
+          </Link>
+        </div>
+
+        <Alert>
+          <ShieldAlertIcon />
+          <AlertTitle>Read-only owner inspection</AlertTitle>
+          <AlertDescription>
+            This thread may be private to another user. Reply, upload, and visibility controls are intentionally unavailable here.
+          </AlertDescription>
+        </Alert>
+
+        {loading ? <OwnerThreadSkeleton /> : null}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Could not load owner content</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {thread ? (
+          <>
+            <PanelHeader
+              eyebrow={`Owned by ${thread.owner.display_name}${thread.owner.disabled_at ? " · disabled" : ""}`}
+              title={thread.title}
+              description={
+                <span className="flex flex-col gap-2">
+                  <span>{thread.owner.email} · Updated {formatDate(thread.updated_at)}</span>
+                  <MonoValue>{thread.id}</MonoValue>
+                  <span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span>
+                </span>
+              }
+              actions={
+                <>
+                  {thread.visibility_summary.private ? <Badge variant="outline">Private</Badge> : null}
+                  {thread.visibility.shared_teams.map((team) => <Badge variant="outline" key={team.id}>{team.name}</Badge>)}
+                  {thread.visibility_summary.public ? <Badge>Public</Badge> : null}
+                </>
+              }
+              aside={
+                <MetricStrip
+                  items={[
+                    { label: "Messages", value: thread.messages.length },
+                    { label: "Created", value: formatDate(thread.created_at) }
+                  ]}
+                />
+              }
+            />
+
+            <section className="grid gap-4" aria-label="Thread messages">
+              {thread.messages.length === 0 ? (
+                <Empty className="border py-16">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon"><FileWarningIcon /></EmptyMedia>
+                    <EmptyTitle>No messages</EmptyTitle>
+                    <EmptyDescription>This thread exists but has no message content.</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : null}
+
+              {thread.messages.map((message, index) => (
+                <Card key={message.id}>
+                  <CardHeader className="border-b">
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="font-mono text-[0.65rem] tracking-[0.12em] text-muted-foreground uppercase">Message {index + 1}</span>
+                      <h2 className="font-heading text-sm font-semibold">
+                        {attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}
+                      </h2>
+                      <MonoValue>{message.id}</MonoValue>
+                    </div>
+                    <CardAction>
+                      <time className="text-xs text-muted-foreground" dateTime={message.created_at}>
+                        {formatDate(message.created_at)}
+                      </time>
+                    </CardAction>
+                  </CardHeader>
+                  <CardContent className="grid gap-5">
+                    <MessageContent body={message.body} contentType={message.body_content_type} />
+                    {message.assets.length > 0 ? (
+                      <div className="grid gap-4">
+                        <Separator />
+                        <span className="font-mono text-[0.65rem] tracking-[0.12em] text-muted-foreground uppercase">Attachments</span>
+                        {message.assets.map((asset) => {
+                          const resolution = assetResolutions[asset.id];
+                          const unavailable = asset.unavailable || resolution?.available === false;
+                          return (
+                            <div className="grid gap-3 border p-3" key={asset.id}>
+                              {!asset.purged_at && !unavailable && resolution?.preview_url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img className="max-h-[32rem] w-full object-contain" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
+                              ) : null}
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <span className="min-w-0">
+                                  <strong className="block truncate text-xs">{asset.file_name}</strong>
+                                  <span className="text-xs text-muted-foreground">{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</span>
+                                </span>
+                                {asset.purged_at ? (
+                                  <Badge variant="destructive">Deleted by owner</Badge>
+                                ) : unavailable ? (
+                                  <Badge variant="destructive">{resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable"}</Badge>
+                                ) : (
+                                  <span className="flex shrink-0 flex-wrap gap-2">
+                                    {asset.preview_path && !resolution?.preview_url ? (
+                                      <Button variant="outline" type="button" disabled={assetBusy === `preview:${asset.id}`} onClick={() => void resolveAsset(asset, "preview")}>
+                                        <EyeIcon data-icon="inline-start" />
+                                        {assetBusy === `preview:${asset.id}` ? "Loading" : "Preview"}
+                                      </Button>
+                                    ) : null}
+                                    {asset.download_path ? (
+                                      <Button variant="outline" type="button" disabled={assetBusy === `download:${asset.id}`} onClick={() => void resolveAsset(asset, "download")}>
+                                        <DownloadIcon data-icon="inline-start" />
+                                        {assetBusy === `download:${asset.id}` ? "Signing" : "Open"}
+                                      </Button>
+                                    ) : null}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              ))}
+            </section>
+          </>
+        ) : null}
+      </PanelMain>
+    </PanelPage>
+  );
+}
+
+function OwnerThreadSkeleton() {
+  return (
+    <div className="grid gap-6" aria-label="Loading owner content" aria-busy="true">
+      <div className="grid gap-3 border-b pb-8">
+        <Skeleton className="h-3 w-40" />
+        <Skeleton className="h-10 w-3/4" />
+        <Skeleton className="h-3 w-1/2" />
+      </div>
+      {Array.from({ length: 2 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader className="border-b"><Skeleton className="h-5 w-48" /></CardHeader>
+          <CardContent className="grid gap-3">
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-5/6" />
+            <Skeleton className="h-3 w-2/3" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
 }

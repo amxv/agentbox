@@ -14,7 +14,9 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { CopyButton } from "./copy-button";
+import { Badge } from "@/components/ui/badge";
+import { CopyButton } from "../../components/copy-button";
+import { cn } from "@/lib/utils";
 import { MermaidDiagram } from "./mermaid-diagram";
 
 let languagesRegistered = false;
@@ -84,12 +86,17 @@ function CodeBlock({ className, children, node, ...props }: CodeProps) {
   const isBlock = Boolean(language) || node?.position?.start?.line !== node?.position?.end?.line;
 
   if (!isBlock) {
-    return <code className="markdown-inline-code" {...props}>{children}</code>;
+    return (
+      <code
+        className="rounded-none border bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground"
+        {...props}
+      >
+        {children}
+      </code>
+    );
   }
 
-  if (language === "mermaid") {
-    return <MermaidDiagram chart={code} />;
-  }
+  if (language === "mermaid") return <MermaidDiagram chart={code} />;
 
   registerLanguages();
   const supported = language && hljs.getLanguage(language);
@@ -97,14 +104,17 @@ function CodeBlock({ className, children, node, ...props }: CodeProps) {
   const label = language ?? "code";
 
   return (
-    <div className="code-card">
-      <div className="message-toolbar">
-        <span className="format-badge">{label}</span>
+    <div className="my-4 min-w-0 overflow-hidden border bg-muted/30">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+        <Badge variant="secondary">{label}</Badge>
         <CopyButton value={code} label="Copy code" />
       </div>
-      <pre className="markdown-code-block">
+      <pre className="min-w-0 overflow-x-auto p-4 font-mono text-xs/relaxed text-foreground">
         {highlighted ? (
-          <code className={`hljs language-${language}`} dangerouslySetInnerHTML={{ __html: highlighted }} />
+          <code
+            className={cn("hljs", language ? `language-${language}` : undefined)}
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
         ) : (
           <code>{code}</code>
         )}
@@ -113,23 +123,41 @@ function CodeBlock({ className, children, node, ...props }: CodeProps) {
   );
 }
 
-function Table(props: TableProps) {
+function MarkdownTable({ className, ...props }: TableProps) {
   return (
-    <div className="markdown-table-scroll">
-      <table {...props} />
+    <div className="my-4 min-w-0 overflow-x-auto border">
+      <table className={cn("w-full min-w-[32rem] border-collapse text-xs", className)} {...props} />
     </div>
   );
 }
 
 export function MarkdownMessage({ body }: { body: string }) {
   return (
-    <div className="markdown-body">
+    <div
+      className={cn(
+        "min-w-0 text-sm/relaxed text-foreground",
+        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "[&_p]:my-4 [&_p]:text-pretty",
+        "[&_h1]:mt-8 [&_h1]:mb-4 [&_h1]:font-heading [&_h1]:text-3xl [&_h1]:font-semibold [&_h1]:tracking-[-0.04em]",
+        "[&_h2]:mt-8 [&_h2]:mb-3 [&_h2]:border-b [&_h2]:pb-2 [&_h2]:font-heading [&_h2]:text-2xl [&_h2]:font-semibold [&_h2]:tracking-[-0.035em]",
+        "[&_h3]:mt-6 [&_h3]:mb-3 [&_h3]:font-heading [&_h3]:text-xl [&_h3]:font-semibold [&_h3]:tracking-[-0.025em]",
+        "[&_h4]:mt-5 [&_h4]:mb-2 [&_h4]:font-heading [&_h4]:text-base [&_h4]:font-semibold",
+        "[&_ul]:my-4 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-4 [&_ol]:list-decimal [&_ol]:pl-6",
+        "[&_li]:my-1 [&_li]:pl-1 [&_li>ul]:my-1 [&_li>ol]:my-1",
+        "[&_blockquote]:my-5 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground",
+        "[&_a]:font-medium [&_a]:underline [&_a]:underline-offset-4 [&_a:hover]:text-muted-foreground",
+        "[&_hr]:my-8 [&_hr]:border-0 [&_hr]:border-t",
+        "[&_thead]:border-b [&_th]:bg-muted/50 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium",
+        "[&_td]:border-t [&_td]:px-3 [&_td]:py-2 [&_td]:align-top",
+        "[&_img]:my-5 [&_img]:max-w-full [&_img]:border"
+      )}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
         components={{
           code: CodeBlock,
-          table: Table
+          table: MarkdownTable
         }}
       >
         {body}

@@ -1,13 +1,24 @@
 "use client";
 
+import { ArrowUpRightIcon, InboxIcon, PlusIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { MessageComposer } from "../components/message-composer";
 import { AuthContext, fetchSession } from "../components/session";
 import { AppNav } from "../components/app-nav";
 import { createDashboardThread, postDashboardMessage } from "../components/agentbox-write";
 import { attributionLabel } from "../components/attribution";
+import { MetricStrip, MonoValue, PanelHeader, PanelMain, PanelPage, SectionIntro } from "../components/panel-shell";
 
 type Thread = {
   id: string;
@@ -171,7 +182,6 @@ export function InboxView() {
     }, 0);
   }, [threads]);
 
-
   async function createThreadOnly() {
     const title = newThreadTitle.trim();
     if (!title || creatingEmpty) return;
@@ -200,153 +210,200 @@ export function InboxView() {
   }
 
   return (
-    <div className="dashboard-page">
-      <AppNav title="Thread dashboard" auth={auth} />
+    <PanelPage>
+      <AppNav title="Inbox" auth={auth} />
+      <PanelMain>
+        <PanelHeader
+          eyebrow="Unified inbox"
+          title="Threads that belong to you."
+          description="Private work you own and every thread shared with one of your teams, in one quiet, searchable-by-context queue."
+          actions={
+            <Button type="button" onClick={() => setShowCreateComposer((value) => !value)}>
+              {showCreateComposer ? <XIcon data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+              {showCreateComposer ? "Close composer" : "Create thread"}
+            </Button>
+          }
+          aside={
+            <MetricStrip
+              items={[
+                { label: "Loaded", value: threads.length, detail: "threads in this filter" },
+                {
+                  label: "Latest activity",
+                  value: latestUpdatedAt ? formatDate(new Date(latestUpdatedAt).toISOString()) : "None",
+                  detail: auth ? attributionLabel(auth.user_display_name, auth.actor_name) : "Resolving session"
+                }
+              ]}
+            />
+          }
+        />
 
-      <main className="dashboard-main shell">
-        <section className="dashboard-header">
-          <div className="dashboard-header__row">
-            <div>
-              <p className="section-label">Unified inbox</p>
-              <h1 className="dashboard-title">Inbox</h1>
-              <p className="dashboard-copy">Private threads you own and every thread currently shared with one of your teams.</p>
-            </div>
-            {auth && (
-              <div className="card card--compact">
-                <p className="stat-label">Current filter</p>
-                <h2 className="card-title">{threads.length}</h2>
-                <p className="copy">{latestUpdatedAt ? `Last updated ${formatDate(new Date(latestUpdatedAt).toISOString())}` : "No activity yet."}</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <div className="dashboard-stack">
-          <div className="composer-toggle-row">
-            <button className="button button--solid" type="button" onClick={() => setShowCreateComposer((value) => !value)}>
-              {showCreateComposer ? "Close" : "+ Create Thread"}
-            </button>
-          </div>
-
-          {showCreateComposer && (
-            <section className="composer-shell" aria-label="Create thread">
-              <div className="composer-title-row">
-                <input
-                  className="form-input"
-                  value={newThreadTitle}
-                  onChange={(event) => setNewThreadTitle(event.target.value)}
-                  placeholder="New thread title"
-                  type="text"
+        {showCreateComposer ? (
+          <section className="grid gap-4" aria-label="Create thread">
+            <Card>
+              <CardHeader className="border-b">
+                <SectionIntro
+                  className="border-0 px-0 pb-0"
+                  eyebrow="New private thread"
+                  title="Name the work before the first message."
+                  description="New threads begin private. You can share them with a team or publish a read-only link from the thread later."
                 />
-                <button className="button button--ghost" disabled={creatingEmpty || !newThreadTitle.trim()} type="button" onClick={() => void createThreadOnly()}>
-                  {creatingEmpty ? "Creating..." : "Create empty"}
-                </button>
-              </div>
-              <MessageComposer
-                canSubmit={Boolean(newThreadTitle.trim())}
-                label="New thread"
-                placeholder="Add the first message. Markdown is detected automatically."
-                submitLabel="Create and post"
-                onSubmit={createThreadWithMessage}
-              />
-              {createError && (
-                <div className="error-card">
-                  <strong>Could not create thread.</strong>
-                  <span>{createError}</span>
-                </div>
-              )}
-            </section>
-          )}
-
-          <section className="inbox-filter-shell" aria-label="Inbox filters">
-            <div className="inbox-filter-heading">
-              <div>
-                <span className="stat-label">Visibility</span>
-                <strong>Filter accessible threads</strong>
-              </div>
-              <span className="thread-meta">Filtering happens on the server.</span>
-            </div>
-            <div className="inbox-filter-list">
-              {([
-                ["all", "All"],
-                ["private", "Private"],
-                ["shared", "Shared with me"],
-                ["public", "Public"]
-              ] as const).map(([value, label]) => (
-                <button
-                  className={activeFilter === value ? "inbox-filter inbox-filter--active" : "inbox-filter"}
-                  key={value}
-                  type="button"
-                  aria-pressed={activeFilter === value}
-                  onClick={() => selectFilter(value)}
-                >
-                  {label}
-                </button>
-              ))}
-              {teams.map((team) => {
-                const value = `team:${team.id}` as InboxFilter;
-                return (
-                  <button
-                    className={activeFilter === value ? "inbox-filter inbox-filter--active" : "inbox-filter"}
-                    key={team.id}
-                    type="button"
-                    aria-pressed={activeFilter === value}
-                    onClick={() => selectFilter(value)}
-                  >
-                    {team.name}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="thread-list" aria-label="Agentbox threads">
-            {loading && (
-              <div className="skeleton-list" aria-label="Loading threads" aria-busy="true">
-                {Array.from({ length: 4 }).map((_, index) => (
-                  <div className="skeleton-thread-card" aria-hidden="true" key={index}>
-                    <div className="skeleton-card-meta">
-                      <span className="skeleton-line skeleton-line--medium" />
-                      <span className="skeleton-line skeleton-line--short" />
+              </CardHeader>
+              <CardContent>
+                <FieldGroup>
+                  <Field orientation="responsive">
+                    <FieldLabel htmlFor="new-thread-title">Thread title</FieldLabel>
+                    <div className="flex min-w-0 flex-1 gap-2">
+                      <Input
+                        id="new-thread-title"
+                        value={newThreadTitle}
+                        onChange={(event) => setNewThreadTitle(event.target.value)}
+                        placeholder="A precise title for the handoff"
+                        type="text"
+                      />
+                      <Button
+                        variant="outline"
+                        disabled={creatingEmpty || !newThreadTitle.trim()}
+                        type="button"
+                        onClick={() => void createThreadOnly()}
+                      >
+                        {creatingEmpty ? "Creating" : "Create empty"}
+                      </Button>
                     </div>
-                    <span className="skeleton-line skeleton-line--long" />
-                    <span className="skeleton-line skeleton-line--short" />
-                  </div>
-                ))}
-              </div>
-            )}
-            {error && (
-              <div className="error-card">
-                <strong>Could not load inbox.</strong>
-                <span>{error}</span>
-              </div>
-            )}
-            {!loading && !error && threads.length === 0 && <p className="empty-state">No threads match this filter.</p>}
-            {!loading && !error && threads.map((thread) => (
-              <Link key={thread.id} href={`/threads/${thread.id}`} className="thread-card">
-                <div className="thread-meta-row">
-                  <span className="thread-meta mono">{thread.id}</span>
-                  <span className="thread-meta">Updated {formatDate(thread.updated_at)}</span>
-                </div>
-                <span className="thread-title">{thread.title}</span>
-                <div className="thread-card__footer">
-                  <span className="thread-meta">Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span>
-                  <span className="visibility-badge-list">
-                    {visibilityLabels(thread).map((label, index) => <span className="visibility-badge" key={`${label}-${index}`}>{label}</span>)}
-                  </span>
-                </div>
-              </Link>
-            ))}
-            {!loading && !error && threadPage.next_cursor && (
-              <div className="composer-toggle-row">
-                <button className="button button--ghost" disabled={loadingMore} type="button" onClick={() => void loadMoreThreads()}>
-                  {loadingMore ? "Loading…" : "Load more threads"}
-                </button>
-              </div>
-            )}
+                    <FieldDescription className="sr-only">A title is required before posting the first message.</FieldDescription>
+                  </Field>
+                </FieldGroup>
+              </CardContent>
+            </Card>
+            <MessageComposer
+              canSubmit={Boolean(newThreadTitle.trim())}
+              label="First message"
+              placeholder="Add the context another agent needs. Markdown is detected automatically."
+              submitLabel="Create and post"
+              onSubmit={createThreadWithMessage}
+            />
+            {createError ? (
+              <Alert variant="destructive">
+                <AlertTitle>Could not create thread</AlertTitle>
+                <AlertDescription>{createError}</AlertDescription>
+              </Alert>
+            ) : null}
           </section>
-        </div>
-      </main>
+        ) : null}
+
+        <Card>
+          <CardHeader className="border-b">
+            <SectionIntro
+              className="border-0 px-0 pb-0"
+              eyebrow="Visibility"
+              title="Filter accessible threads"
+              description="Filtering happens on the server, including team membership and public-link state."
+            />
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto pb-1">
+              <ToggleGroup
+                aria-label="Inbox filters"
+                value={[activeFilter]}
+                variant="outline"
+                spacing={0}
+                onValueChange={(value) => {
+                  const next = value[0] as InboxFilter | undefined;
+                  if (next) selectFilter(next);
+                }}
+              >
+                {([
+                  ["all", "All"],
+                  ["private", "Private"],
+                  ["shared", "Shared with me"],
+                  ["public", "Public"]
+                ] as const).map(([value, label]) => (
+                  <ToggleGroupItem value={value} key={value}>{label}</ToggleGroupItem>
+                ))}
+                {teams.map((team) => (
+                  <ToggleGroupItem value={`team:${team.id}`} key={team.id}>{team.name}</ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+          </CardContent>
+        </Card>
+
+        <section className="grid gap-3" aria-label="Agentbox threads">
+          {loading ? <ThreadListSkeleton /> : null}
+          {error ? (
+            <Alert variant="destructive">
+              <AlertTitle>Could not load inbox</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+          {!loading && !error && threads.length === 0 ? (
+            <Empty className="border py-16">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><InboxIcon /></EmptyMedia>
+                <EmptyTitle>No threads match this filter</EmptyTitle>
+                <EmptyDescription>Choose another visibility filter or create a private thread.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : null}
+          {!loading && !error ? threads.map((thread) => (
+            <Link className="group block outline-none" key={thread.id} href={`/threads/${thread.id}`}>
+              <Card className="transition-transform group-hover:-translate-y-px group-focus-visible:ring-2 group-focus-visible:ring-ring">
+                <CardHeader className="border-b">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <MonoValue>{thread.id}</MonoValue>
+                      <span className="text-xs text-muted-foreground">Updated {formatDate(thread.updated_at)}</span>
+                    </div>
+                    <h2 className="font-heading text-lg font-semibold tracking-[-0.025em] text-balance sm:text-xl">
+                      {thread.title}
+                    </h2>
+                  </div>
+                  <CardAction>
+                    <ArrowUpRightIcon className="text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-xs/relaxed text-muted-foreground">
+                    Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}
+                  </span>
+                  <span className="flex flex-wrap gap-1.5">
+                    {visibilityLabels(thread).map((label, index) => (
+                      <Badge variant={label === "Public" ? "default" : "outline"} key={`${label}-${index}`}>{label}</Badge>
+                    ))}
+                  </span>
+                </CardContent>
+              </Card>
+            </Link>
+          )) : null}
+          {!loading && !error && threadPage.next_cursor ? (
+            <div className="flex justify-center pt-3">
+              <Button variant="outline" disabled={loadingMore} type="button" onClick={() => void loadMoreThreads()}>
+                {loadingMore ? "Loading" : "Load more threads"}
+              </Button>
+            </div>
+          ) : null}
+        </section>
+      </PanelMain>
+    </PanelPage>
+  );
+}
+
+function ThreadListSkeleton() {
+  return (
+    <div className="grid gap-3" aria-label="Loading threads" aria-busy="true">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader className="border-b">
+            <div className="flex flex-col gap-3">
+              <Skeleton className="h-3 w-48" />
+              <Skeleton className="h-6 w-3/5" />
+            </div>
+          </CardHeader>
+          <CardContent className="flex justify-between gap-4">
+            <Skeleton className="h-3 w-64" />
+            <Skeleton className="h-5 w-24" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

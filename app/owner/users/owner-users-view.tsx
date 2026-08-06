@@ -1,9 +1,96 @@
 "use client";
 
+import {
+  CheckIcon,
+  ClipboardIcon,
+  KeyRoundIcon,
+  LinkIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  UserPlusIcon,
+  UsersIcon,
+  XIcon
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput
+} from "@/components/ui/input-group";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AppNav } from "../../components/app-nav";
-import styles from "./owner-users.module.css";
+import {
+  MetricStrip,
+  MonoValue,
+  PanelHeader,
+  PanelMain,
+  PanelPage
+} from "../../components/panel-shell";
 
 type User = {
   id: string;
@@ -74,6 +161,22 @@ function invitationStatus(invitation: Invitation) {
   return "Active";
 }
 
+function formatDate(value?: string) {
+  if (!value) return "Never";
+  return new Date(value).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+}
+
+function initials(value: string) {
+  return value
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+}
+
 async function responseJSON(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -83,6 +186,12 @@ async function responseJSON(response: Response) {
 }
 
 const initialPage: PageInfo = { limit: 25, offset: 0, has_more: false };
+const invitationExpiryOptions = [
+  { label: "1 hour", value: "60" },
+  { label: "1 day", value: String(24 * 60) },
+  { label: "7 days", value: String(7 * 24 * 60) },
+  { label: "30 days", value: String(30 * 24 * 60) }
+];
 
 function mergeByID<T extends { id: string }>(current: T[], incoming: T[]) {
   const merged = new Map(current.map((item) => [item.id, item]));
@@ -114,6 +223,7 @@ export function OwnerUsersView() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [purgeTarget, setPurgeTarget] = useState<User | null>(null);
 
   const activeInvitations = useMemo(
     () => invitations.filter((invitation) => invitationStatus(invitation) === "Active").length,
@@ -316,7 +426,6 @@ export function OwnerUsersView() {
   }
 
   async function purgeAttachments(user: User) {
-    if (!window.confirm(`Permanently delete every attachment uploaded by ${user.display_name}? Thread and message tombstones will remain.`)) return;
     setBusy(`purge:${user.id}`);
     setError(null);
     setNotice(null);
@@ -328,6 +437,7 @@ export function OwnerUsersView() {
       }));
       const purge = data.purge as { purged: number; failed: number; remaining: number; complete: boolean };
       setNotice(`Purged ${purge.purged} attachment${purge.purged === 1 ? "" : "s"}. ${purge.failed} failed; ${purge.remaining} remain.${purge.complete ? " Purge complete." : " Run the purge again to continue or retry failures."}`);
+      setPurgeTarget(null);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -432,106 +542,614 @@ export function OwnerUsersView() {
   }
 
   return (
-    <div className={styles.page}>
+    <PanelPage>
       <AppNav title="Users & teams" />
-      <main className={styles.main}>
-        <section className={styles.hero}>
-          <div><p className={styles.eyebrow}>Deployment administration</p><h1>Users, teams, invitations.</h1><p>Manage deployment-wide identity without collapsing actor attribution. Teams overlap freely, while every thread remains private until it is explicitly shared.</p></div>
-          <div className={styles.metrics}><div><span>Loaded users</span><b>{users.length}</b></div><div><span>Loaded teams</span><b>{teams.length}</b></div><div><span>Loaded active credentials</span><b>{credentials.filter((credential) => !credential.revoked_at).length}</b></div><div><span>Loaded active invitations</span><b>{activeInvitations}</b></div></div>
-        </section>
+      <PanelMain>
+        <PanelHeader
+          eyebrow="Deployment administration"
+          title="Users, teams, and invitations."
+          description="Manage deployment-wide identity without collapsing actor attribution. Teams overlap freely, while every thread remains private until it is explicitly shared."
+          aside={
+            <MetricStrip
+              items={[
+                { label: "Loaded users", value: users.length },
+                { label: "Loaded teams", value: teams.length },
+                { label: "Active credentials", value: credentials.filter((credential) => !credential.revoked_at).length },
+                { label: "Active invitations", value: activeInvitations }
+              ]}
+            />
+          }
+        />
 
-        {error && <div className={styles.error}><strong>Owner action failed.</strong><span>{error}</span></div>}
-        {notice && <div className={styles.notice}><strong>Attachment purge updated.</strong><span>{notice}</span></div>}
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Owner action failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        {notice ? (
+          <Alert>
+            <ShieldCheckIcon />
+            <AlertTitle>Attachment purge updated</AlertTitle>
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
+        ) : null}
 
-        <section className={styles.invitePanel}>
-          <div><p className={styles.sectionLabel}>Invite a user</p><h2>Create a one-time signup link.</h2><p>Choose zero or more initial teams. The account, browser session, memberships, and invitation consumption commit together.</p></div>
-          <div className={styles.inviteControls}>
-            <label>Expires<select value={expiryMinutes} onChange={(event)=>setExpiryMinutes(Number(event.target.value))}><option value={60}>1 hour</option><option value={24*60}>1 day</option><option value={7*24*60}>7 days</option><option value={30*24*60}>30 days</option></select></label>
-            <button type="button" onClick={createInvitation} disabled={busy === "invite:create"}>{busy === "invite:create" ? "Creating…" : "Create invitation"}</button>
-          </div>
-          <div className={styles.teamPicker}>
-            <div><span>Initial teams</span><small>{selectedInvitationTeamIDs.length === 0 ? "No team access" : `${selectedInvitationTeamIDs.length} selected`}</small></div>
-            <div className={styles.teamOptions}>
-              {teams.length === 0 && <p>No teams yet. This invitation will create a zero-team user.</p>}
-              {teams.map((team) => <label className={styles.teamOption} key={team.id}><input type="checkbox" checked={selectedInvitationTeamIDs.includes(team.id)} onChange={()=>toggleInvitationTeam(team.id)}/><span><strong>{team.name}</strong><code>{team.slug}</code></span></label>)}
+        <Tabs defaultValue="users" className="gap-6">
+          <TabsList variant="line" className="w-full justify-start overflow-x-auto border-b">
+            <TabsTrigger value="users">
+              <UsersIcon data-icon="inline-start" />
+              Users
+            </TabsTrigger>
+            <TabsTrigger value="teams">
+              <UsersIcon data-icon="inline-start" />
+              Teams
+            </TabsTrigger>
+            <TabsTrigger value="invitations">
+              <LinkIcon data-icon="inline-start" />
+              Invitations
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="users" className="flex flex-col gap-6">
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Deployment users</CardTitle>
+                <CardDescription>
+                  Review account state, team membership, and every user-owned credential without losing attribution history.
+                </CardDescription>
+                <CardAction className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => void load()} disabled={loading}>
+                    {loading ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon data-icon="inline-start" />}
+                    Refresh
+                  </Button>
+                  {credentialsPage.next_cursor ? (
+                    <Button variant="outline" onClick={() => void loadMoreCredentials()} disabled={busy === "credentials:more"}>
+                      {busy === "credentials:more" ? <Spinner data-icon="inline-start" /> : <KeyRoundIcon data-icon="inline-start" />}
+                      Load credentials
+                    </Button>
+                  ) : null}
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {loading ? <UserListSkeleton /> : null}
+                {!loading && users.length === 0 ? (
+                  <Empty className="border py-14">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon"><UsersIcon /></EmptyMedia>
+                      <EmptyTitle>No users found</EmptyTitle>
+                      <EmptyDescription>Create an invitation to add the first non-owner account.</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : null}
+                {!loading ? users.map((user) => {
+                  const userTeams = userTeamsByUser[user.id];
+                  const userTeamsPage = userTeamPages[user.id];
+                  const userCredentials = credentialsByUser.get(user.id) ?? [];
+                  const activeUserCredentials = userCredentials.filter((credential) => !credential.revoked_at).length;
+                  return (
+                    <Card size="sm" key={user.id}>
+                      <CardHeader className="border-b">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <Avatar size="lg">
+                            <AvatarFallback>{initials(user.display_name)}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex min-w-0 flex-col gap-1">
+                            <CardTitle className="flex flex-wrap items-center gap-2">
+                              {user.display_name}
+                              {user.is_owner ? <Badge>Owner</Badge> : null}
+                              {user.disabled_at ? <Badge variant="destructive">Disabled</Badge> : <Badge variant="outline">Active</Badge>}
+                            </CardTitle>
+                            <CardDescription>{user.email}</CardDescription>
+                          </div>
+                        </div>
+                        <CardAction className="flex flex-wrap gap-2">
+                          {user.is_owner ? (
+                            <Badge variant="secondary">Protected</Badge>
+                          ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                disabled={busy === `user:${user.id}`}
+                                onClick={() => void setDisabled(user, !user.disabled_at)}
+                              >
+                                {busy === `user:${user.id}` ? <Spinner data-icon="inline-start" /> : null}
+                                {user.disabled_at ? "Enable" : "Disable"}
+                              </Button>
+                              {user.disabled_at ? (
+                                <Button variant="destructive" onClick={() => setPurgeTarget(user)} disabled={busy === `purge:${user.id}`}>
+                                  <Trash2Icon data-icon="inline-start" />
+                                  Purge attachments
+                                </Button>
+                              ) : null}
+                            </>
+                          )}
+                        </CardAction>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-5">
+                        <section className="flex flex-col gap-2" aria-label={`${user.display_name} teams`}>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Teams</span>
+                            {userTeams === undefined ? (
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                disabled={busy === `user:teams:${user.id}`}
+                                onClick={() => void loadUserTeams(user.id)}
+                              >
+                                {busy === `user:teams:${user.id}` ? <Spinner data-icon="inline-start" /> : null}
+                                View teams
+                              </Button>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {userTeams === undefined ? <Badge variant="outline">Not loaded</Badge> : null}
+                            {userTeams?.length === 0 ? <Badge variant="secondary">No teams</Badge> : null}
+                            {userTeams?.map((team) => <Badge variant="outline" key={team.id}>{team.name}</Badge>)}
+                            {userTeamsPage?.next_cursor ? (
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                disabled={busy === `user:teams:${user.id}`}
+                                onClick={() => void loadUserTeams(user.id, userTeamsPage.next_cursor)}
+                              >
+                                {busy === `user:teams:${user.id}` ? <Spinner data-icon="inline-start" /> : null}
+                                More teams
+                              </Button>
+                            ) : null}
+                          </div>
+                        </section>
+
+                        <Separator />
+
+                        <section className="flex flex-col gap-3" aria-label={`${user.display_name} credentials`}>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Credentials</span>
+                            <Badge variant="secondary">{activeUserCredentials} active</Badge>
+                          </div>
+                          {userCredentials.length === 0 ? (
+                            <Empty className="border py-8">
+                              <EmptyHeader>
+                                <EmptyMedia variant="icon"><KeyRoundIcon /></EmptyMedia>
+                                <EmptyTitle>No credentials created</EmptyTitle>
+                                <EmptyDescription>This user has no API, MCP, CLI, or Raycast credentials yet.</EmptyDescription>
+                              </EmptyHeader>
+                            </Empty>
+                          ) : (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Name</TableHead>
+                                  <TableHead>Purpose</TableHead>
+                                  <TableHead>Token</TableHead>
+                                  <TableHead>Last used</TableHead>
+                                  <TableHead className="text-right">Action</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {userCredentials.map((credential) => (
+                                  <TableRow key={credential.id}>
+                                    <TableCell className="whitespace-normal">
+                                      <div className="flex min-w-48 flex-col gap-1">
+                                        <span className="font-medium">{credential.name}</span>
+                                        <MonoValue>{credential.id}</MonoValue>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell><Badge variant="outline">{credential.purpose}</Badge></TableCell>
+                                    <TableCell><MonoValue>{credential.key_masked || `${credential.token_prefix}…`}</MonoValue></TableCell>
+                                    <TableCell>{formatDate(credential.last_used_at)}</TableCell>
+                                    <TableCell className="text-right">
+                                      {credential.revoked_at ? (
+                                        <Badge variant="destructive">Revoked</Badge>
+                                      ) : (
+                                        <Button
+                                          variant="outline"
+                                          size="xs"
+                                          disabled={busy === `credential:${credential.id}`}
+                                          onClick={() => void revokeCredential(credential)}
+                                        >
+                                          {busy === `credential:${credential.id}` ? <Spinner data-icon="inline-start" /> : null}
+                                          Revoke
+                                        </Button>
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          )}
+                        </section>
+                      </CardContent>
+                      <CardFooter className="flex flex-wrap justify-between gap-3">
+                        <MonoValue>{user.id}</MonoValue>
+                        <span className="text-xs text-muted-foreground">Created {formatDate(user.created_at)}</span>
+                      </CardFooter>
+                    </Card>
+                  );
+                }) : null}
+              </CardContent>
+              {usersPage.next_cursor ? (
+                <CardFooter>
+                  <Button variant="outline" disabled={busy === "users:more"} onClick={() => void loadMoreUsers()}>
+                    {busy === "users:more" ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                    Load more users
+                  </Button>
+                </CardFooter>
+              ) : null}
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="teams" className="flex flex-col gap-6">
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Create a team</CardTitle>
+                <CardDescription>Use a stable slug and a reader-friendly display name. Users may belong to any number of teams.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FieldGroup className="md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+                  <Field>
+                    <FieldLabel htmlFor="new-team-name">Name</FieldLabel>
+                    <Input id="new-team-name" value={newTeamName} onChange={(event) => setNewTeamName(event.target.value)} placeholder="Product Engineering" />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="new-team-slug">Slug</FieldLabel>
+                    <Input id="new-team-slug" value={newTeamSlug} onChange={(event) => setNewTeamSlug(event.target.value.toLowerCase())} placeholder="product-engineering" />
+                  </Field>
+                  <Button type="button" onClick={() => void createTeam()} disabled={busy === "team:create" || !newTeamName.trim() || !newTeamSlug.trim()}>
+                    {busy === "team:create" ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                    Create team
+                  </Button>
+                </FieldGroup>
+              </CardContent>
+            </Card>
+
+            {!loading && teams.length === 0 ? (
+              <Empty className="border py-16">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><UsersIcon /></EmptyMedia>
+                  <EmptyTitle>No teams yet</EmptyTitle>
+                  <EmptyDescription>Users can remain teamless indefinitely, or you can create the first shared workspace above.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
+
+            <section className="grid gap-4 xl:grid-cols-2" aria-label="Teams">
+              {loading ? Array.from({ length: 2 }).map((_, index) => <Skeleton className="h-96" key={index} />) : null}
+              {!loading ? teams.map((team) => {
+                const memberIDs = new Set(team.members.map((member) => member.id));
+                const availableUsers = users.filter((user) => !user.disabled_at && !memberIDs.has(user.id));
+                const memberOptions = availableUsers.map((user) => ({ label: user.display_name, value: user.id }));
+                const selectedUserID = memberDrafts[team.id] || memberOptions[0]?.value || "";
+                return (
+                  <Card key={team.id}>
+                    <CardHeader className="border-b">
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <CardTitle>{team.name}</CardTitle>
+                        <CardDescription>{team.slug}</CardDescription>
+                      </div>
+                      <CardAction><Badge variant="secondary">{team.member_count} {team.member_count === 1 ? "member" : "members"}</Badge></CardAction>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-5">
+                      <Field>
+                        <FieldLabel htmlFor={`team-name-${team.id}`}>Display name</FieldLabel>
+                        <InputGroup>
+                          <InputGroupInput
+                            id={`team-name-${team.id}`}
+                            value={teamNameDrafts[team.id] ?? team.name}
+                            onChange={(event) => setTeamNameDrafts((current) => ({ ...current, [team.id]: event.target.value }))}
+                          />
+                          <InputGroupAddon align="inline-end">
+                            <InputGroupButton
+                              variant="outline"
+                              size="sm"
+                              disabled={busy === `team:rename:${team.id}` || !(teamNameDrafts[team.id] ?? "").trim() || teamNameDrafts[team.id] === team.name}
+                              onClick={() => void renameTeam(team)}
+                            >
+                              {busy === `team:rename:${team.id}` ? <Spinner data-icon="inline-start" /> : <CheckIcon data-icon="inline-start" />}
+                              Save name
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        </InputGroup>
+                      </Field>
+
+                      <FieldGroup className="sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                        <Field data-disabled={availableUsers.length === 0}>
+                          <FieldLabel>Add a member</FieldLabel>
+                          <Select
+                            items={memberOptions}
+                            value={selectedUserID || null}
+                            disabled={availableUsers.length === 0}
+                            onValueChange={(value) => {
+                              if (value) setMemberDrafts((current) => ({ ...current, [team.id]: value }));
+                            }}
+                          >
+                            <SelectTrigger className="w-full"><SelectValue placeholder={availableUsers.length === 0 ? "Everyone is a member" : "Choose a user"} /></SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {memberOptions.map((option) => <SelectItem value={option.value} key={option.value}>{option.label}</SelectItem>)}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Button type="button" onClick={() => void addMember(team, selectedUserID)} disabled={!selectedUserID || busy === `team:add:${team.id}`}>
+                          {busy === `team:add:${team.id}` ? <Spinner data-icon="inline-start" /> : <UserPlusIcon data-icon="inline-start" />}
+                          Add
+                        </Button>
+                      </FieldGroup>
+
+                      <section className="flex flex-col gap-3" aria-label={`${team.name} members`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Members</span>
+                          <Badge variant="outline">{team.members.length} loaded</Badge>
+                        </div>
+                        {team.members.length === 0 ? (
+                          <Empty className="border py-8">
+                            <EmptyHeader>
+                              <EmptyMedia variant="icon"><UsersIcon /></EmptyMedia>
+                              <EmptyTitle>No members</EmptyTitle>
+                              <EmptyDescription>Add any active deployment user to this team.</EmptyDescription>
+                            </EmptyHeader>
+                          </Empty>
+                        ) : (
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>User</TableHead>
+                                <TableHead>Email</TableHead>
+                                <TableHead className="text-right">Remove</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {team.members.map((member) => (
+                                <TableRow key={member.id}>
+                                  <TableCell className="font-medium">{member.display_name}</TableCell>
+                                  <TableCell>{member.email}</TableCell>
+                                  <TableCell className="text-right">
+                                    <Button
+                                      type="button"
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      aria-label={`Remove ${member.display_name} from ${team.name}`}
+                                      disabled={busy === `team:remove:${team.id}:${member.id}`}
+                                      onClick={() => void removeMember(team.id, member.id)}
+                                    >
+                                      {busy === `team:remove:${team.id}:${member.id}` ? <Spinner /> : <XIcon />}
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        )}
+                        {team.members_page.next_cursor ? (
+                          <Button variant="outline" disabled={busy === `team:members:${team.id}`} onClick={() => void loadMoreTeamMembers(team)}>
+                            {busy === `team:members:${team.id}` ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                            Load more members ({team.members.length}/{team.member_count})
+                          </Button>
+                        ) : null}
+                      </section>
+                    </CardContent>
+                    <CardFooter className="flex flex-wrap justify-between gap-3">
+                      <MonoValue>{team.id}</MonoValue>
+                      <span className="text-xs text-muted-foreground">Updated {formatDate(team.updated_at)}</span>
+                    </CardFooter>
+                  </Card>
+                );
+              }) : null}
+            </section>
+
+            {teamsPage.next_cursor ? (
+              <div className="flex justify-center">
+                <Button variant="outline" disabled={busy === "teams:more"} onClick={() => void loadMoreTeams()}>
+                  {busy === "teams:more" ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                  Load more teams
+                </Button>
+              </div>
+            ) : null}
+          </TabsContent>
+
+          <TabsContent value="invitations" className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Create a one-time signup link</CardTitle>
+                <CardDescription>
+                  Choose zero or more initial teams. The account, browser session, memberships, and invitation consumption commit together.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-5">
+                <Field>
+                  <FieldLabel>Expires</FieldLabel>
+                  <Select
+                    items={invitationExpiryOptions}
+                    value={String(expiryMinutes)}
+                    onValueChange={(value) => { if (value) setExpiryMinutes(Number(value)); }}
+                  >
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {invitationExpiryOptions.map((option) => <SelectItem value={option.value} key={option.value}>{option.label}</SelectItem>)}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <FieldSet>
+                  <FieldLegend>Initial teams</FieldLegend>
+                  <FieldDescription>
+                    {selectedInvitationTeamIDs.length === 0 ? "No team access will be granted." : `${selectedInvitationTeamIDs.length} team${selectedInvitationTeamIDs.length === 1 ? "" : "s"} selected.`}
+                  </FieldDescription>
+                  {teams.length === 0 ? (
+                    <Empty className="border py-8">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon"><UsersIcon /></EmptyMedia>
+                        <EmptyTitle>No teams yet</EmptyTitle>
+                        <EmptyDescription>This invitation will create a user with no initial team memberships.</EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : (
+                    <FieldGroup className="sm:grid sm:grid-cols-2">
+                      {teams.map((team) => {
+                        const checkboxID = `invitation-team-${team.id}`;
+                        return (
+                          <Field orientation="horizontal" className="border p-3" key={team.id}>
+                            <Checkbox
+                              id={checkboxID}
+                              checked={selectedInvitationTeamIDs.includes(team.id)}
+                              onCheckedChange={() => toggleInvitationTeam(team.id)}
+                            />
+                            <FieldContent>
+                              <FieldLabel htmlFor={checkboxID}>{team.name}</FieldLabel>
+                              <FieldDescription>{team.slug}</FieldDescription>
+                            </FieldContent>
+                          </Field>
+                        );
+                      })}
+                    </FieldGroup>
+                  )}
+                </FieldSet>
+
+                <Button type="button" onClick={() => void createInvitation()} disabled={busy === "invite:create"}>
+                  {busy === "invite:create" ? <Spinner data-icon="inline-start" /> : <UserPlusIcon data-icon="inline-start" />}
+                  Create invitation
+                </Button>
+
+                {created ? (
+                  <Alert>
+                    <LinkIcon />
+                    <AlertTitle>One-time signup URL</AlertTitle>
+                    <AlertDescription className="flex flex-col gap-3">
+                      <InputGroup>
+                        <InputGroupInput readOnly value={created.signup_url} aria-label="One-time signup URL" />
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton size="icon-sm" aria-label="Copy signup URL" onClick={() => void copySignupURL()}>
+                            {copied ? <CheckIcon /> : <ClipboardIcon />}
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      </InputGroup>
+                      <span className="flex flex-wrap gap-1.5">
+                        {created.invitation.teams.length === 0 ? <Badge variant="secondary">No initial teams</Badge> : created.invitation.teams.map((team) => <Badge variant="outline" key={team.id}>{team.name}</Badge>)}
+                      </span>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Invitation history</CardTitle>
+                <CardDescription>Review active, consumed, revoked, and expired links without redisplaying their secrets.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!loading && invitations.length === 0 ? (
+                  <Empty className="border py-14">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon"><LinkIcon /></EmptyMedia>
+                      <EmptyTitle>No invitations yet</EmptyTitle>
+                      <EmptyDescription>Create the first one-time signup link from this page.</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Expires</TableHead>
+                        <TableHead>Initial teams</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {invitations.map((invitation) => {
+                        const status = invitationStatus(invitation);
+                        return (
+                          <TableRow key={invitation.id}>
+                            <TableCell className="whitespace-normal">
+                              <div className="flex min-w-40 flex-col gap-1">
+                                <Badge variant={status === "Active" ? "default" : status === "Revoked" ? "destructive" : "outline"}>{status}</Badge>
+                                <MonoValue>{invitation.id}</MonoValue>
+                              </div>
+                            </TableCell>
+                            <TableCell>{formatDate(invitation.expires_at)}</TableCell>
+                            <TableCell>
+                              <div className="flex min-w-44 flex-wrap gap-1.5">
+                                {invitation.teams.length === 0 ? <Badge variant="secondary">None</Badge> : invitation.teams.map((team) => <Badge variant="outline" key={team.id}>{team.name}</Badge>)}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {status === "Active" ? (
+                                <Button variant="outline" size="xs" disabled={busy === `invite:${invitation.id}`} onClick={() => void revokeInvitation(invitation.id)}>
+                                  {busy === `invite:${invitation.id}` ? <Spinner data-icon="inline-start" /> : null}
+                                  Revoke
+                                </Button>
+                              ) : null}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+              {invitationsPage.next_cursor ? (
+                <CardFooter>
+                  <Button variant="outline" disabled={busy === "invitations:more"} onClick={() => void loadMoreInvitations()}>
+                    {busy === "invitations:more" ? <Spinner data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
+                    Load more invitations
+                  </Button>
+                </CardFooter>
+              ) : null}
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </PanelMain>
+
+      <AlertDialog open={Boolean(purgeTarget)} onOpenChange={(open) => { if (!open) setPurgeTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia><Trash2Icon /></AlertDialogMedia>
+            <AlertDialogTitle>Permanently purge attachments?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Every attachment uploaded by {purgeTarget?.display_name ?? "this user"} will be deleted. Thread and message tombstones remain, and this action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(purgeTarget && busy === `purge:${purgeTarget.id}`)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={!purgeTarget || busy === `purge:${purgeTarget.id}`}
+              onClick={() => { if (purgeTarget) void purgeAttachments(purgeTarget); }}
+            >
+              {purgeTarget && busy === `purge:${purgeTarget.id}` ? <Spinner data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
+              Purge attachments
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </PanelPage>
+  );
+}
+
+function UserListSkeleton() {
+  return (
+    <div className="flex flex-col gap-3" aria-label="Loading users" aria-busy="true">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <Card size="sm" key={index}>
+          <CardHeader className="border-b">
+            <div className="flex items-center gap-3">
+              <Skeleton className="size-10 rounded-full" />
+              <div className="flex flex-col gap-2">
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-3 w-52" />
+              </div>
             </div>
-          </div>
-          {created && <div className={styles.secret}><div><span>One-time signup URL</span><code>{created.signup_url}</code>{created.invitation.teams.length > 0 && <div className={styles.tags}>{created.invitation.teams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}</div>}</div><button type="button" onClick={copySignupURL}>{copied ? "Copied" : "Copy"}</button></div>}
-        </section>
-
-        <section className={styles.teamPanel}>
-          <div className={styles.teamPanelHeader}>
-            <div><p className={styles.sectionLabel}>Teams</p><h2>Overlapping groups, stable identities.</h2><p>A user may join any number of teams. Renaming changes only the display name; the stable ID and slug remain intact.</p></div>
-            <div className={styles.teamCreate}>
-              <label>Name<input value={newTeamName} onChange={(event)=>setNewTeamName(event.target.value)} placeholder="Product Engineering"/></label>
-              <label>Slug<input value={newTeamSlug} onChange={(event)=>setNewTeamSlug(event.target.value.toLowerCase())} placeholder="product-engineering"/></label>
-              <button type="button" onClick={createTeam} disabled={busy === "team:create" || !newTeamName.trim() || !newTeamSlug.trim()}>{busy === "team:create" ? "Creating…" : "Create team"}</button>
-            </div>
-          </div>
-          <div className={styles.teamCards}>
-            {!loading && teams.length === 0 && <p className={styles.empty}>No teams yet. Users can remain teamless indefinitely.</p>}
-            {teams.map((team) => {
-              const memberIDs = new Set(team.members.map((member) => member.id));
-              const availableUsers = users.filter((user) => !user.disabled_at && !memberIDs.has(user.id));
-              const selectedUserID = memberDrafts[team.id] || availableUsers[0]?.id || "";
-              return <article className={styles.teamCard} key={team.id}>
-                <div className={styles.teamCardTop}><div><code>{team.slug}</code><span>{team.id}</span></div><strong>{team.member_count} {team.member_count === 1 ? "member" : "members"}</strong></div>
-                <div className={styles.teamNameEditor}><input aria-label={`Rename ${team.name}`} value={teamNameDrafts[team.id] ?? team.name} onChange={(event)=>setTeamNameDrafts((current)=>({...current,[team.id]:event.target.value}))}/><button type="button" onClick={()=>renameTeam(team)} disabled={busy === `team:rename:${team.id}` || !(teamNameDrafts[team.id] ?? "").trim() || teamNameDrafts[team.id] === team.name}>{busy === `team:rename:${team.id}` ? "Saving…" : "Save name"}</button></div>
-                <div className={styles.memberList}>
-                  {team.members.length === 0 && <p>No members.</p>}
-                  {team.members.map((member)=><div className={styles.memberChip} key={member.id}><span><strong>{member.display_name}</strong><small>{member.email}</small></span><button type="button" aria-label={`Remove ${member.display_name} from ${team.name}`} disabled={busy === `team:remove:${team.id}:${member.id}`} onClick={()=>removeMember(team.id,member.id)}>×</button></div>)}
-                  {team.members_page.next_cursor && <button type="button" className={styles.inlinePager} disabled={busy === `team:members:${team.id}`} onClick={()=>void loadMoreTeamMembers(team)}>{busy === `team:members:${team.id}` ? "Loading…" : `Load more members (${team.members.length}/${team.member_count})`}</button>}
-                </div>
-                <div className={styles.memberAdder}>
-                  <select aria-label={`Add a member to ${team.name}`} value={selectedUserID} onChange={(event)=>setMemberDrafts((current)=>({...current,[team.id]:event.target.value}))} disabled={availableUsers.length === 0}>{availableUsers.length === 0 ? <option value="">Everyone is a member</option> : availableUsers.map((user)=><option key={user.id} value={user.id}>{user.display_name}{user.disabled_at ? " · disabled" : ""}</option>)}</select>
-                  <button type="button" onClick={()=>addMember(team,selectedUserID)} disabled={!selectedUserID || busy === `team:add:${team.id}`}>{busy === `team:add:${team.id}` ? "Adding…" : "Add"}</button>
-                </div>
-              </article>;
-            })}
-          </div>
-          {teamsPage.next_cursor && <div className={styles.pager}><button type="button" className={styles.ghost} disabled={busy === "teams:more"} onClick={()=>void loadMoreTeams()}>{busy === "teams:more" ? "Loading…" : "Load more teams"}</button></div>}
-        </section>
-
-        <section className={styles.grid}>
-          <div className={styles.panel}>
-            <div className={styles.panelHeading}><div><p className={styles.sectionLabel}>Accounts</p><h2>Deployment users</h2></div><div className={styles.headingActions}><button className={styles.ghost} type="button" onClick={()=>void load()} disabled={loading}>Refresh</button>{credentialsPage.next_cursor && <button className={styles.ghost} type="button" onClick={()=>void loadMoreCredentials()} disabled={busy === "credentials:more"}>{busy === "credentials:more" ? "Loading…" : "Load more credentials"}</button>}</div></div>
-            <div className={styles.rows}>
-              {loading && <p className={styles.empty}>Loading users…</p>}
-              {!loading && users.map((user) => {
-                const userTeams = userTeamsByUser[user.id];
-                const userTeamsPage = userTeamPages[user.id];
-                const userCredentials = credentialsByUser.get(user.id) ?? [];
-                return <article className={styles.userRow} key={user.id}>
-                  <div className={styles.avatar}>{user.display_name.slice(0, 1).toUpperCase()}</div>
-                  <div className={styles.identity}><div><strong>{user.display_name}</strong>{user.is_owner && <span className={styles.ownerBadge}>Owner</span>}{user.disabled_at && <span className={styles.disabledBadge}>Disabled</span>}</div><span>{user.email}</span><div className={styles.tags}>{userTeams === undefined ? <button type="button" className={styles.inlinePager} disabled={busy === `user:teams:${user.id}`} onClick={()=>void loadUserTeams(user.id)}>{busy === `user:teams:${user.id}` ? "Loading teams…" : "View teams"}</button> : userTeams.length === 0 ? <em className={styles.noTeam}>No teams</em> : <>{userTeams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}{userTeamsPage?.next_cursor && <button type="button" className={styles.inlinePager} disabled={busy === `user:teams:${user.id}`} onClick={()=>void loadUserTeams(user.id,userTeamsPage.next_cursor)}>{busy === `user:teams:${user.id}` ? "Loading…" : "More teams"}</button>}</>}</div><code>{user.id}</code></div>
-                  <div className={styles.rowAction}>{user.is_owner ? <span>Protected</span> : <><button type="button" disabled={busy === `user:${user.id}`} onClick={()=>setDisabled(user, !user.disabled_at)}>{busy === `user:${user.id}` ? "Saving…" : user.disabled_at ? "Enable" : "Disable"}</button>{user.disabled_at && <button className={styles.danger} type="button" disabled={busy === `purge:${user.id}`} onClick={()=>purgeAttachments(user)}>{busy === `purge:${user.id}` ? "Purging…" : "Purge attachments"}</button>}</>}</div>
-                  <div className={styles.credentialList}>
-                    <div className={styles.credentialHeading}><span>Credentials</span><small>{userCredentials.filter((credential) => !credential.revoked_at).length} active</small></div>
-                    {userCredentials.length === 0 && <p>No credentials created.</p>}
-                    {userCredentials.map((credential) => <div className={styles.credentialRow} key={credential.id}>
-                      <div><div><strong>{credential.name}</strong><em>{credential.purpose}</em>{credential.revoked_at && <em className={styles.revokedBadge}>Revoked</em>}</div><code>{credential.key_masked || `${credential.token_prefix}…`}</code><span>Created {new Date(credential.created_at).toLocaleString()} · {credential.last_used_at ? `Last used ${new Date(credential.last_used_at).toLocaleString()}` : "Never used"}</span></div>
-                      {!credential.revoked_at && <button className={styles.ghost} type="button" disabled={busy === `credential:${credential.id}`} onClick={()=>revokeCredential(credential)}>{busy === `credential:${credential.id}` ? "Revoking…" : "Revoke"}</button>}
-                    </div>)}
-                  </div>
-                </article>;
-              })}
-            </div>
-            {usersPage.next_cursor && <div className={styles.pager}><button type="button" className={styles.ghost} disabled={busy === "users:more"} onClick={()=>void loadMoreUsers()}>{busy === "users:more" ? "Loading…" : "Load more users"}</button></div>}
-          </div>
-
-          <div className={styles.panel}>
-            <div className={styles.panelHeading}><div><p className={styles.sectionLabel}>Links</p><h2>Invitation history</h2></div></div>
-            <div className={styles.rows}>
-              {!loading && invitations.length === 0 && <p className={styles.empty}>No invitations yet.</p>}
-              {invitations.map((invitation) => {
-                const status = invitationStatus(invitation);
-                return <article className={styles.invitationRow} key={invitation.id}><div><div className={styles.invitationTop}><strong>{status}</strong><code>{invitation.id}</code></div><span>Expires {new Date(invitation.expires_at).toLocaleString()}</span><div className={styles.tags}>{invitation.teams.length === 0 ? <em className={styles.noTeam}>No initial teams</em> : invitation.teams.map((team)=><em className={styles.teamTag} key={team.id}>{team.name}</em>)}</div></div>{status === "Active" && <button className={styles.ghost} type="button" disabled={busy === `invite:${invitation.id}`} onClick={()=>revokeInvitation(invitation.id)}>{busy === `invite:${invitation.id}` ? "Revoking…" : "Revoke"}</button>}</article>;
-              })}
-            </div>
-            {invitationsPage.next_cursor && <div className={styles.pager}><button type="button" className={styles.ghost} disabled={busy === "invitations:more"} onClick={()=>void loadMoreInvitations()}>{busy === "invitations:more" ? "Loading…" : "Load more invitations"}</button></div>}
-          </div>
-        </section>
-      </main>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-24 w-full" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

@@ -1,11 +1,58 @@
 "use client";
 
+import type { LucideIcon } from "lucide-react";
+import {
+  BotMessageSquareIcon,
+  CircleCheckIcon,
+  InboxIcon,
+  PlugZapIcon,
+  RocketIcon,
+  RotateCwIcon,
+  ShieldAlertIcon,
+  SkipForwardIcon,
+  SparklesIcon,
+  TerminalIcon
+} from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 import { CopyButton } from "../components/copy-button";
 import { AppNav } from "../components/app-nav";
-import styles from "./onboarding.module.css";
+import {
+  DetailRow,
+  MonoValue,
+  PanelHeader,
+  PanelMain,
+  PanelPage
+} from "../components/panel-shell";
 
 type Connector = "chatgpt" | "claude" | "local" | "raycast";
 
@@ -67,7 +114,7 @@ const connectors: Array<{
   title: string;
   description: string;
   actor: string;
-  glyph: string;
+  icon: LucideIcon;
 }> = [
   {
     id: "chatgpt",
@@ -75,7 +122,7 @@ const connectors: Array<{
     title: "Connect ChatGPT",
     description: "Give ChatGPT its own revocable MCP credential while keeping every message attributed to ChatGPT.",
     actor: "You · ChatGPT",
-    glyph: "◎"
+    icon: BotMessageSquareIcon
   },
   {
     id: "claude",
@@ -83,7 +130,7 @@ const connectors: Array<{
     title: "Connect Claude",
     description: "Create a separate Claude connector. Its secret and rotation lifecycle never affect ChatGPT.",
     actor: "You · Claude",
-    glyph: "✦"
+    icon: SparklesIcon
   },
   {
     id: "local",
@@ -91,7 +138,7 @@ const connectors: Array<{
     title: "Connect a coding agent",
     description: "Generate a one-machine setup prompt for Codex, Claude Code, or another local coding agent.",
     actor: "You · Local CLI",
-    glyph: "⌁"
+    icon: TerminalIcon
   },
   {
     id: "raycast",
@@ -99,7 +146,7 @@ const connectors: Array<{
     title: "Connect Raycast",
     description: "Create one dedicated credential for this Mac and load the checked-in extension in Raycast developer mode.",
     actor: "You · Raycast",
-    glyph: "↗"
+    icon: RocketIcon
   }
 ];
 
@@ -124,6 +171,7 @@ export function OnboardingView() {
   const [busy, setBusy] = useState<Connector | "skip" | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rotateConnector, setRotateConnector] = useState<Connector | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -149,12 +197,10 @@ export function OnboardingView() {
 
   const steps = useMemo(() => new Map((state?.steps ?? []).map((step) => [step.connector, step])), [state]);
   const activeCount = useMemo(() => connectors.filter((connector) => steps.get(connector.id)?.credential).length, [steps]);
+  const progressValue = (activeCount / connectors.length) * 100;
 
   async function connect(connector: Connector) {
     const active = Boolean(steps.get(connector)?.credential);
-    if (active && !window.confirm(`Rotate the ${steps.get(connector)?.credential?.name} credential? The current connection will stop working immediately.`)) {
-      return;
-    }
     setBusy(connector);
     setError(null);
     try {
@@ -166,12 +212,21 @@ export function OnboardingView() {
       const data = await responseJSON(response) as ConnectionResult;
       setState(data.onboarding);
       setResults((current) => ({ ...current, [connector]: data }));
+      setRotateConnector(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       await load();
     } finally {
       setBusy(null);
     }
+  }
+
+  function requestConnection(connector: Connector) {
+    if (steps.get(connector)?.credential) {
+      setRotateConnector(connector);
+      return;
+    }
+    void connect(connector);
   }
 
   async function skip() {
@@ -186,107 +241,192 @@ export function OnboardingView() {
     }
   }
 
+  const rotatingStep = rotateConnector ? steps.get(rotateConnector) : undefined;
+
   return (
-    <div className={styles.page}>
+    <PanelPage>
       <AppNav title="Connect agents" />
+      <PanelMain>
+        <PanelHeader
+          eyebrow={state?.dismissed_at ? "Resume setup" : "One identity, separate actors"}
+          title="Bring your agents into the same inbox."
+          description="Each connection gets its own credential and actor label, but all four act for your user. Private threads stay private until you explicitly share them."
+          aside={
+            <Card>
+              <CardHeader>
+                <CardTitle>{activeCount} of {connectors.length} connected</CardTitle>
+                <CardDescription>
+                  {activeCount === connectors.length ? "Every supported surface is ready." : "Connect only the surfaces you actually use."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Progress value={progressValue}>
+                  <ProgressLabel>Connection progress</ProgressLabel>
+                  <ProgressValue>{(_, value) => `${Math.round(value ?? 0)}%`}</ProgressValue>
+                </Progress>
+              </CardContent>
+            </Card>
+          }
+        />
 
-      <main className={styles.main}>
-        <section className={styles.hero}>
-          <div className={styles.heroCopy}>
-            <p className={styles.kicker}>{state?.dismissed_at ? "Resume setup" : "One identity, separate actors"}</p>
-            <h1>Bring your agents into the same inbox.</h1>
-            <p>Each connection gets its own credential and actor label, but all four act for your user. Your private threads stay private to you unless you explicitly share them later.</p>
-          </div>
-          <div className={styles.progress}>
-            <div><span>Connected</span><strong>{activeCount}<small>/{connectors.length}</small></strong></div>
-            <div className={styles.track}><i style={{ width: `${(activeCount / connectors.length) * 100}%` }}/></div>
-            <p>{activeCount === connectors.length ? "All surfaces are connected." : "Connect only what you use. You can return anytime."}</p>
-          </div>
-        </section>
+        {error ? (
+          <Alert variant="destructive">
+            <ShieldAlertIcon />
+            <AlertTitle>Setup action failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
 
-        {error && <div className={styles.error}><strong>Setup action failed.</strong><span>{error}</span></div>}
-
-        <section className={styles.cards} aria-busy={loading}>
-          {connectors.map((connector, index) => {
+        <section className="grid gap-4 lg:grid-cols-2" aria-label="Agent connections" aria-busy={loading}>
+          {loading ? Array.from({ length: 4 }).map((_, index) => <Skeleton className="h-72" key={index} />) : null}
+          {!loading ? connectors.map((connector, index) => {
+            const Icon = connector.icon;
             const step = steps.get(connector.id);
             const active = Boolean(step?.credential);
             const completedBefore = Boolean(step?.completed_at);
             const result = results[connector.id];
             const status = active ? "Connected" : completedBefore ? "Needs reconnect" : "Not connected";
             return (
-              <article className={styles.card} key={connector.id}>
-                <div className={styles.cardIndex}>0{index + 1}</div>
-                <div className={styles.cardHeading}>
-                  <div className={styles.glyph}>{connector.glyph}</div>
-                  <div><p>{connector.eyebrow}</p><h2>{connector.title}</h2></div>
-                </div>
-                <p className={styles.description}>{connector.description}</p>
-                <div className={styles.actor}><span>Messages appear as</span><strong>{connector.actor}</strong></div>
-                <div className={styles.statusRow}>
-                  <span className={`${styles.status} ${active ? styles.connected : completedBefore ? styles.reconnect : ""}`}>{status}</span>
-                  {step?.credential && <code>{step.credential.key_masked || step.credential.id}</code>}
-                </div>
-                {step?.credential && <dl className={styles.metadata}><div><dt>Credential</dt><dd>{step.credential.name}</dd></div><div><dt>Updated</dt><dd>{formatDate(step.credential.updated_at)}</dd></div></dl>}
-                <button className={styles.primary} type="button" disabled={loading || busy !== null} onClick={() => void connect(connector.id)}>
-                  {busy === connector.id ? "Generating…" : active ? "Rotate credential" : completedBefore ? "Recreate connection" : connector.title}
-                </button>
-
-                {result && <ConnectionOutput connector={connector.id} result={result}/>}
-              </article>
+              <Card key={connector.id}>
+                <CardHeader className="border-b">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="flex size-10 shrink-0 items-center justify-center border bg-muted">
+                      <Icon />
+                    </span>
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">0{index + 1} / {connector.eyebrow}</span>
+                      <CardTitle>{connector.title}</CardTitle>
+                      <CardDescription>{connector.description}</CardDescription>
+                    </div>
+                  </div>
+                  <CardAction>
+                    <Badge variant={active ? "default" : completedBefore ? "secondary" : "outline"}>{status}</Badge>
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <dl>
+                    <DetailRow label="Messages appear as" value={connector.actor} />
+                    <DetailRow label="Credential" value={step?.credential?.name ?? "Not created"} />
+                    <DetailRow label="Updated" value={formatDate(step?.credential?.updated_at)} />
+                  </dl>
+                  {step?.credential ? <MonoValue>{step.credential.key_masked || step.credential.id}</MonoValue> : null}
+                  <Button type="button" disabled={loading || busy !== null} onClick={() => requestConnection(connector.id)}>
+                    {busy === connector.id ? <Spinner data-icon="inline-start" /> : active ? <RotateCwIcon data-icon="inline-start" /> : <PlugZapIcon data-icon="inline-start" />}
+                    {busy === connector.id ? "Generating" : active ? "Rotate credential" : completedBefore ? "Recreate connection" : connector.title}
+                  </Button>
+                  {result ? <ConnectionOutput connector={connector.id} result={result} /> : null}
+                </CardContent>
+              </Card>
             );
-          })}
+          }) : null}
         </section>
 
-        <section className={styles.footerPanel}>
-          <div><p className={styles.kicker}>Nothing is mandatory</p><h2>Your inbox already works.</h2><p>Skipping does not create credentials or block your account. Reopen this page from Credentials whenever you are ready.</p></div>
-          <div className={styles.footerActions}><button type="button" onClick={() => void skip()} disabled={busy !== null}>{busy === "skip" ? "Skipping…" : "Skip for now"}</button><Link href="/threads">Open inbox</Link></div>
-        </section>
-      </main>
-    </div>
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle>Your inbox already works</CardTitle>
+            <CardDescription>Skipping does not create credentials or block the account. Return from the navigation whenever you are ready.</CardDescription>
+          </CardHeader>
+          <CardFooter className="flex flex-wrap gap-2">
+            <Button variant="outline" type="button" onClick={() => void skip()} disabled={busy !== null}>
+              {busy === "skip" ? <Spinner data-icon="inline-start" /> : <SkipForwardIcon data-icon="inline-start" />}
+              Skip for now
+            </Button>
+            <Link className={cn(buttonVariants({ variant: "default" }))} href="/threads">
+              <InboxIcon data-icon="inline-start" />
+              Open inbox
+            </Link>
+          </CardFooter>
+        </Card>
+      </PanelMain>
+
+      <AlertDialog open={Boolean(rotateConnector)} onOpenChange={(open) => { if (!open) setRotateConnector(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia><RotateCwIcon /></AlertDialogMedia>
+            <AlertDialogTitle>Rotate this connection?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The current {rotatingStep?.credential?.name ?? "connector"} secret will stop working immediately. A replacement setup value will be shown once.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(rotateConnector && busy === rotateConnector)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={!rotateConnector || busy === rotateConnector} onClick={() => { if (rotateConnector) void connect(rotateConnector); }}>
+              {rotateConnector && busy === rotateConnector ? <Spinner data-icon="inline-start" /> : <RotateCwIcon data-icon="inline-start" />}
+              Rotate credential
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </PanelPage>
   );
 }
 
 function ConnectionOutput({ connector, result }: { connector: Connector; result: ConnectionResult }) {
-  if (connector === "raycast") return <RaycastConnectionOutput result={result}/>;
+  if (connector === "raycast") return <RaycastConnectionOutput result={result} />;
   const value = connector === "local" ? result.setup_prompt ?? "" : result.mcp_url ?? "";
   return (
-    <div className={styles.output}>
-      <div className={styles.outputHeader}><div><span>Generated once</span><strong>{connector === "local" ? "Local agent setup prompt" : "Authenticated MCP URL"}</strong></div><CopyButton value={value} label={connector === "local" ? "Copy setup prompt" : "Copy MCP URL"}/></div>
-      <pre>{value}</pre>
-      {connector === "local" && result.profile_command && <div className={styles.command}><span>Profile command inside prompt</span><code>{result.profile_command}</code></div>}
-      <ol>{result.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol>
-      <p className={styles.onceNote}>Save this now. Agentbox stores only the credential hash and will not show this URL or prompt again.</p>
-    </div>
+    <Card size="sm">
+      <CardHeader className="border-b">
+        <CardTitle>{connector === "local" ? "Local setup prompt" : "Authenticated MCP URL"}</CardTitle>
+        <CardDescription>Generated once. Save it before leaving this page.</CardDescription>
+        <CardAction><CircleCheckIcon /></CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <CopyableValue value={value} label={connector === "local" ? "setup prompt" : "MCP URL"} multiline={connector === "local"} />
+        {connector === "local" && result.profile_command ? <CopyableValue value={result.profile_command} label="profile command" /> : null}
+        <Separator />
+        <InstructionList instructions={result.instructions} />
+      </CardContent>
+    </Card>
   );
 }
 
 function RaycastConnectionOutput({ result }: { result: ConnectionResult }) {
   const setup = result.raycast_setup;
   if (!setup) return null;
-  const commands = setup.install_commands.join("\n");
   return (
-    <div className={styles.output}>
-      <div className={styles.outputHeader}>
-        <div><span>Generated once</span><strong>Raycast developer-mode setup</strong></div>
-        <CopyButton value={commands} label="Copy install commands"/>
-      </div>
-      <div className={styles.setupMeta}>
-        <div><span>Repository</span><code>{setup.repository_url}</code></div>
-        <div><span>Extension path</span><code>{setup.extension_path}</code></div>
-      </div>
-      <pre>{commands}</pre>
-      <div className={styles.preferenceList}>
-        {setup.preferences.map((preference) => (
-          <div className={styles.preference} key={preference.name}>
-            <div><span>{preference.title}</span><code>{preference.name}</code></div>
-            <code>{preference.value}</code>
-            <CopyButton value={preference.value} label={`Copy ${preference.title}`}/>
-          </div>
-        ))}
-      </div>
-      <div className={styles.finalCheck}><span>Final connection check</span><p>{setup.final_check}</p></div>
-      <ol>{result.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ol>
-      <p className={styles.onceNote}>Save the API key now. Agentbox stores only its hash. Rotating this credential disconnects only this Raycast installation.</p>
+    <Card size="sm">
+      <CardHeader className="border-b">
+        <CardTitle>Raycast developer-mode setup</CardTitle>
+        <CardDescription>Generated once for this Mac.</CardDescription>
+        <CardAction><CircleCheckIcon /></CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <dl>
+          <DetailRow label="Repository" value={<MonoValue>{setup.repository_url}</MonoValue>} />
+          <DetailRow label="Extension path" value={<MonoValue>{setup.extension_path}</MonoValue>} />
+        </dl>
+        <Separator />
+        {setup.install_commands.map((command) => <CopyableValue key={command} value={command} label="install command" />)}
+        <Separator />
+        {setup.preferences.map((preference) => <CopyableValue key={preference.name} value={preference.value} label={preference.title} />)}
+        <Alert>
+          <AlertTitle>Final connection check</AlertTitle>
+          <AlertDescription>{setup.final_check}</AlertDescription>
+        </Alert>
+        <InstructionList instructions={result.instructions} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function CopyableValue({ value, label, multiline = false }: { value: string; label: string; multiline?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-start gap-2 border bg-muted/40 p-2">
+      {multiline ? (
+        <pre className="max-h-72 min-w-0 flex-1 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.72rem] leading-relaxed">{value}</pre>
+      ) : (
+        <MonoValue className="flex-1 text-foreground">{value}</MonoValue>
+      )}
+      <CopyButton value={value} label={`Copy ${label}`} />
     </div>
+  );
+}
+
+function InstructionList({ instructions }: { instructions: string[] }) {
+  return (
+    <ol className="flex list-decimal flex-col gap-2 pl-5 text-xs/relaxed text-muted-foreground">
+      {instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}
+    </ol>
   );
 }

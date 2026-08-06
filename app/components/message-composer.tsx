@@ -1,6 +1,14 @@
 "use client";
 
+import { FileIcon, PaperclipIcon, SendIcon, UploadCloudIcon, XIcon } from "lucide-react";
 import { FormEvent, useRef, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+import { PanelEyebrow } from "./panel-shell";
 
 type Props = {
   label: string;
@@ -49,84 +57,113 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
   }
 
   return (
-    <form className="composer-card" onSubmit={handleSubmit}>
-      <div className="composer-card__header">
-        <div>
-          <p className="section-label">Post as user</p>
-          <h2 className="card-title">{label}</h2>
-        </div>
-        <button className="button button--solid" disabled={submitting || !canSubmit || (!body.trim() && files.length === 0)} type="submit">
-          {submitting ? "Posting…" : submitLabel}
-        </button>
-      </div>
-      <textarea
-        className="composer-textarea"
-        placeholder={placeholder}
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div
-        className={dragging ? "dropzone dropzone--active" : "dropzone"}
-        role="button"
-        tabIndex={0}
-        onClick={() => inputRef.current?.click()}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragOver={(event) => event.preventDefault()}
-        onDragLeave={(event) => {
-          event.preventDefault();
-          setDragging(false);
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          addFiles(event.dataTransfer.files);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            inputRef.current?.click();
-          }
-        }}
-      >
-        <input
-          ref={inputRef}
-          multiple
-          hidden
-          type="file"
-          onChange={(event) => {
-            if (event.target.files) addFiles(event.target.files);
-            event.target.value = "";
-          }}
-        />
-        <span>Drop files here or click to attach</span>
-      </div>
-      {files.length > 0 && (
-        <div className="file-chip-list" aria-label="Selected files">
-          {files.map((file, index) => (
-            <span className="file-chip" key={`${file.name}-${file.size}-${index}`}>
-              <span>{file.name}</span>
-              <span className="thread-meta">{formatBytes(file.size)}</span>
-              <button
-                aria-label={`Remove ${file.name}`}
-                className="mini-button"
-                type="button"
-                onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
-              >
-                Remove
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      {error && (
-        <div className="error-card">
-          <strong>Could not post.</strong>
-          <span>{error}</span>
-        </div>
-      )}
+    <form onSubmit={handleSubmit}>
+      <Card>
+        <CardHeader className="border-b">
+          <div className="flex min-w-0 flex-col gap-1">
+            <PanelEyebrow>Post as user</PanelEyebrow>
+            <CardTitle>{label}</CardTitle>
+          </div>
+          <CardAction>
+            <Button
+              disabled={submitting || !canSubmit || (!body.trim() && files.length === 0)}
+              type="submit"
+            >
+              <SendIcon data-icon="inline-start" />
+              {submitting ? "Posting" : submitLabel}
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <Field>
+              <FieldLabel className="sr-only">Message</FieldLabel>
+              <Textarea
+                className="min-h-40 resize-y"
+                placeholder={placeholder}
+                value={body}
+                onChange={(event) => setBody(event.target.value)}
+              />
+              <FieldDescription>Markdown is detected automatically. Attachments keep their selected order.</FieldDescription>
+            </Field>
+
+            <div
+              className={cn(
+                "flex min-h-24 items-center justify-center border border-dashed p-4 text-center transition-colors",
+                dragging ? "border-foreground bg-muted" : "border-border bg-muted/30 hover:bg-muted/60"
+              )}
+              role="button"
+              tabIndex={0}
+              onClick={() => inputRef.current?.click()}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDragLeave={(event) => {
+                event.preventDefault();
+                setDragging(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                addFiles(event.dataTransfer.files);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  inputRef.current?.click();
+                }
+              }}
+            >
+              <input
+                ref={inputRef}
+                multiple
+                hidden
+                type="file"
+                onChange={(event) => {
+                  if (event.target.files) addFiles(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+              <span className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+                {dragging ? <UploadCloudIcon /> : <PaperclipIcon />}
+                <span>{dragging ? "Release to attach files" : "Drop files here or click to attach"}</span>
+              </span>
+            </div>
+
+            {files.length > 0 ? (
+              <div className="grid gap-2" aria-label="Selected files">
+                {files.map((file, index) => (
+                  <div className="flex min-w-0 items-center gap-3 border bg-muted/20 p-2" key={`${file.name}-${file.size}-${index}`}>
+                    <FileIcon className="shrink-0 text-muted-foreground" />
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="truncate text-xs font-medium">{file.name}</span>
+                      <span className="font-mono text-[0.65rem] text-muted-foreground">{formatBytes(file.size)}</span>
+                    </span>
+                    <Button
+                      aria-label={`Remove ${file.name}`}
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                    >
+                      <XIcon />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {error ? (
+              <Alert variant="destructive">
+                <AlertTitle>Could not post</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+          </FieldGroup>
+        </CardContent>
+      </Card>
     </form>
   );
 }

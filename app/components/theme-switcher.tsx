@@ -1,7 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { LaptopIcon, MoonIcon, SunIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 const STORAGE_KEY = "agentbox_theme";
 type ThemeMode = "system" | "light" | "dark";
@@ -37,7 +38,7 @@ function applyTheme(mode: ThemeMode) {
   root.classList.toggle("dark", resolved === "dark");
 }
 
-export function ThemeSwitcher() {
+export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
   const [mode, setMode] = useState<ThemeMode>("system");
 
   useEffect(() => {
@@ -49,7 +50,6 @@ export function ThemeSwitcher() {
     return () => window.clearTimeout(timeout);
   }, []);
 
-  // While following the OS, re-resolve when the OS preference flips.
   useEffect(() => {
     if (mode !== "system") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -66,58 +66,29 @@ export function ThemeSwitcher() {
   }
 
   return (
-    <div className="theme-switcher" role="group" aria-label="Color theme">
-      <ThemeButton active={mode === "system"} label="Use system theme" onClick={() => selectMode("system")}>
-        <SystemIcon />
-      </ThemeButton>
-      <ThemeButton active={mode === "light"} label="Use light theme" onClick={() => selectMode("light")}>
-        <SunIcon />
-      </ThemeButton>
-      <ThemeButton active={mode === "dark"} label="Use dark theme" onClick={() => selectMode("dark")}>
-        <MoonIcon />
-      </ThemeButton>
-    </div>
-  );
-}
-
-function ThemeButton({ active, label, onClick, children }: { active: boolean; label: string; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      aria-label={label}
-      aria-pressed={active}
-      className="theme-switcher__button"
-      title={label}
-      type="button"
-      onClick={onClick}
+    <ToggleGroup
+      aria-label="Color theme"
+      value={[mode]}
+      variant="outline"
+      size="sm"
+      spacing={0}
+      onValueChange={(value) => {
+        const nextMode = value[0];
+        if (isThemeMode(nextMode)) selectMode(nextMode);
+      }}
     >
-      {children}
-    </button>
-  );
-}
-
-function SystemIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-      <rect height="12" rx="2" stroke="currentColor" strokeWidth="2" width="18" x="3" y="4" />
-      <path d="M8 20h8" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
-      <path d="M12 16v4" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function SunIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-      <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="2" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-      <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="2" />
-    </svg>
+      <ToggleGroupItem value="system" aria-label="Use system theme" title="System theme">
+        <LaptopIcon data-icon="inline-start" />
+        {!compact ? <span className="sr-only">System</span> : null}
+      </ToggleGroupItem>
+      <ToggleGroupItem value="light" aria-label="Use light theme" title="Light theme">
+        <SunIcon data-icon="inline-start" />
+        {!compact ? <span className="sr-only">Light</span> : null}
+      </ToggleGroupItem>
+      <ToggleGroupItem value="dark" aria-label="Use dark theme" title="Dark theme">
+        <MoonIcon data-icon="inline-start" />
+        {!compact ? <span className="sr-only">Dark</span> : null}
+      </ToggleGroupItem>
+    </ToggleGroup>
   );
 }

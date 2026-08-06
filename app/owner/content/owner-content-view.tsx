@@ -1,12 +1,29 @@
 "use client";
 
+import { ArrowUpRightIcon, FilesIcon, SearchIcon, ShieldAlertIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { AppNav } from "../../components/app-nav";
 import { attributionLabel } from "../../components/attribution";
+import { MetricStrip, MonoValue, PanelHeader, PanelMain, PanelPage } from "../../components/panel-shell";
 import { fetchSession, type AuthContext } from "../../components/session";
-import styles from "./owner-content.module.css";
 
 type User = {
   id: string;
@@ -139,6 +156,23 @@ export function OwnerContentView() {
 
   const selectedUser = useMemo(() => users.find((user) => user.id === userID), [userID, users]);
   const selectedTeam = useMemo(() => teams.find((team) => team.id === teamRef || team.slug === teamRef), [teamRef, teams]);
+  const userOptions = useMemo(
+    () => [
+      { label: "All users", value: "all" },
+      ...users.map((user) => ({
+        label: `${user.display_name}${user.disabled_at ? " · disabled" : ""}`,
+        value: user.id
+      }))
+    ],
+    [users]
+  );
+  const teamOptions = useMemo(
+    () => [
+      { label: "All teams", value: "all" },
+      ...teams.map((team) => ({ label: team.name, value: team.id }))
+    ],
+    [teams]
+  );
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
@@ -157,82 +191,185 @@ export function OwnerContentView() {
   }
 
   return (
-    <main className={styles.page}>
-      <AppNav title="All content (read-only)" auth={auth} />
+    <PanelPage>
+      <AppNav title="All content" auth={auth} />
+      <PanelMain>
+        <Alert>
+          <ShieldAlertIcon />
+          <AlertTitle>Owner view, read only</AlertTitle>
+          <AlertDescription>
+            This deployment-wide audit surface bypasses normal thread visibility only for this permanent-owner browser session. It cannot post, upload, or change visibility.
+          </AlertDescription>
+        </Alert>
 
-      <section className={styles.shell}>
-        <div className={styles.warning}>
-          <strong>OWNER VIEW · READ ONLY</strong>
-          <span>This deployment-wide audit surface bypasses normal thread visibility only for this permanent-owner browser session. It cannot post, upload, or change visibility.</span>
-        </div>
+        <PanelHeader
+          eyebrow="Deployment-wide content"
+          title="Inspect every thread without changing it."
+          description="Search private and shared content, filter by owner or team, and review preserved attribution and attachment tombstones."
+          aside={
+            <MetricStrip
+              items={[
+                { label: "Matching threads", value: threads.length, detail: submittedQuery ? `Search: ${submittedQuery}` : "Current filter set" },
+                { label: "Page position", value: threads.length ? `${page.offset + 1}–${page.offset + threads.length}` : "0", detail: "read-only audit rows" }
+              ]}
+            />
+          }
+        />
 
-        <div className={styles.hero}>
-          <div>
-            <p>Deployment-wide content</p>
-            <h1>Inspect every thread without changing it.</h1>
-            <span>Search private and shared content, filter by owner or team, and review preserved attribution and attachment tombstones.</span>
+        <Card>
+          <CardContent>
+            <FieldGroup className="lg:grid lg:grid-cols-[minmax(18rem,1fr)_16rem_16rem] lg:items-end">
+              <Field>
+                <FieldLabel htmlFor="owner-content-search">Search all content</FieldLabel>
+                <form className="flex min-w-0 gap-2" onSubmit={submitSearch}>
+                  <Input
+                    id="owner-content-search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Titles and message bodies"
+                  />
+                  <Button type="submit">
+                    <SearchIcon data-icon="inline-start" />
+                    Search
+                  </Button>
+                  {submittedQuery ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      aria-label="Clear search"
+                      onClick={() => { setCursor(""); setQuery(""); setSubmittedQuery(""); }}
+                    >
+                      <XIcon />
+                    </Button>
+                  ) : null}
+                </form>
+              </Field>
+              <Field>
+                <FieldLabel>User</FieldLabel>
+                <Select items={userOptions} value={userID || "all"} onValueChange={(value) => { if (value) changeUser(value === "all" ? "" : value); }}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {userOptions.map((option) => (
+                        <SelectItem value={option.value} key={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel>Team share</FieldLabel>
+                <Select items={teamOptions} value={teamRef || "all"} onValueChange={(value) => { if (value) changeTeam(value === "all" ? "" : value); }}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {teamOptions.map((option) => (
+                        <SelectItem value={option.value} key={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+
+        {selectedUser || selectedTeam || submittedQuery ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Showing</span>
+            {submittedQuery ? <Badge variant="secondary">“{submittedQuery}”</Badge> : null}
+            {selectedUser ? <Badge variant="outline">{selectedUser.display_name}</Badge> : null}
+            {selectedTeam ? <Badge variant="outline">{selectedTeam.name}</Badge> : null}
           </div>
-          <div className={styles.count}><b>{threads.length}</b><span>matching threads</span></div>
-        </div>
+        ) : null}
 
-        <section className={styles.filters}>
-          <form onSubmit={submitSearch} className={styles.search}>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles and message bodies" aria-label="Search all content" />
-            <button type="submit">Search</button>
-            {submittedQuery && <button type="button" className={styles.ghost} onClick={() => { setCursor(""); setQuery(""); setSubmittedQuery(""); }}>Clear</button>}
-          </form>
-          <label>
-            <span>User</span>
-            <select value={userID} onChange={(event) => changeUser(event.target.value)}>
-              <option value="">All users</option>
-              {users.map((user) => <option value={user.id} key={user.id}>{user.display_name}{user.disabled_at ? " · disabled" : ""}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>Team share</span>
-            <select value={teamRef} onChange={(event) => changeTeam(event.target.value)}>
-              <option value="">All teams</option>
-              {teams.map((team) => <option value={team.id} key={team.id}>{team.name}</option>)}
-            </select>
-          </label>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Owner content failed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <section className="grid gap-3" aria-label="Deployment content">
+          {loading ? <OwnerContentSkeleton /> : null}
+          {!loading && !error && threads.length === 0 ? (
+            <Empty className="border py-16">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><FilesIcon /></EmptyMedia>
+                <EmptyTitle>No threads match these filters</EmptyTitle>
+                <EmptyDescription>Clear the search or choose a different owner or team.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : null}
+
+          {!loading && !error ? threads.map((thread) => (
+            <Link className="group block outline-none" href={`/owner/content/${thread.id}`} key={thread.id}>
+              <Card className="transition-transform group-hover:-translate-y-px group-focus-visible:ring-2 group-focus-visible:ring-ring">
+                <CardHeader className="border-b">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{thread.owner.display_name}{thread.owner.disabled_at ? " · disabled" : ""}</span>
+                      <span aria-hidden="true">/</span>
+                      <time dateTime={thread.updated_at}>{formatDate(thread.updated_at)}</time>
+                    </div>
+                    <h2 className="font-heading text-lg font-semibold tracking-[-0.025em] text-balance sm:text-xl">{thread.title}</h2>
+                    <MonoValue>{thread.id}</MonoValue>
+                  </div>
+                  <CardAction>
+                    <ArrowUpRightIcon className="text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-4">
+                  <p className="line-clamp-3 text-xs/relaxed text-muted-foreground sm:text-sm/relaxed">
+                    {thread.matched_snippets?.[0] || thread.last_message_preview || "No messages yet."}
+                  </p>
+                  <div className="flex flex-col gap-3 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="text-xs text-muted-foreground">
+                      {thread.message_count} message{thread.message_count === 1 ? "" : "s"} · Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}
+                    </span>
+                    <span className="flex flex-wrap gap-1.5">
+                      {visibilityLabels(thread.visibility_summary).map((label, index) => (
+                        <Badge variant={label === "Public" ? "default" : "outline"} key={`${label}-${index}`}>{label}</Badge>
+                      ))}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          )) : null}
         </section>
 
-        {(selectedUser || selectedTeam || submittedQuery) && <div className={styles.activeFilters}>
-          <span>Showing:</span>
-          {submittedQuery && <em>“{submittedQuery}”</em>}
-          {selectedUser && <em>{selectedUser.display_name}</em>}
-          {selectedTeam && <em>{selectedTeam.name}</em>}
-        </div>}
+        {!loading && !error && (page.previous_cursor !== undefined || page.next_cursor !== undefined) ? (
+          <div className="flex flex-wrap items-center justify-center gap-3 border-t pt-6">
+            <Button variant="outline" type="button" disabled={page.previous_cursor === undefined} onClick={() => setCursor(page.previous_cursor ?? "")}>Newer</Button>
+            <span className="font-mono text-[0.68rem] text-muted-foreground">Showing {page.offset + 1}–{page.offset + threads.length}</span>
+            <Button variant="outline" type="button" disabled={page.next_cursor === undefined} onClick={() => setCursor(page.next_cursor ?? "")}>Older</Button>
+          </div>
+        ) : null}
+      </PanelMain>
+    </PanelPage>
+  );
+}
 
-        {error && <div className={styles.error}><strong>Owner content failed.</strong><span>{error}</span></div>}
-        {loading && <div className={styles.empty}>Loading deployment-wide content…</div>}
-        {!loading && !error && threads.length === 0 && <div className={styles.empty}>No threads match these filters.</div>}
-
-        {!loading && !error && <section className={styles.list}>
-          {threads.map((thread) => (
-            <Link className={styles.card} href={`/owner/content/${thread.id}`} key={thread.id}>
-              <div className={styles.cardHead}>
-                <div>
-                  <span>{thread.owner.display_name}{thread.owner.disabled_at ? " · disabled" : ""}</span>
-                  <time dateTime={thread.updated_at}>{formatDate(thread.updated_at)}</time>
-                </div>
-                <code>{thread.id}</code>
-              </div>
-              <h2>{thread.title}</h2>
-              <p>{thread.matched_snippets?.[0] || thread.last_message_preview || "No messages yet."}</p>
-              <div className={styles.cardFoot}>
-                <span>{thread.message_count} message{thread.message_count === 1 ? "" : "s"} · Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span>
-                <span className={styles.badges}>{visibilityLabels(thread.visibility_summary).map((label, index) => <em key={`${label}-${index}`}>{label}</em>)}</span>
-              </div>
-            </Link>
-          ))}
-        </section>}
-        {!loading && !error && (page.previous_cursor !== undefined || page.next_cursor !== undefined) && <div className={styles.pager}>
-          <button type="button" disabled={page.previous_cursor === undefined} onClick={() => setCursor(page.previous_cursor ?? "")}>Newer</button>
-          <span>Showing {page.offset + 1}–{page.offset + threads.length}</span>
-          <button type="button" disabled={page.next_cursor === undefined} onClick={() => setCursor(page.next_cursor ?? "")}>Older</button>
-        </div>}
-      </section>
-    </main>
+function OwnerContentSkeleton() {
+  return (
+    <div className="grid gap-3" aria-label="Loading deployment-wide content" aria-busy="true">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <Card key={index}>
+          <CardHeader className="border-b">
+            <div className="flex flex-col gap-3">
+              <Skeleton className="h-3 w-52" />
+              <Skeleton className="h-6 w-2/3" />
+              <Skeleton className="h-3 w-40" />
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-4/5" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   );
 }
