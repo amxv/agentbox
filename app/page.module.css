@@ -70,7 +70,8 @@
 
 .nav > a,
 .inboxLink {
-  min-height: 36px;
+  height: 42px;
+  min-height: 42px;
   display: inline-flex;
   align-items: center;
   border: 1px solid transparent;
@@ -103,8 +104,7 @@
 .nav .inboxLink,
 .nav :global([data-slot="toggle"]),
 .nav :global([data-slot="toggle-group"]) {
-  height: 36px;
-  min-height: 36px;
+  box-sizing: border-box;
 }
 .page :global([data-slot="toggle"][aria-pressed="true"]) {
   border-color: var(--panel-active-border);

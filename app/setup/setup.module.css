@@ -35,13 +35,13 @@
 .mark { width: 31px; height: 31px; display: grid; grid-template-columns: repeat(2,1fr); gap: 2px; padding: 4px; border: 1px solid var(--foreground); background: var(--foreground); }
 .mark i { background: var(--background); }
 .nav { display: flex; align-items: center; gap: 4px; color: var(--muted-foreground); font-size: 14px; }
-.nav > a, .inboxLink { min-height: 36px; display: inline-flex; align-items: center; border: 1px solid transparent; border-radius: var(--radius-md); padding: 0 12px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.nav > a, .inboxLink { height: 42px; min-height: 42px; display: inline-flex; align-items: center; border: 1px solid transparent; border-radius: var(--radius-md); padding: 0 12px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
 .nav > a:hover, .inboxLink:hover { border-color: var(--border); background: var(--secondary); color: var(--foreground); }
 .inboxLink { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
 .inboxLink:hover { border-color: var(--primary); background: color-mix(in oklch, var(--primary), var(--foreground) 8%); color: var(--primary-foreground); }
 .nav .inboxLink,
 .nav :global([data-slot="toggle"]),
-.nav :global([data-slot="toggle-group"]) { height: 36px; min-height: 36px; }
+.nav :global([data-slot="toggle-group"]) { box-sizing: border-box; }
 .page :global([data-slot="toggle"][aria-pressed="true"]) { border-color: var(--panel-active-border); background: var(--panel-active-bg); color: var(--panel-active-foreground); }
 
 .hero {

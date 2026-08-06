@@ -364,6 +364,59 @@ html:has([data-panel-root]) {
   color: var(--panel-active-foreground);
 }
 
+/* Theme selection is deliberately keyed off our controlled value instead of
+ * Base UI's private pressed-state attributes. This keeps the control stable
+ * across Base UI releases and guarantees readable selected icons in both
+ * resolved system-dark mode and an explicitly selected dark mode. */
+.app-theme-switcher {
+  box-sizing: border-box;
+  height: 42px !important;
+  min-height: 42px !important;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md) !important;
+}
+
+.app-theme-switcher .app-theme-switcher__item {
+  box-sizing: border-box;
+  width: 42px;
+  height: 40px !important;
+  min-width: 42px;
+  min-height: 40px !important;
+  border-block: 0 !important;
+  color: var(--muted-foreground) !important;
+}
+
+.app-theme-switcher .app-theme-switcher__item[data-active="true"] {
+  border-color: var(--panel-active-border) !important;
+  background: var(--panel-active-bg) !important;
+  color: var(--panel-active-foreground) !important;
+}
+
+.app-theme-switcher[data-resolved-theme="dark"] .app-theme-switcher__item[data-active="true"] {
+  border-color: oklch(0.7 0.075 78 / 58%) !important;
+  background: oklch(0.32 0.045 78) !important;
+  color: oklch(0.96 0.02 80) !important;
+}
+
+.app-theme-switcher .app-theme-switcher__item[data-active="true"] svg {
+  color: currentColor !important;
+  stroke: currentColor !important;
+  opacity: 1 !important;
+}
+
+.app-theme-switcher--compact {
+  height: 32px !important;
+  min-height: 32px !important;
+}
+
+.app-theme-switcher--compact .app-theme-switcher__item {
+  width: 32px;
+  height: 30px !important;
+  min-width: 32px;
+  min-height: 30px !important;
+}
+
 .panel-message-trigger {
   background: var(--card);
   color: var(--card-foreground);
