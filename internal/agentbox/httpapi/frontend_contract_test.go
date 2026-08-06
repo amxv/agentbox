@@ -11,6 +11,7 @@ import (
 func TestFrontendRequestLifecycleVisibilityAndPaginationContracts(t *testing.T) {
 	root := repositoryRoot(t)
 	assertSourceContains(t, root, "app/threads/inbox-view.tsx", "new AbortController()", "controller.abort()")
+	assertSourceContains(t, root, "app/threads/[threadId]/thread-view.tsx", "Preview Markdown", "Download attachment", "Download all attachments", "fetch(signedURL")
 	assertSourceContains(t, root, "app/owner/content/owner-content-view.tsx", "new AbortController()", "controller.abort()", "page.next_cursor", "page.previous_cursor")
 	assertSourceContains(t, root, "app/threads/[threadId]/thread-visibility-control.tsx", "const isPublic = visibility?.public ?? false", "const privateOnly = selectedTeamIDs.length === 0 && !isPublic", "The public read-only link remains live")
 	assertSourceContains(t, root, "app/share/[token]/public-thread-view.tsx", "asset.preview_path", "Attachment unavailable")

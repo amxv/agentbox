@@ -15,6 +15,7 @@ import (
 	"agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/mcpserver"
+	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/service"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
@@ -1792,7 +1793,7 @@ func withViewerAssetPaths(thread *types.ThreadWithMessages) viewerThread {
 			}
 			basePath := "/api/assets/" + url.PathEscape(asset.ID)
 			viewer := viewerAsset{Asset: asset, DownloadPath: basePath + "/download-url"}
-			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
+			if isDashboardPreviewableAsset(asset) {
 				viewer.PreviewPath = basePath + "/preview-url"
 			}
 			vm.Assets = append(vm.Assets, viewer)
@@ -1821,6 +1822,16 @@ func withOwnerContentAssetPaths(thread *types.OwnerContentThreadDetail) ownerVie
 		result.Messages = append(result.Messages, vm)
 	}
 	return result
+}
+
+func isDashboardPreviewableAsset(asset types.Asset) bool {
+	if asset.MimeType != nil {
+		mimeType := strings.ToLower(strings.TrimSpace(*asset.MimeType))
+		if strings.HasPrefix(mimeType, "image/") || strings.HasPrefix(mimeType, messageformat.Markdown) {
+			return true
+		}
+	}
+	return messageformat.IsMarkdownPath(asset.FileName)
 }
 
 func writeAssetResolution(w http.ResponseWriter, payload map[string]any, urlField string, signedURL string, err error) {

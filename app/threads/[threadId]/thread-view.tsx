@@ -124,6 +124,12 @@ function isPreviewableImage(asset: Asset) {
   return Boolean(asset.preview_path && asset.mime_type?.toLowerCase().startsWith("image/") && !asset.purged_at);
 }
 
+function isMarkdownAsset(asset: Asset) {
+  const mimeType = asset.mime_type?.toLowerCase().trim() ?? "";
+  if (mimeType.startsWith("text/markdown")) return true;
+  return /\.(md|markdown|mdown|mkd)$/i.test(asset.file_name);
+}
+
 export function ThreadView({ threadId }: { threadId: string }) {
   const router = useRouter();
   const [thread, setThread] = useState<Thread | null>(null);
@@ -133,6 +139,10 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
   const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
   const [assetBusy, setAssetBusy] = useState<string | null>(null);
+  const [downloadAllBusy, setDownloadAllBusy] = useState<string | null>(null);
+  const [markdownPreviewBodies, setMarkdownPreviewBodies] = useState<Record<string, string>>({});
+  const [markdownPreviewErrors, setMarkdownPreviewErrors] = useState<Record<string, string>>({});
+  const [expandedMarkdownPreviews, setExpandedMarkdownPreviews] = useState<Set<string>>(() => new Set());
 
   const loadThread = useCallback(async function loadThread() {
     setLoading(true);
@@ -148,6 +158,9 @@ export function ThreadView({ threadId }: { threadId: string }) {
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setThread(data.thread);
       setAssetResolutions({});
+      setMarkdownPreviewBodies({});
+      setMarkdownPreviewErrors({});
+      setExpandedMarkdownPreviews(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -225,35 +238,107 @@ export function ThreadView({ threadId }: { threadId: string }) {
     });
   }
 
-  async function resolveAsset(asset: Asset, kind: "download" | "preview") {
+  async function getSignedAssetURL(asset: Asset, kind: "download" | "preview") {
     const path = kind === "preview" ? asset.preview_path : asset.download_path;
-    if (!path || asset.purged_at) return;
+    if (!path || asset.purged_at) throw new Error("Attachment unavailable");
+    const response = await fetch(path, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+    if (data.available === false) {
+      const unavailableReason = data.unavailable_reason || "Attachment unavailable";
+      setAssetResolutions((current) => ({
+        ...current,
+        [asset.id]: { available: false, unavailable_reason: unavailableReason }
+      }));
+      throw new Error(unavailableReason);
+    }
+    const field = kind === "preview" ? "preview_url" : "download_url";
+    const signedURL = data[field];
+    if (typeof signedURL !== "string" || signedURL === "") throw new Error(`The attachment ${kind} URL was not returned.`);
+    setAssetResolutions((current) => ({
+      ...current,
+      [asset.id]: { ...current[asset.id], available: true, [field]: signedURL }
+    }));
+    return signedURL;
+  }
+
+  async function resolveAsset(asset: Asset, kind: "download" | "preview") {
     const busyKey = `${kind}:${asset.id}`;
     setAssetBusy(busyKey);
     setError(null);
     try {
-      const response = await fetch(path, { cache: "no-store" });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      if (data.available === false) {
-        setAssetResolutions((current) => ({
-          ...current,
-          [asset.id]: { available: false, unavailable_reason: data.unavailable_reason || "Attachment unavailable" }
-        }));
-        return;
-      }
-      const field = kind === "preview" ? "preview_url" : "download_url";
-      const signedURL = data[field];
-      if (typeof signedURL !== "string" || signedURL === "") throw new Error(`The attachment ${kind} URL was not returned.`);
-      setAssetResolutions((current) => ({
-        ...current,
-        [asset.id]: { ...current[asset.id], available: true, [field]: signedURL }
-      }));
+      const signedURL = await getSignedAssetURL(asset, kind);
       if (kind === "download") window.location.assign(signedURL);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setAssetBusy((current) => current === busyKey ? null : current);
+    }
+  }
+
+  async function toggleMarkdownPreview(asset: Asset) {
+    if (expandedMarkdownPreviews.has(asset.id)) {
+      setExpandedMarkdownPreviews((current) => {
+        const next = new Set(current);
+        next.delete(asset.id);
+        return next;
+      });
+      return;
+    }
+
+    if (markdownPreviewBodies[asset.id] !== undefined) {
+      setExpandedMarkdownPreviews((current) => new Set(current).add(asset.id));
+      return;
+    }
+
+    const busyKey = `preview:${asset.id}`;
+    setAssetBusy(busyKey);
+    setMarkdownPreviewErrors((current) => {
+      const next = { ...current };
+      delete next[asset.id];
+      return next;
+    });
+    try {
+      const signedURL = await getSignedAssetURL(asset, "preview");
+      const response = await fetch(signedURL, { cache: "no-store" });
+      if (!response.ok) throw new Error(`Preview download failed with HTTP ${response.status}`);
+      const body = await response.text();
+      setMarkdownPreviewBodies((current) => ({ ...current, [asset.id]: body }));
+      setExpandedMarkdownPreviews((current) => new Set(current).add(asset.id));
+    } catch (err) {
+      setMarkdownPreviewErrors((current) => ({
+        ...current,
+        [asset.id]: err instanceof Error ? err.message : String(err)
+      }));
+    } finally {
+      setAssetBusy((current) => current === busyKey ? null : current);
+    }
+  }
+
+  async function downloadAllAttachments(message: Message) {
+    const assets = message.assets.filter((asset) => asset.download_path && !asset.purged_at && assetResolutions[asset.id]?.available !== false);
+    if (assets.length === 0) return;
+    setDownloadAllBusy(message.id);
+    setError(null);
+    try {
+      const results = await Promise.allSettled(assets.map(async (asset) => ({ asset, url: await getSignedAssetURL(asset, "download") })));
+      let failed = 0;
+      for (const result of results) {
+        if (result.status === "rejected") {
+          failed += 1;
+          continue;
+        }
+        const link = document.createElement("a");
+        link.href = result.value.url;
+        link.download = result.value.asset.file_name;
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+      if (failed > 0) setError(`${failed} attachment${failed === 1 ? "" : "s"} could not be downloaded.`);
+    } finally {
+      setDownloadAllBusy((current) => current === message.id ? null : current);
     }
   }
 
@@ -359,7 +444,15 @@ export function ThreadView({ threadId }: { threadId: string }) {
                       <MessageContent body={message.body} contentType={message.body_content_type} />
                       {message.assets.length > 0 ? (
                         <section className="flex flex-col gap-4" aria-label="Attachments">
-                          <span className="font-mono text-xs tracking-[0.1em] text-muted-foreground uppercase">Attachments</span>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <span className="font-mono text-xs tracking-[0.1em] text-muted-foreground uppercase">Attachments</span>
+                            {message.assets.length > 1 && message.assets.some((asset) => asset.download_path && !asset.purged_at) ? (
+                              <Button variant="outline" size="sm" disabled={downloadAllBusy === message.id} onClick={() => void downloadAllAttachments(message)}>
+                                {downloadAllBusy === message.id ? <Spinner data-icon="inline-start" /> : <DownloadIcon data-icon="inline-start" />}
+                                Download all attachments
+                              </Button>
+                            ) : null}
+                          </div>
                           <div className="grid gap-4">
                             {message.assets.map((asset) => {
                               const resolution = assetResolutions[asset.id];
@@ -367,9 +460,12 @@ export function ThreadView({ threadId }: { threadId: string }) {
                               const unavailableReason = resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable";
                               const previewBusy = assetBusy === `preview:${asset.id}`;
                               const downloadBusy = assetBusy === `download:${asset.id}`;
+                              const markdownPreviewOpen = expandedMarkdownPreviews.has(asset.id);
+                              const markdownPreviewBody = markdownPreviewBodies[asset.id];
+                              const markdownPreviewError = markdownPreviewErrors[asset.id];
                               return (
                                 <Card size="sm" key={asset.id}>
-                                  {!asset.purged_at && !unavailable && resolution?.preview_url ? (
+                                  {!asset.purged_at && !unavailable && isPreviewableImage(asset) && resolution?.preview_url ? (
                                     // eslint-disable-next-line @next/next/no-img-element
                                     <img className="max-h-[32rem] w-full border-b bg-muted object-contain" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
                                   ) : null}
@@ -386,13 +482,26 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                     </div>
                                   </CardHeader>
                                   <CardContent className="flex flex-col gap-4">
+                                    {markdownPreviewOpen && markdownPreviewBody !== undefined ? (
+                                      <div className="border-t pt-4">
+                                        <MessageContent body={markdownPreviewBody} contentType="text/markdown" />
+                                      </div>
+                                    ) : null}
+                                    {markdownPreviewError ? (
+                                      <Alert variant="destructive"><AlertTitle>Could not preview Markdown attachment</AlertTitle><AlertDescription>{markdownPreviewError}</AlertDescription></Alert>
+                                    ) : null}
                                     {asset.purged_at ? (
                                       <Alert variant="destructive"><AlertTitle>Attachment deleted by deployment owner</AlertTitle></Alert>
                                     ) : unavailable ? (
                                       <Alert variant="destructive"><AlertTitle>Attachment unavailable</AlertTitle><AlertDescription>{unavailableReason}</AlertDescription></Alert>
                                     ) : (
                                       <div className="flex flex-wrap gap-3">
-                                        {asset.preview_path && !resolution?.preview_url && (!isPreviewableImage(asset) || resolution?.preview_failed) ? (
+                                        {asset.preview_path && isMarkdownAsset(asset) ? (
+                                          <Button variant="outline" disabled={previewBusy} onClick={() => void toggleMarkdownPreview(asset)}>
+                                            {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
+                                            {markdownPreviewOpen ? "Hide preview" : markdownPreviewError ? "Retry preview" : "Preview Markdown"}
+                                          </Button>
+                                        ) : asset.preview_path && !resolution?.preview_url && (!isPreviewableImage(asset) || resolution?.preview_failed) ? (
                                           <Button variant="outline" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
                                             {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
                                             {resolution?.preview_failed ? "Retry preview" : "Preview"}
@@ -401,7 +510,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                         {asset.download_path ? (
                                           <Button variant="outline" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
                                             {downloadBusy ? <Spinner data-icon="inline-start" /> : <DownloadIcon data-icon="inline-start" />}
-                                            Open attachment
+                                            Download attachment
                                           </Button>
                                         ) : null}
                                       </div>

@@ -861,7 +861,7 @@ func (s *Service) signedAssetURL(ctx context.Context, auth types.AuthContext, as
 	if asset.PurgedAt != nil {
 		return "", CodedError{Code: "ATTACHMENT_PURGED", Message: "Attachment deleted by deployment owner."}
 	}
-	if inline && (asset.MimeType == nil || !strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/")) {
+	if inline && !supportsDashboardInlinePreview(asset) {
 		return "", CodedError{Code: "INVALID_ARGUMENT", Message: "This attachment type does not support inline preview."}
 	}
 	if err := s.inspectAvailableAsset(ctx, asset); err != nil {
@@ -1505,6 +1505,16 @@ func (s *Service) signedOwnerContentAssetURL(ctx context.Context, ownerContext O
 		return "", err
 	}
 	return s.createSignedAssetURL(ctx, *asset, validate.ClampSignedURLExpiry(expiresSeconds), inline)
+}
+
+func supportsDashboardInlinePreview(asset types.Asset) bool {
+	if asset.MimeType != nil {
+		mimeType := strings.ToLower(strings.TrimSpace(*asset.MimeType))
+		if strings.HasPrefix(mimeType, "image/") || strings.HasPrefix(mimeType, messageformat.Markdown) {
+			return true
+		}
+	}
+	return messageformat.IsMarkdownPath(asset.FileName)
 }
 
 func (s *Service) ListOwnerAPIKeys(ctx context.Context, authContext types.AuthContext) ([]types.APIKey, error) {

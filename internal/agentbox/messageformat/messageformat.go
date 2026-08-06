@@ -50,7 +50,7 @@ func Resolve(requested *string, body string, sourcePath string) (string, error) 
 // requires stronger Markdown signals for short messages so shell snippets,
 // logs, and quick chat replies do not get over-rendered.
 func Infer(body string, sourcePath string) string {
-	if isMarkdownPath(sourcePath) {
+	if IsMarkdownPath(sourcePath) {
 		return Markdown
 	}
 	text := strings.TrimSpace(body)
@@ -97,7 +97,7 @@ func Infer(body string, sourcePath string) string {
 	return Plain
 }
 
-func isMarkdownPath(path string) bool {
+func IsMarkdownPath(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".md" || ext == ".markdown" || ext == ".mdown" || ext == ".mkd"
 }
