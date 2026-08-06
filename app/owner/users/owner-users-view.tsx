@@ -602,7 +602,7 @@ export function OwnerUsersView() {
                   {credentialsPage.next_cursor ? (
                     <Button variant="outline" onClick={() => void loadMoreCredentials()} disabled={busy === "credentials:more"}>
                       {busy === "credentials:more" ? <Spinner data-icon="inline-start" /> : <KeyRoundIcon data-icon="inline-start" />}
-                      Load credentials
+                      Load more credentials
                     </Button>
                   ) : null}
                 </CardAction>
