@@ -75,7 +75,29 @@ AGENTBOX_MAINTENANCE_BYPASS_KEY=<the generated value>
 
 Deploy the reviewed backend commit, then deploy the dashboard commit with its
 normal `AGENTBOX_BACKEND_URL`. Do not place the maintenance bypass key in the
-dashboard environment or browser. The owner setup endpoints and health endpoint
+dashboard environment or browser.
+
+Both Vercel projects build from the same repository root and neither stores a
+framework setting, so a bare `vercel --prod` auto-detects Next.js and would ship
+the dashboard onto the backend project. Always pass the matching local config:
+
+```bash
+# backend (Go API)
+vercel --prod --yes --scope <scope> \
+  --local-config deploy/vercel/backend/vercel.json
+
+# dashboard (Next.js), pinned to its own project without re-linking the checkout
+VERCEL_ORG_ID=<team-id> VERCEL_PROJECT_ID=<dashboard-project-id> \
+  vercel --prod --yes --scope <scope> \
+  --local-config deploy/vercel/dashboard/vercel.json
+```
+
+After the backend deploy, confirm the build produced a Go lambda and not a
+Next.js route manifest. A backend deployment that lists dozens of `/api/*` app
+routes is the dashboard and must be redeployed with the backend local config.
+
+Production also requires `AGENTBOX_APP_PUBLIC_URL` set to the dashboard origin as
+a single absolute HTTPS origin; the API refuses to start without it. The owner setup endpoints and health endpoint
 are explicitly available during maintenance; after setup, the permanent owner's
 browser session is also allowed through the maintenance gate. All other browser
 traffic receives HTTP 503.
@@ -192,9 +214,24 @@ new product paths:
    attachment. Use the owner's API key, CLI profile, and MCP URL against normal
    endpoints and prove they cannot read that same private thread.
 10. Confirm every timeline entry still shows stable `User · Actor` attribution.
-11. Execute [`raycast-developer-mode-smoke.md`](raycast-developer-mode-smoke.md) on the local Mac against this exact deployed commit. Preserve sanitized evidence for all five filters, private creation, replies, ordered/colliding attachments, signed and unavailable states, visibility/self-revocation, per-installation rotation, owner non-bypass, and disabled-user invalidation.
-12. Execute [`chatgpt-file-attachment-smoke.md`](chatgpt-file-attachment-smoke.md) against this exact deployed commit. Refresh/recreate the connector, run Scan Tools when available, attach “the file I just created” without exposing an ID/path/URL, compare exact bytes, verify filename/MIME plus `User · ChatGPT` message/asset attribution and private R2 persistence, prove text-only posting still works, and prove a literal sandbox path creates no partial state.
-13. Drain the upload cleanup inventory in bounded batches before removing the
+11. Remote MCP connectors cannot pass the maintenance gate, because ChatGPT and
+    Claude cannot send `x-agentbox-maintenance-key`; discovery receives
+    `503 MAINTENANCE_MODE` and the host reports only a generic failure. Verify the
+    MCP contract now using the bypass header from the trusted shell, then perform
+    the actual ChatGPT/Claude/Raycast connector smokes after step 8 reopens writes:
+
+    ```bash
+    curl -fsS -X POST \
+      -H "x-agentbox-maintenance-key: $AGENTBOX_MAINTENANCE_BYPASS_KEY" \
+      -H 'content-type: application/json' \
+      -H 'accept: application/json, text/event-stream' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+      "https://YOUR-BACKEND/api/mcp?key=<connector-key>"
+    ```
+
+12. Execute [`raycast-developer-mode-smoke.md`](raycast-developer-mode-smoke.md) on the local Mac against this exact deployed commit. Preserve sanitized evidence for all five filters, private creation, replies, ordered/colliding attachments, signed and unavailable states, visibility/self-revocation, per-installation rotation, owner non-bypass, and disabled-user invalidation.
+13. Execute [`chatgpt-file-attachment-smoke.md`](chatgpt-file-attachment-smoke.md) against this exact deployed commit. Refresh/recreate the connector, run Scan Tools when available, attach “the file I just created” without exposing an ID/path/URL, compare exact bytes, verify filename/MIME plus `User · ChatGPT` message/asset attribution and private R2 persistence, prove text-only posting still works, and prove a literal sandbox path creates no partial state.
+14. Drain the upload cleanup inventory in bounded batches before removing the
     operator secret. Repeat until `attempted` is zero, then verify that expired,
     rejected, abandoned, and stale-finalization staging/final-candidate keys are
     gone while every asset-backed final key remains:
@@ -215,7 +252,7 @@ agentbox --profile owner doctor
 agentbox --profile owner list --json
 agentbox --profile owner search preservation-marker --json
 agentbox --profile owner get <owned-thread-id> --json
-agentbox --profile owner post <owned-thread-id> --message 'cutover smoke' --json
+agentbox --profile owner post <owned-thread-id> 'cutover smoke' --json
 agentbox --profile owner download <owned-thread-id> \
   --output ./tmp/cutover-download --json
 ```

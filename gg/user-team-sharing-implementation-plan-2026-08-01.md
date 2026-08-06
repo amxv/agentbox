@@ -390,7 +390,7 @@ Allowed statuses are `Pending`, `In progress`, `Code complete`, `Complete`, and 
 | 17. Raycast dashboard-parity workflows | Complete | `3d6fa74` | Raycast now provides paginated effective-access browse/search, bounded summaries, private creation, accessible-thread replies, ordered attachments, deterministic duplicate-name handling, signed/tombstoned asset behavior, stable attribution, and canonical team/public visibility management including committed self-revocation. |
 | 18. Raycast hardening, docs, CI, and runbook | Complete | `78b7e6b` | Raycast now has locked package verification in repository CI and `verify:cutover`, a developer-mode-only package contract with no universal deployment default or Store command, canonical dashboard onboarding and per-installation key documentation, updated public setup surfaces, credential-free fake smoke guidance, and an exact Phase 20 macOS/production verification runbook through migrations `0018`-`0020`. |
 | 19. ChatGPT-native MCP file attachments | Complete | `0ed1877` | `post_message.file` is the exact optional closed OpenAI file object; manual string/URL/path compatibility is gone; ordinary HTTP cannot invoke host-file ingestion; downloads are DNS-pinned, redirect-revalidated, SSRF-safe, timeout/size bounded, and transactionally compensated; CI/cutover run focused scanner/security checks; and the exact Phase 20 ChatGPT rediscovery/natural-artifact runbook is committed. |
-| 20. Credentialed production, Raycast, and ChatGPT cutover | Reserved for local agent | — | Pull the pushed Phase 19 checkpoint, confirm exact-head CI, then execute the production, local Raycast, and ChatGPT host runbooks with real credentials. |
+| 20. Credentialed production, Raycast, and ChatGPT cutover | Complete | `369ba43` | Executed 2026-08-06 against production. Verified backup/restore, backend domain rename, migrations `0001`-`0023`, permanent owner creation with 131-thread backfill, and identical pre/post content fingerprints. Dashboard, CLI, public links, ChatGPT host attachment, Claude connector, and Raycast developer mode all verified live. Multi-user team/invitation/purge matrix deliberately deferred (single-user deployment, zero teams, zero shares). |
 
 ### Checkpoint log
 
@@ -812,6 +812,20 @@ YYYY-MM-DD — Phase N / short slice name
 - Raycast: A clean `npm ci` completed, `npm run test` passed 11/11 with zero skips, `npm run typecheck`, official `ray lint -I`, and native `ray build -I -e dist` passed. The clean install reported three existing transitive npm advisories (two low, one high), unchanged and outside blocker scope.
 - Blocker state: F1-F6 are all implemented and proven through focused lifecycle regressions plus the complete direct matrix. No production database, R2, Vercel, Raycast, ChatGPT, or deployment credential was used.
 - Remaining: Commit and push this final ledger, run both exact-head verification gates, then require the GitHub Actions workflow for that exact pushed SHA to conclude successfully. Phase 20 remains reserved.
+
+
+2026-08-06 — Phase 20 / credentialed production cutover
+- Status: Complete
+- Commit deployed: `369ba43` (`docs: record final blocker validation`), exact-head CI run `30872628208` green.
+- Preflight: `bun run verify:chatgpt-files` and `bun run verify:cutover` passed locally against PostgreSQL 17.5 with `AGENTBOX_REQUIRE_POSTGRES_TESTS=1` and an enforced zero-skip scan, including 11/11 Raycast tests, `ray lint`, and `ray build`.
+- Backup: run `user-team-cutover-20260806T033434Z`, `ready: true`, zero issues. Rows threads=131 messages=193 assets=53 pending_uploads=1; orphans all zero. Objects: 53 referenced, 53 present, 0 missing, 53 copied to `agentbox-recovery/`, 0 unreferenced. Dump SHA-256 `40f054860c53673a98a95aaaca2d3b78f163a26faedaf34b5970f7671d37c8ad`, independently restore-tested into a disposable database with all four counts matching. Stored off deployment at `~/agentbox-backups/`.
+- Infrastructure: backend custom domain migrated from `agentbox.amaimmigration.com` to `agentbox-backend.ashray.xyz` (Cloudflare `ashray` profile, `A 76.76.21.21`, unproxied); old subdomain detached from the project. `AGENTBOX_APP_PUBLIC_URL=https://agentbox.ashray.xyz` added (newly required in production). `AGENTBOX_ALLOWED_ORIGINS` corrected from the backend's own dead domain to `https://chatgpt.com,https://chat.openai.com,https://claude.ai,https://www.claude.ai`.
+- Migration: maintenance mode verified on all four probes, `--through 0016`, owner created via one-time setup token as `ashraymallesh23@gmail.com`, then unbounded migrate to `0023`. Owner ID `usr_6b827926dbf022165d256690535042a3` exactly matched the preflight's precomputed backfill; 131 threads assigned, 0 unowned. Postcheck clean at `schema_version 0023`, no legacy tenant table or column, 0 bad ordinals.
+- Preservation: message/thread/asset fingerprints identical before and after cutover (`9d67650bf8fbe39a765fbaa266b3f65a`, `4ef7ed50d36fe4362233ebfefc3285bd`, `f17c785e6921af971d3ac6bca2227d4e`). Production had zero equal-timestamp message ties, so migration `0023`'s deterministic legacy backfill was unambiguous for this dataset.
+- Verification: dashboard browse/read/attachment preview; CLI `doctor`/`list` (131)/`search`/`get`/`post`/`download` with exact byte sizes; `User · Actor` attribution with exact legacy fallback for pre-cutover `chatgpt` messages; full public-link lifecycle including anonymous read, rotation, revocation, `noindex`, and no storage-key or owner-email leakage. ChatGPT host attachment round-tripped exactly: downloaded bytes hashed to `b2cdfc85...`, identical to the digest embedded in its content-addressed final key, with `User · ChatGPT` attribution and zero partial state from a rejected sandbox-path attempt. Claude connector authenticated and posted with `User · Claude` attribution. Raycast developer mode verified by the operator.
+- Deferred: the multi-user invitation/team/membership/disablement/purge matrix was not exercised live. The deployment has one user, zero teams, and zero shares, so those paths carry no production data today, and they remain covered by the PostgreSQL-backed suite.
+- Remaining: none for the cutover. Follow-up UX/defect items recorded in `.agents/gg/queue.md`.
+- Next: land the queue items and the runbook corrections recorded in the amendments below.
 
 ## Raycast Migration Trace
 
@@ -1938,6 +1952,48 @@ The reviewed implementation exposed that a normal presigned R2 PUT remains reusa
 ### 2026-08-04 — Legacy equal-timestamp order has one deterministic recoverable backfill
 
 The acceptance review established that timestamp-plus-ID sorting was never an authoritative content-order contract and that UUID lexical order could contradict write order whenever timestamps tied. New writes therefore use explicit transactional ordinals. Existing rows, however, contain no additional sequence signal from which an original order can be reconstructed when `created_at` values are identical. Migration `0023` uses the strongest recoverable deterministic legacy key—`created_at`, then stable row ID—exactly once to assign immutable positive ordinals. This does not claim to infer unknowable historical intent; it prevents any further reader-dependent or database-plan-dependent reordering after cutover. Phase 20 must compare pre/post manifests and inspect any operationally important legacy ties before reopening writes.
+
+### 2026-08-06 — Production deploys require an explicit per-project local config
+
+The cutover runbook said to "deploy the reviewed backend commit" without specifying how.
+Both Vercel projects build from the same repository root, and neither stores a framework
+setting, so a bare `vercel --prod` auto-detects Next.js from the root `package.json` and
+ships the dashboard onto the backend project. This happened during the live cutover: the
+first backend deploy replaced the Go API with a Next.js build, detected from a 37-route
+build log and a root response that changed from `302` to `404` against the previous
+known-good Go lambda. The deployment occurred inside the maintenance window before any
+migration, so no data was at risk, and redeploying with the correct flag restored the API.
+
+The backend must be deployed with `vercel --prod --yes --scope zue --local-config
+deploy/vercel/backend/vercel.json`, which supplies `framework: "go"`. The dashboard must
+use `deploy/vercel/dashboard/vercel.json`, pinned to its own project through
+`VERCEL_ORG_ID`/`VERCEL_PROJECT_ID` so the checkout's `.vercel` link is not mutated.
+Verify after every backend deploy that the build produced a Go lambda rather than a Next.js
+route manifest.
+
+### 2026-08-06 — Connector smoke tests cannot run inside the maintenance gate
+
+The runbook ordered the ChatGPT and Raycast smokes before reopening writes, but remote
+hosts cannot send `x-agentbox-maintenance-key`. During the cutover, adding the ChatGPT
+connector failed with a generic host-side error because `/api/mcp` returned
+`503 MAINTENANCE_MODE` to discovery. The credential and tool schema were already correct;
+only the gate blocked them. Behind the bypass header the same URL returned a valid
+`initialize` result and the exact six-tool list with the strict `post_message.file` object.
+
+Remote-connector verification is therefore only possible after writes reopen. The runbook
+should either move connector smokes after step 8, or add an allowance that lets a named
+connector credential pass the maintenance gate. Until then, operators should complete every
+gate-compatible check first, reopen writes, and treat the connector smokes as the final
+post-reopen step. For a single-user deployment this is safe because no other principal can
+write during the interval.
+
+### 2026-08-06 — Cutover runbook CLI examples do not match the CLI
+
+Two commands in `docs/user-team-sharing-production-cutover.md` cannot execute as written.
+`agentbox post <thread-id> --message '...'` fails with `flag provided but not defined:
+-message`; `post` takes the message as a positional argument, and `--message`/`-m` exists
+only on `create`. The visibility examples must also use `--publish`/`--unpublish` rather
+than any `--public` spelling. Both were corrected in the runbook after being hit live.
 
 ### 2026-08-04 — Attachment availability is resolved lazily per authorized asset
 
