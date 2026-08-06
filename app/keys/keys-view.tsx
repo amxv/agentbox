@@ -1,11 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CopyButton } from "../components/copy-button";
-import { AuthContext, fetchSession, signOutSession } from "../components/session";
-import { ThemeSwitcher } from "../components/theme-switcher";
+import { AppNav } from "../components/app-nav";
+import { AuthContext, fetchSession } from "../components/session";
 
 type Credential = {
   id: string;
@@ -128,13 +127,6 @@ export function KeysView() {
   const activeCount = useMemo(() => credentials.filter((item) => !item.revoked_at).length, [credentials]);
   const revokedCount = credentials.length - activeCount;
 
-  async function signOut() {
-    try {
-      await signOutSession();
-    } finally {
-      router.replace("/login");
-    }
-  }
 
   async function createCustomKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -250,22 +242,7 @@ export function KeysView() {
 
   return (
     <div className="dashboard-page">
-      <header className="site-header">
-        <div className="shell site-header__inner">
-          <Link className="brand" href="/">
-            <span className="brand__eyebrow">Agentbox</span>
-            <span className="brand__title">Credential management</span>
-          </Link>
-          <nav className="site-nav" aria-label="Credential management navigation">
-            <Link className="site-nav__link" href="/threads">Inbox</Link>
-            <Link className="site-nav__link" href="/onboarding">Connect agents</Link>
-            <Link className="site-nav__link" href="/">Home</Link>
-            {auth && <span className="session-chip">{auth.actor_name}</span>}
-            {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
-            <ThemeSwitcher />
-          </nav>
-        </div>
-      </header>
+      <AppNav title="Credential management" auth={auth} />
 
       <main className="dashboard-main shell">
         <section className="dashboard-header">

@@ -241,6 +241,53 @@ pre,
   color: var(--ink);
 }
 
+.site-nav__link--active {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.site-nav__link[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.app-nav {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 1.15rem;
+  row-gap: 0.6rem;
+}
+
+.app-nav__brand {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.app-nav__mark {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+}
+
+.app-nav__brand > span {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+@media (max-width: 720px) {
+  .site-header__inner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .app-nav {
+    justify-content: flex-start;
+  }
+}
+
 .button {
   display: inline-flex;
   align-items: center;

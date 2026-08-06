@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { AppNav } from "../../components/app-nav";
 import { attributionLabel } from "../../components/attribution";
 import { fetchSession, type AuthContext } from "../../components/session";
 import styles from "./owner-content.module.css";
@@ -157,14 +158,7 @@ export function OwnerContentView() {
 
   return (
     <main className={styles.page}>
-      <header className={styles.topbar}>
-        <Link href="/threads" className={styles.brand}>Agentbox</Link>
-        <nav>
-          <Link href="/owner/users">Users & teams</Link>
-          <Link href="/threads">Normal inbox</Link>
-          {auth && <span>{attributionLabel(auth.user_display_name, auth.actor_name)}</span>}
-        </nav>
-      </header>
+      <AppNav title="All content (read-only)" auth={auth} />
 
       <section className={styles.shell}>
         <div className={styles.warning}>

@@ -1,14 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CopyButton } from "../../components/copy-button";
 import { MessageContent } from "./message-content";
 import { MessageComposer } from "../../components/message-composer";
 import { postDashboardMessage } from "../../components/agentbox-write";
-import { AuthContext, fetchSession, signOutSession } from "../../components/session";
-import { ThemeSwitcher } from "../../components/theme-switcher";
+import { AppNav } from "../../components/app-nav";
+import { AuthContext, fetchSession } from "../../components/session";
 import { ThreadVisibilityControl } from "./thread-visibility-control";
 import { attributionLabel } from "../../components/attribution";
 
@@ -126,13 +125,6 @@ export function ThreadView({ threadId }: { threadId: string }) {
     setShowReplyComposer(false);
   }
 
-  async function signOut() {
-    try {
-      await signOutSession();
-    } finally {
-      router.replace("/login");
-    }
-  }
   const assetCount = useMemo(() => {
     return thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0;
   }, [thread]);
@@ -188,22 +180,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
   return (
     <div className="dashboard-page">
-      <header className="site-header">
-        <div className="shell site-header__inner">
-          <Link className="brand" href="/threads">
-            <span className="brand__eyebrow">Agentbox</span>
-            <span className="brand__title">Back to inbox</span>
-          </Link>
-          <nav className="site-nav" aria-label="Thread navigation">
-            <Link className="site-nav__link" href="/threads">Inbox</Link>
-            <Link className="site-nav__link" href="/keys">Keys</Link>
-            <Link className="site-nav__link" href="/">Home</Link>
-            {auth && <span className="session-chip">{attributionLabel(auth.user_display_name, auth.actor_name)}</span>}
-            {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
-            <ThemeSwitcher />
-          </nav>
-        </div>
-      </header>
+      <AppNav title="Thread" auth={auth} />
 
       <main className="dashboard-main shell">
         <section className="dashboard-header">

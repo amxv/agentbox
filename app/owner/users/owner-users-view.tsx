@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentboxMark } from "../../components/agentbox-mark";
-import { ThemeSwitcher } from "../../components/theme-switcher";
+import { AppNav } from "../../components/app-nav";
 import styles from "./owner-users.module.css";
 
 type User = {
@@ -435,10 +433,7 @@ export function OwnerUsersView() {
 
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <Link className={styles.brand} href="/threads"><AgentboxMark className={styles.mark}/><span>Agentbox</span><small>Owner</small></Link>
-        <nav className={styles.nav}><Link href="/owner/content">Content</Link><Link href="/threads">Inbox</Link><Link href="/keys">Credentials</Link><ThemeSwitcher/></nav>
-      </header>
+      <AppNav title="Users & teams" />
       <main className={styles.main}>
         <section className={styles.hero}>
           <div><p className={styles.eyebrow}>Deployment administration</p><h1>Users, teams, invitations.</h1><p>Manage deployment-wide identity without collapsing actor attribution. Teams overlap freely, while every thread remains private until it is explicitly shared.</p></div>

@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentboxMark } from "../components/agentbox-mark";
 import { CopyButton } from "../components/copy-button";
-import { ThemeSwitcher } from "../components/theme-switcher";
+import { AppNav } from "../components/app-nav";
 import styles from "./onboarding.module.css";
 
 type Connector = "chatgpt" | "claude" | "local" | "raycast";
@@ -189,10 +188,7 @@ export function OnboardingView() {
 
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <Link className={styles.brand} href="/threads"><AgentboxMark className={styles.mark}/><span>Agentbox</span></Link>
-        <nav className={styles.nav}><Link href="/threads">Inbox</Link><Link href="/keys">Credentials</Link><ThemeSwitcher/></nav>
-      </header>
+      <AppNav title="Connect agents" />
 
       <main className={styles.main}>
         <section className={styles.hero}>

@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageComposer } from "../components/message-composer";
-import { AuthContext, fetchSession, signOutSession } from "../components/session";
-import { ThemeSwitcher } from "../components/theme-switcher";
+import { AuthContext, fetchSession } from "../components/session";
+import { AppNav } from "../components/app-nav";
 import { createDashboardThread, postDashboardMessage } from "../components/agentbox-write";
 import { attributionLabel } from "../components/attribution";
 
@@ -171,13 +171,6 @@ export function InboxView() {
     }, 0);
   }, [threads]);
 
-  async function signOut() {
-    try {
-      await signOutSession();
-    } finally {
-      router.replace("/login");
-    }
-  }
 
   async function createThreadOnly() {
     const title = newThreadTitle.trim();
@@ -208,21 +201,7 @@ export function InboxView() {
 
   return (
     <div className="dashboard-page">
-      <header className="site-header">
-        <div className="shell site-header__inner">
-          <Link className="brand" href="/">
-            <span className="brand__eyebrow">Agentbox</span>
-            <span className="brand__title">Thread dashboard</span>
-          </Link>
-          <nav className="site-nav" aria-label="Inbox navigation">
-            <Link className="site-nav__link" href="/keys">Keys</Link>
-            <Link className="site-nav__link" href="/">Home</Link>
-            {auth && <span className="session-chip">{attributionLabel(auth.user_display_name, auth.actor_name)}</span>}
-            {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
-            <ThemeSwitcher />
-          </nav>
-        </div>
-      </header>
+      <AppNav title="Thread dashboard" auth={auth} />
 
       <main className="dashboard-main shell">
         <section className="dashboard-header">
