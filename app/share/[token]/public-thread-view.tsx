@@ -70,6 +70,10 @@ function formatBytes(value: number) {
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+function isImageAsset(asset: PublicAsset) {
+  return Boolean(asset.preview_path && asset.mime_type?.toLowerCase().startsWith("image/"));
+}
+
 export function PublicThreadView({ token }: { token: string }) {
   const [thread, setThread] = useState<PublicThread | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +108,44 @@ export function PublicThreadView({ token }: { token: string }) {
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  useEffect(() => {
+    if (!thread) return;
+    const controller = new AbortController();
+    const images = thread.messages.flatMap((message) => message.assets).filter((asset) => (
+      isImageAsset(asset) && !asset.purged_at && !asset.unavailable
+    ));
+
+    void Promise.all(images.map(async (asset) => {
+      if (!asset.preview_path) return;
+      try {
+        const response = await fetch(asset.preview_path, { cache: "no-store", signal: controller.signal });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.available === false || typeof data.preview_url !== "string" || data.preview_url === "") {
+          setAssetResolutions((current) => ({
+            ...current,
+            [asset.id]: {
+              available: false,
+              unavailable_reason: data.unavailable_reason || "Attachment preview unavailable"
+            }
+          }));
+          return;
+        }
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: { ...current[asset.id], available: true, preview_url: data.preview_url }
+        }));
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: { available: false, unavailable_reason: "Attachment preview unavailable" }
+        }));
+      }
+    }));
+
+    return () => controller.abort();
+  }, [thread]);
 
   async function download(asset: PublicAsset) {
     if (!asset.download_path || asset.purged_at) return;
@@ -211,11 +253,16 @@ export function PublicThreadView({ token }: { token: string }) {
                                 <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
                                 <em>{resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable"}</em>
                               </div> : <>
-                                {asset.preview_path && !resolution?.preview_url && <button type="button" className={styles.attachment} onClick={() => void preview(asset)} disabled={previewBusy === asset.id}>
+                                {asset.preview_path && !isImageAsset(asset) && !resolution?.preview_url && <button type="button" className={styles.attachment} onClick={() => void preview(asset)} disabled={previewBusy === asset.id}>
                                   <span className={styles.fileIcon}>◫</span>
                                   <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
                                   <em>{previewBusy === asset.id ? "Loading…" : "Load preview"}</em>
                                 </button>}
+                                {isImageAsset(asset) && !resolution && <div className={styles.attachment}>
+                                  <span className={styles.fileIcon}>◫</span>
+                                  <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "Image"} · {formatBytes(asset.size_bytes)}</small></span>
+                                  <em>Loading preview…</em>
+                                </div>}
                                 <button type="button" className={styles.attachment} onClick={() => void download(asset)} disabled={downloadBusy === asset.id}>
                                   <span className={styles.fileIcon}>↧</span>
                                   <span><strong>{asset.file_name}</strong><small>{asset.mime_type || "File"} · {formatBytes(asset.size_bytes)}</small></span>
