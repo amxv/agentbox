@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentbox CLI Release"
+  short_description: "Cut Agentbox CLI releases safely"
+  default_prompt: "Use $agentbox-cli-release to cut and verify the next Agentbox CLI release."
