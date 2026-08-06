@@ -306,7 +306,15 @@
   padding-top: 24px;
   border-top: 1px solid var(--border);
 }
-.principleNote span { padding: 6px 9px; border-radius: 999px; background: var(--accent); color: var(--accent-foreground); font-size: 11px; }
+.principleNote span {
+  padding: 6px 10px;
+  border: 1px solid var(--panel-active-border);
+  border-radius: 999px;
+  background: var(--panel-active-bg);
+  color: var(--panel-active-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
 .principleNote p { max-width: 620px; margin: 0 0 0 auto; color: var(--muted-foreground); font-size: 13px; line-height: 1.62; }
 
 .sectionIntro { max-width: 850px; }
@@ -348,7 +356,31 @@
 .engineeringGrid h3 { margin: 8px 0 0; font-size: 21px; letter-spacing: -.025em; }
 .surfaceList p,
 .engineeringGrid p { max-width: 560px; margin: 12px 0 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.65; }
-.surfaceList article > b { position: absolute; right: 22px; bottom: 18px; color: var(--muted-foreground); font-weight: 400; }
+.cardArrow {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  width: 18px;
+  height: 18px;
+  color: var(--muted-foreground);
+  transition: color 160ms ease, transform 160ms ease;
+}
+.surfaceList article:hover .cardArrow {
+  color: var(--foreground);
+  transform: translate(3px, -3px);
+}
+
+.linkArrow {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  transition: transform 160ms ease;
+}
+.secondaryAction:hover .linkArrow,
+.closingSecondary:hover .linkArrow,
+.engineeringLead a:hover .linkArrow {
+  transform: translate(3px, -3px);
+}
 
 .routingTable { margin-top: 48px; border: 1px solid var(--border); border-radius: var(--radius-xl); overflow: hidden; background: var(--card); }
 .routingHead,

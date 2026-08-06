@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ArrowUpRightIcon } from "lucide-react";
 import Link from "next/link";
 import { AgentboxMark } from "./components/agentbox-mark";
 import { InboxButton } from "./components/inbox-button";
@@ -84,7 +85,7 @@ const engineeringNotes = [
 const raycastCommands = ["Browse Threads", "Create Thread", "Post Message", "Check Connection"];
 
 function Arrow() {
-  return <span aria-hidden="true">↗</span>;
+  return <ArrowUpRightIcon className={styles.linkArrow} aria-hidden="true" />;
 }
 
 export default function Home() {
@@ -195,7 +196,7 @@ export default function Home() {
                 <small>{surface.kind}</small>
                 <h3>{surface.title}</h3>
                 <p>{surface.body}</p>
-                <b aria-hidden="true">↘</b>
+                <ArrowUpRightIcon className={styles.cardArrow} aria-hidden="true" />
               </article>
             ))}
           </div>

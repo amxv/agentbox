@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ArrowUpRightIcon } from "lucide-react";
 import Link from "next/link";
 import { AgentboxMark } from "../components/agentbox-mark";
 import { InboxButton } from "../components/inbox-button";
@@ -147,7 +148,10 @@ export default function SetupPage() {
             <p>Deploy the Agentbox core once, then let humans and their independently attributable credentials enter through the interface that fits them. Every user receives one unified accessible inbox.</p>
             <div className={styles.actions}>
               <a className={styles.primaryAction} href="#manual">Open the manual</a>
-              <a className={styles.secondaryAction} href="/setup-self-host.md">Open Markdown guide ↗</a>
+              <a className={styles.secondaryAction} href="/setup-self-host.md">
+                Open Markdown guide
+                <ArrowUpRightIcon className={styles.linkArrow} aria-hidden="true" />
+              </a>
             </div>
           </div>
 
@@ -168,7 +172,10 @@ export default function SetupPage() {
             {chapters.map((chapter) => <a href={`#chapter-${chapter.number}`} key={chapter.number}><span>{chapter.number}</span>{chapter.label}</a>)}
             <a href="#environment"><span>04</span>Environment</a>
             <a href="#verification"><span>05</span>Verification</a>
-            <a className={styles.copyGuide} href="/setup-self-host.md">Open Markdown guide ↗</a>
+            <a className={styles.copyGuide} href="/setup-self-host.md">
+              Open Markdown guide
+              <ArrowUpRightIcon className={styles.linkArrow} aria-hidden="true" />
+            </a>
           </aside>
 
           <div className={styles.manualBody}>
@@ -209,7 +216,10 @@ export default function SetupPage() {
           <h2>Copy the manual into any agent and deploy together.</h2>
           <div className={styles.actions}>
             <a className={styles.closingPrimary} href="/setup-self-host.md">Open Markdown guide</a>
-            <Link className={styles.closingSecondary} href="/raycast">Set up Raycast ↗</Link>
+            <Link className={styles.closingSecondary} href="/raycast">
+              Set up Raycast
+              <ArrowUpRightIcon className={styles.linkArrow} aria-hidden="true" />
+            </Link>
           </div>
         </section>
       </main>

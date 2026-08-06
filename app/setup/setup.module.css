@@ -67,7 +67,7 @@
 .hero h1 { max-width: 780px; margin: 22px 0 27px; font-size: clamp(58px, 6.4vw, 94px); }
 .heroCopy > p:not(.eyebrow) { max-width: 690px; margin: 0; color: var(--muted-foreground); font-size: 16px; line-height: 1.72; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
-.primaryAction, .closingPrimary, .secondaryAction, .closingSecondary { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0 16px; font-size: 14px; font-weight: 590; }
+.primaryAction, .closingPrimary, .secondaryAction, .closingSecondary { min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0 16px; font-size: 14px; font-weight: 590; }
 .primaryAction, .closingPrimary { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
 .primaryAction:hover, .closingPrimary:hover { background: color-mix(in oklch, var(--primary), var(--foreground) 8%); }
 .secondaryAction:hover, .closingSecondary:hover { background: var(--secondary); }
@@ -94,6 +94,18 @@
 .manualIndex a:hover { color: var(--foreground); }
 .copyGuide { min-height: 40px; display: inline-flex !important; grid-template-columns: none !important; align-items: center; justify-content: center; margin-top: 14px; border: 1px solid var(--primary) !important; border-radius: var(--radius-md); background: var(--primary); color: var(--primary-foreground) !important; padding: 0 12px !important; text-align: center; }
 .copyGuide:hover { background: color-mix(in oklch, var(--primary), var(--foreground) 8%) !important; }
+
+.linkArrow {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  transition: transform 160ms ease;
+}
+.secondaryAction:hover .linkArrow,
+.closingSecondary:hover .linkArrow,
+.copyGuide:hover .linkArrow {
+  transform: translate(3px, -3px);
+}
 
 .manualBody { min-width: 0; display: grid; gap: 100px; }
 .chapter > header, .reference > header, .verification > header { display: grid; grid-template-columns: 58px 1fr; gap: 26px; padding-bottom: 30px; border-bottom: 1px solid var(--border); }
