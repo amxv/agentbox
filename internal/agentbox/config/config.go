@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,48 +16,50 @@ const (
 )
 
 type Config struct {
-	DatabaseURL         string
-	DBPoolSize          int32
-	AllowedOrigins      []string
-	AdminKey            string
-	R2AccountID         string
-	R2AccessKeyID       string
-	R2SecretAccessKey   string
-	R2Bucket            string
-	R2PublicBaseURL     string
-	MaxFileSizeBytes    int64
-	MultipartLimitBytes int64
-	Environment         string
-	VercelEnvironment   string
-	AutoMigrate         bool
-	AppPublicURL        string
-	SessionCookieName   string
-	SessionSecret       string
-	TokenHashPepper     string
-	SecureCookies       bool
+	DatabaseURL          string
+	DBPoolSize           int32
+	AllowedOrigins       []string
+	AdminKey             string
+	R2AccountID          string
+	R2AccessKeyID        string
+	R2SecretAccessKey    string
+	R2Bucket             string
+	MaxFileSizeBytes     int64
+	MultipartLimitBytes  int64
+	Environment          string
+	VercelEnvironment    string
+	AutoMigrate          bool
+	MaintenanceMode      bool
+	MaintenanceBypassKey string
+	AppPublicURL         string
+	SessionCookieName    string
+	SessionSecret        string
+	TokenHashPepper      string
+	SecureCookies        bool
 }
 
 func LoadFromEnv() Config {
 	maxFileSize := int64FromEnv("AGENTBOX_MAX_FILE_SIZE_BYTES", DefaultMaxFileSizeBytes)
 	cfg := Config{
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		DBPoolSize:          int32FromEnv("AGENTBOX_DB_POOL_SIZE", DefaultDBPoolSize),
-		AllowedOrigins:      commaList(os.Getenv("AGENTBOX_ALLOWED_ORIGINS")),
-		AdminKey:            os.Getenv("AGENTBOX_ADMIN_KEY"),
-		R2AccountID:         os.Getenv("R2_ACCOUNT_ID"),
-		R2AccessKeyID:       os.Getenv("R2_ACCESS_KEY_ID"),
-		R2SecretAccessKey:   os.Getenv("R2_SECRET_ACCESS_KEY"),
-		R2Bucket:            os.Getenv("R2_BUCKET"),
-		R2PublicBaseURL:     strings.TrimRight(os.Getenv("R2_PUBLIC_BASE_URL"), "/"),
-		MaxFileSizeBytes:    maxFileSize,
-		MultipartLimitBytes: multipartLimit(maxFileSize),
-		Environment:         firstNonEmpty(os.Getenv("AGENTBOX_ENV"), os.Getenv("NODE_ENV")),
-		VercelEnvironment:   os.Getenv("VERCEL_ENV"),
-		AutoMigrate:         truthy(os.Getenv("AGENTBOX_AUTO_MIGRATE")),
-		AppPublicURL:        strings.TrimRight(os.Getenv("AGENTBOX_APP_PUBLIC_URL"), "/"),
-		SessionCookieName:   firstNonEmpty(os.Getenv("AGENTBOX_SESSION_COOKIE_NAME"), DefaultSessionCookieName),
-		SessionSecret:       os.Getenv("AGENTBOX_SESSION_SECRET"),
-		TokenHashPepper:     os.Getenv("AGENTBOX_TOKEN_HASH_PEPPER"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		DBPoolSize:           int32FromEnv("AGENTBOX_DB_POOL_SIZE", DefaultDBPoolSize),
+		AllowedOrigins:       commaList(os.Getenv("AGENTBOX_ALLOWED_ORIGINS")),
+		AdminKey:             os.Getenv("AGENTBOX_ADMIN_KEY"),
+		R2AccountID:          os.Getenv("R2_ACCOUNT_ID"),
+		R2AccessKeyID:        os.Getenv("R2_ACCESS_KEY_ID"),
+		R2SecretAccessKey:    os.Getenv("R2_SECRET_ACCESS_KEY"),
+		R2Bucket:             os.Getenv("R2_BUCKET"),
+		MaxFileSizeBytes:     maxFileSize,
+		MultipartLimitBytes:  multipartLimit(maxFileSize),
+		Environment:          firstNonEmpty(os.Getenv("AGENTBOX_ENV"), os.Getenv("NODE_ENV")),
+		VercelEnvironment:    os.Getenv("VERCEL_ENV"),
+		AutoMigrate:          truthy(os.Getenv("AGENTBOX_AUTO_MIGRATE")),
+		MaintenanceMode:      truthy(os.Getenv("AGENTBOX_MAINTENANCE_MODE")),
+		MaintenanceBypassKey: strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")),
+		AppPublicURL:         strings.TrimRight(os.Getenv("AGENTBOX_APP_PUBLIC_URL"), "/"),
+		SessionCookieName:    firstNonEmpty(os.Getenv("AGENTBOX_SESSION_COOKIE_NAME"), DefaultSessionCookieName),
+		SessionSecret:        os.Getenv("AGENTBOX_SESSION_SECRET"),
+		TokenHashPepper:      os.Getenv("AGENTBOX_TOKEN_HASH_PEPPER"),
 	}
 	cfg.SecureCookies = cfg.IsProduction()
 	if value := strings.TrimSpace(os.Getenv("AGENTBOX_SECURE_COOKIES")); value != "" {
@@ -70,6 +74,40 @@ func (c Config) IsProduction() bool {
 
 func (c Config) IsVercel() bool {
 	return os.Getenv("VERCEL") == "1" || c.VercelEnvironment != ""
+}
+
+// TrustedAppPublicURL validates and normalizes the dashboard origin used in
+// public links and connector setup material. Production deployments must use
+// an explicit HTTPS origin so backend request headers can never choose where
+// AgentBox sends users or persists connector configuration.
+func (c Config) TrustedAppPublicURL() (string, error) {
+	raw := strings.TrimSpace(c.AppPublicURL)
+	if raw == "" {
+		if c.IsProduction() {
+			return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL is required in production")
+		}
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must be an absolute dashboard origin: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must use http or https")
+	}
+	if c.IsProduction() && parsed.Scheme != "https" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must use https in production")
+	}
+	if parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must include a trusted host and no user information")
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must be an origin without a path")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return "", fmt.Errorf("AGENTBOX_APP_PUBLIC_URL must not include a query or fragment")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func multipartLimit(maxFileSize int64) int64 {

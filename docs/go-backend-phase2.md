@@ -1,30 +1,19 @@
-# Go Backend Phase 2 Notes
+# Go backend architecture
 
-Phase 2 adds the Go module and backend core while the TypeScript API remains the parity oracle.
+The Go backend is the canonical AgentBox service. It owns authentication, REST,
+MCP, PostgreSQL persistence, embedded migrations, R2 access, backup/preflight,
+and the native CLI contracts. The Next.js application is the browser dashboard
+and proxies its `/api/*` requests to the Go service.
 
-## Migration Entrypoint Strategy
+Use these maintained references:
 
-The Go repository ports the current idempotent `ensureSchema` behavior as `Repository.EnsureSchema(ctx)`. The migration entrypoint is now:
+- [`user-team-sharing-spec.md`](user-team-sharing-spec.md) for the product and authorization contract;
+- [`../public/setup-self-host.md`](../public/setup-self-host.md) for a fresh deployment;
+- [`user-team-sharing-production-cutover.md`](user-team-sharing-production-cutover.md) for an existing deployment;
+- [`user-team-sharing-backup-preflight.md`](user-team-sharing-backup-preflight.md) for PostgreSQL/R2 preservation evidence.
 
-```bash
-bun run db:migrate
-```
-
-which runs:
-
-```bash
-go run ./cmd/migrate
-```
-
-The Go API can still run schema creation at startup when `AGENTBOX_AUTO_MIGRATE=true`, but production rollout should prefer the explicit migration command.
-
-This preserves the current lazy-schema compatibility path while giving rollout a non-server migration command.
-
-## Vercel Upload Behavior
-
-The existing TypeScript implementation defaults to `AGENTBOX_MAX_FILE_SIZE_BYTES=26214400` (25 MiB), but Vercel Functions currently cap request and response payloads at 4.5 MB. The Go config therefore exposes:
-
-- `MaxFileSizeBytes`: the backend object/file limit, defaulting to 25 MiB for non-Vercel/self-hosted operation.
-- `MultipartLimitBytes`: capped to 4,500,000 bytes whenever `VERCEL=1` or `VERCEL_ENV` is set.
-
-Until a direct-upload flow is implemented in a later phase, the Go Vercel deployment must not advertise 25 MiB multipart uploads through a function request body.
+The ordered SQL files under `migrations/` are the only schema history. Run them
+explicitly with `bun run db:migrate`; production should keep
+`AGENTBOX_AUTO_MIGRATE=false`. Vercel multipart requests remain bounded by the
+platform payload limit, while larger attachments use the direct-to-R2 pending
+upload/finalization path.

@@ -82,11 +82,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			if activeName, ok := active.(string); ok && profileName == activeName {
 				prefix = "*"
 			}
-			tenant := ""
-			if slug, _ := profile["tenant_slug"].(string); slug != "" {
-				tenant = "\t" + slug
-			}
-			fmt.Fprintf(r.Stdout, "%s %s\t%s\t%s%s\n", prefix, profileName, profileBaseURL, profileSource, tenant)
+			fmt.Fprintf(r.Stdout, "%s %s\t%s\t%s\n", prefix, profileName, profileBaseURL, profileSource)
 		}
 		return nil
 	}
@@ -100,16 +96,26 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 		fs := newFlagSet("profiles add")
 		baseURL := fs.String("base-url", "", "Agentbox deployment base URL")
 		apiKey := fs.String("api-key", "", "Agentbox API key")
+		userID := fs.String("user-id", "", "deployment-global user ID metadata")
+		keyName := fs.String("key-name", "", "credential label metadata")
+		authType := fs.String("auth-type", "api_key", "profile authentication type metadata")
 		activate := fs.Bool("activate", false, "make this the active stored profile")
 		jsonOut := fs.Bool("json", false, "print raw JSON")
 		if err := parseFlags(fs, args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 || *baseURL == "" || *apiKey == "" {
-			return errors.New("Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--activate] [--json]")
+			return errors.New("Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--user-id <id>] [--key-name <name>] [--auth-type <type>] [--activate] [--json]")
 		}
 		name := fs.Arg(0)
-		store, err := profiles.SaveProfile(profiles.Profile{Name: name, BaseURL: *baseURL, APIKey: *apiKey}, *activate)
+		store, err := profiles.SaveProfile(profiles.Profile{
+			Name:     name,
+			BaseURL:  *baseURL,
+			APIKey:   *apiKey,
+			UserID:   strings.TrimSpace(*userID),
+			KeyName:  strings.TrimSpace(*keyName),
+			AuthType: strings.TrimSpace(*authType),
+		}, *activate)
 		if err != nil {
 			return err
 		}
@@ -185,9 +191,6 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 			"api_key_masked": profiles.MaskSecret(resolved.APIKey),
 			"source":         resolved.Source,
 			"config_path":    profiles.DefaultConfigPath(),
-			"tenant_id":      nullString(resolved.TenantID),
-			"tenant_slug":    nullString(resolved.TenantSlug),
-			"tenant_name":    nullString(resolved.TenantName),
 			"user_id":        nullString(resolved.UserID),
 			"key_name":       nullString(resolved.KeyName),
 			"auth_type":      nullString(resolved.AuthType),
@@ -195,11 +198,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 		if *jsonOut {
 			return printJSON(r.Stdout, result)
 		}
-		tenant := defaultString(resolved.TenantSlug, resolved.TenantID)
-		if tenant == "" {
-			tenant = "unknown-tenant"
-		}
-		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\t%s\n", resolved.Name, resolved.BaseURL, resolved.Source, tenant, profiles.MaskSecret(resolved.APIKey))
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\n", resolved.Name, resolved.BaseURL, resolved.Source, profiles.MaskSecret(resolved.APIKey))
 		return nil
 	default:
 		return fmt.Errorf("Unknown profiles command %q.", subcmd)
@@ -208,7 +207,7 @@ func (r *Runner) runProfiles(args []string, globalProfileName string) error {
 
 func (r *Runner) printProfilesSubcommandHelp(command string) {
 	usage := map[string]string{
-		"add": `Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--activate] [--json]
+		"add": `Usage: agentbox profiles add <name> --base-url <url> --api-key <key> [--user-id <id>] [--key-name <name>] [--auth-type <type>] [--activate] [--json]
 
 Create or update a stored CLI profile.`,
 		"remove": `Usage: agentbox profiles remove <name> [--json]
@@ -243,15 +242,6 @@ func profileStoreResult(key string, value string, store profiles.Store) map[stri
 
 func profileListing(profile profiles.Profile, source string) map[string]any {
 	listed := map[string]any{"name": profile.Name, "base_url": profile.BaseURL, "source": source}
-	if profile.TenantID != "" {
-		listed["tenant_id"] = profile.TenantID
-	}
-	if profile.TenantSlug != "" {
-		listed["tenant_slug"] = profile.TenantSlug
-	}
-	if profile.TenantName != "" {
-		listed["tenant_name"] = profile.TenantName
-	}
 	if profile.UserID != "" {
 		listed["user_id"] = profile.UserID
 	}

@@ -1,9 +1,11 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -17,19 +19,24 @@ import (
 )
 
 type Server struct {
-	auth types.AuthContext
-	svc  *service.Service
+	auth    types.AuthContext
+	svc     *service.Service
+	baseURL string
 }
 
-func New(auth types.AuthContext, svc *service.Service) *mcp.Server {
-	builder := &Server{auth: auth, svc: svc}
+func New(auth types.AuthContext, svc *service.Service, baseURLs ...string) *mcp.Server {
+	baseURL := ""
+	if len(baseURLs) > 0 {
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURLs[0]), "/")
+	}
+	builder := &Server{auth: auth, svc: svc, baseURL: baseURL}
 	return builder.build()
 }
 
-func NewHTTPHandler(auth types.AuthContext, svc *service.Service) http.Handler {
+func NewHTTPHandler(auth types.AuthContext, svc *service.Service, baseURLs ...string) http.Handler {
 	return mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server {
-			return New(auth, svc)
+			return New(auth, svc, baseURLs...)
 		},
 		&mcp.StreamableHTTPOptions{
 			Stateless:                  true,
@@ -103,26 +110,21 @@ func (s *Server) build() *mcp.Server {
 		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}, "openai/toolInvocation/invoking": "Posting to Agentbox…", "openai/toolInvocation/invoked": "Posted to Agentbox"},
 		Name:        "post_message",
 		Title:       "Post message",
-		Description: "Post a message to an Agentbox thread. Messages default to auto-detected Markdown/plain rendering; set body_content_type to text/markdown or text/plain when you know the format. To attach a file from ChatGPT, pass the uploaded conversation file ID, for example file_abc123. Do not pass a local filesystem path or plain filename.",
+		Description: "Post a message to an Agentbox thread. Messages default to auto-detected Markdown/plain rendering; set body_content_type to text/markdown or text/plain when you know the format. Optionally attach one ChatGPT file artifact using file.",
 		InputSchema: objectSchema(map[string]any{
 			"thread_id":         map[string]any{"type": "string", "minLength": 1},
 			"body":              map[string]any{"type": "string"},
 			"body_content_type": map[string]any{"type": "string", "enum": []string{"auto", "text/plain", "text/markdown"}},
 			"file": map[string]any{
-				"anyOf": []any{
-					map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"download_url": map[string]any{"type": "string", "format": "uri"},
-							"file_id":      map[string]any{"type": "string", "minLength": 1},
-							"mime_type":    map[string]any{"type": "string"},
-							"file_name":    map[string]any{"type": "string"},
-						},
-						"required":             []string{"download_url", "file_id"},
-						"additionalProperties": true,
-					},
-					map[string]any{"type": "string"},
+				"type": "object",
+				"properties": map[string]any{
+					"download_url": map[string]any{"type": "string"},
+					"file_id":      map[string]any{"type": "string"},
+					"mime_type":    map[string]any{"type": "string"},
+					"file_name":    map[string]any{"type": "string"},
 				},
+				"required":             []string{"download_url", "file_id"},
+				"additionalProperties": false,
 			},
 		}, []string{"thread_id"}),
 		OutputSchema: objectSchema(map[string]any{
@@ -130,6 +132,28 @@ func (s *Server) build() *mcp.Server {
 		}, []string{"message"}),
 		Annotations: annotations(false, false, true),
 	}, s.postMessage)
+	server.AddTool(&mcp.Tool{
+		Name:        "manage_thread_visibility",
+		Title:       "Manage thread visibility",
+		Description: "Read or atomically change a thread's team shares and public read-only link. With only thread_id, returns the current visibility and teams available to the acting user.",
+		InputSchema: objectSchema(map[string]any{
+			"thread_id": map[string]any{"type": "string", "minLength": 1},
+			"add_teams": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string", "minLength": 1},
+			},
+			"remove_teams": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string", "minLength": 1},
+			},
+			"public":                 map[string]any{"type": "boolean"},
+			"regenerate_public_link": map[string]any{"type": "boolean"},
+		}, []string{"thread_id"}),
+		OutputSchema: objectSchema(map[string]any{
+			"visibility": map[string]any{},
+		}, []string{"visibility"}),
+		Annotations: annotations(false, true, false),
+	}, s.manageThreadVisibility)
 	return server
 }
 
@@ -250,14 +274,46 @@ func (s *Server) postMessage(ctx context.Context, req *mcp.CallToolRequest) (*mc
 	return result("Posted message to Agentbox.", map[string]any{"message": message}), nil
 }
 
+func (s *Server) manageThreadVisibility(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		ThreadID             string   `json:"thread_id"`
+		AddTeams             []string `json:"add_teams"`
+		RemoveTeams          []string `json:"remove_teams"`
+		Public               *bool    `json:"public"`
+		RegeneratePublicLink bool     `json:"regenerate_public_link"`
+	}
+	if err := decodeArgs(req, &input); err != nil {
+		return errorResult(err), nil
+	}
+	if err := validate.ThreadID(input.ThreadID); err != nil {
+		return errorResult(err), nil
+	}
+	visibility, err := s.svc.ManageThreadVisibility(ctx, s.auth, input.ThreadID, s.baseURL, types.ManageThreadVisibilityInput{
+		AddTeams:             input.AddTeams,
+		RemoveTeams:          input.RemoveTeams,
+		Public:               input.Public,
+		RegeneratePublicLink: input.RegeneratePublicLink,
+	})
+	if err != nil {
+		return errorResult(err), nil
+	}
+	status := "Read Agentbox thread visibility."
+	if len(input.AddTeams) > 0 || len(input.RemoveTeams) > 0 || input.Public != nil || input.RegeneratePublicLink {
+		status = "Updated Agentbox thread visibility."
+	}
+	return result(status, map[string]any{"visibility": visibility}), nil
+}
+
 func parseFileInput(raw json.RawMessage) (*assets.ChatGPTFileInput, error) {
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil {
-		return &assets.ChatGPTFileInput{RawString: asString}, nil
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errors.New("file must be a ChatGPT file object")
 	}
 	var file types.ChatGPTFileReference
-	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, err
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&file); err != nil {
+		return nil, fmt.Errorf("invalid ChatGPT file object: %w", err)
 	}
 	if err := validate.FileReference(file.DownloadURL, file.FileID); err != nil {
 		return nil, err
@@ -342,7 +398,8 @@ func isInvalidArgument(err error) bool {
 		strings.Contains(message, "Too small: expected string") ||
 		message == "download_url and file_id are required" ||
 		message == "body_content_type must be text/plain, text/markdown, or auto" ||
-		strings.HasPrefix(message, "File was received as a plain string.")
+		message == "file must be a ChatGPT file object" ||
+		strings.HasPrefix(message, "invalid ChatGPT file object:")
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {

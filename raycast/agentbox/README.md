@@ -1,82 +1,99 @@
-# Agentbox Raycast Extension
+# AgentBox for Raycast
 
-Raycast commands for daily Agentbox workflows: browse latest messages, list and search threads, inspect messages, create threads from the post-message flow, post replies with attachments, copy content to the clipboard, and check the configured connection.
+AgentBox for Raycast is a **developer-mode extension** for one AgentBox user and one local Raycast installation. It is not a public Raycast Store package.
 
-This package is intentionally self-contained under `raycast/agentbox`. It uses npm and the Raycast extension CLI, talks to Agentbox through the existing HTTP API, and does not require the Go CLI or any bundled native binary at runtime.
+The extension uses the same deployment-global user/team authorization model as the dashboard, CLI, and other normal clients. A Raycast credential acts for one user, is attributed as `Raycast`, and can only use ordinary thread and attachment APIs. It cannot call MCP or owner-browser-only routes.
 
-## Setup
+## Supported workflows
 
-1. Install dependencies from this directory:
+- Browse and search every thread currently accessible to your user.
+- Filter by All, Private to Me, Shared with Me, one of your teams, or Public.
+- Inspect chronological messages with stable `User · Actor` attribution.
+- Create a private thread with an optional first message and attachments.
+- Select an accessible thread and post a reply with ordered attachments.
+- Download authorized attachments and see explicit deleted or unavailable states.
+- Share or unshare a thread with teams and manage its revocable read-only public URL.
+- Check health, authenticated identity, team access, and thread API access.
 
-   ```bash
-   npm install
-   ```
+## Create a dedicated installation credential
 
-2. Open the extension in Raycast development mode:
+Use the web dashboard as the primary setup path:
 
-   ```bash
-   npm run dev
-   ```
+1. Sign in as the user who will use this Raycast installation.
+2. Open **Onboarding** or **Credentials**.
+3. Open the **Raycast** connector card and create a connection.
+4. Copy the one-time setup material immediately. The full API key is not stored or shown again.
 
-3. Configure the Raycast extension preferences:
+Each Raycast installation must have its **own** credential. Do not reuse a ChatGPT, Claude, CLI, or another Raycast installation's key. Do not send the generated key to another person or commit it to a repository.
 
-   - `Agentbox URL`: the Agentbox dashboard or API proxy URL. For production, use `https://agentbox-black.vercel.app`.
-   - `Agentbox API Key`: an actor API key that can list, create, and update threads.
-   - `Attachment Download Folder`: optional folder for attachment download actions. If unset, downloads go to `~/Downloads/Agentbox`.
+The generated Raycast key has only these scopes:
 
-Each user needs to configure their own Agentbox URL and API key in Raycast preferences. The extension stores credentials only in Raycast preferences. It does not read or write Agentbox CLI profiles, does not need an admin key for daily use, and does not call the Go CLI.
+```text
+threads:read
+threads:write
+assets:read
+assets:write
+```
 
-## Sharing and Distribution
+`agentbox raycast-key "<installation label>"` remains available as an alternative user-scoped setup path. It creates a separate least-privilege credential for that installation; use a distinct label for every Mac or Raycast profile.
 
-For local or development installs, share the repository checkout. From `raycast/agentbox`, each user runs:
+## Install in Raycast developer mode
+
+On the macOS machine running Raycast, use the exact repository revision deployed for AgentBox:
 
 ```bash
-npm install
+cd raycast/agentbox
+npm ci
+npm run verify
 npm run dev
 ```
 
-Raycast will load the extension in development mode and prompt for that user's preferences.
+`npm run dev` invokes `ray develop` and imports the local extension into Raycast. Keep the development process running while testing changes.
 
-For private team distribution, this package is configured with Raycast owner `zue-ai`. After the branch is integrated and checks pass, a maintainer can publish it to the `zue-ai` private Raycast Store from `raycast/agentbox`:
+Set these Raycast extension preferences from the one-time onboarding material:
 
-```bash
-npm run publish
-```
+| Preference | Required | Value |
+| --- | --- | --- |
+| `baseUrl` | Yes | The AgentBox dashboard origin, without an `/api` suffix. |
+| `apiKey` | Yes | The dedicated one-time Raycast installation key. |
+| `downloadDirectory` | No | A local directory for downloaded attachments. |
 
-Do not publish from feature branches. Before publishing, verify the Raycast organization handle is still `zue-ai`, the `owner` field is present in `package.json`, the extension metadata is acceptable for the private Store, and no API keys, MCP URLs, thread contents, or signed attachment URLs are present in code, docs, screenshots, or release assets.
+The dashboard origin is intentional: the extension calls the normal `/api/*` proxy routes exposed by the dashboard deployment.
 
-The Raycast free team plan allows 5 commands across organization extensions. This private package intentionally publishes the five daily commands and leaves MCP URL generation to the Agentbox CLI:
+## Credential-free verification
 
-```bash
-agentbox mcp-url
-```
-
-Public Raycast Store distribution can happen later through Raycast's public publish pull request flow. Keep private/team publishing separate from the public Store metadata and review process.
-
-## Commands
-
-- `Latest Messages`: browse recent messages across threads, press Enter to copy message content, inspect context, open the source thread, and work with attachments.
-- `Search Threads`: search recent threads, press Enter to copy the visible thread/message content, inspect messages, open dashboard links, copy thread details, post replies, and work with attachments.
-- `List Threads`: browse recent threads, press Enter to copy the visible thread/message content, inspect messages, open dashboard links, copy thread details, post replies, and work with attachments.
-- `Post Message`: post a message or local attachments to an existing thread, or create a new thread with an optional first message and attachments.
-- `Check Connection`: verify preferences, `/api/health`, authenticated `/api/threads?limit=1`, and MCP URL construction.
-
-## Local Checks
-
-Run these from `raycast/agentbox` before handing off extension changes:
+These checks use fake HTTP responses and local package tooling. They do not require AgentBox, PostgreSQL, R2, Vercel, Raycast account, or production credentials:
 
 ```bash
-npm run lint
-npm run build
+npm ci
+npm run test
+npm run typecheck
+CI=1 NO_COLOR=1 npm run lint
+CI=1 NO_COLOR=1 npm run build
 ```
 
-For cross-repo validation, run the root checks required by the active rollout plan from the repository root.
+`npm run test` verifies page traversal, all five visibility filters, user/team metadata, visibility mutations, self-revocation rules, ordered uploads, duplicate attachment names, signed and tombstoned attachments, coded errors, and guards against tenant-era, storage-key, direct attachment-public-URL, or MCP-key assumptions.
 
-## Release Notes
+## Local macOS smoke checklist
 
-The package is ready for local and private/team installation once preferences are configured. Private `zue-ai` Store publishing should be done manually by the lead after integration. Public Raycast Store submission still needs final decisions outside this implementation phase:
+Run this only with a dedicated non-production test user or during the credentialed production cutover described in `docs/user-team-sharing-production-cutover.md`:
 
-- Replace or confirm the `author` value with the maintainer's Raycast username.
-- Replace or approve the current icon as the final production icon.
-- Resolve the repo-level Apache-2.0 preference versus Raycast manifest validation, which currently requires the extension manifest `license` field to remain `MIT`.
-- Add Store screenshots and review copy, taking care not to expose API keys, MCP URLs, thread contents, or attachment URLs.
+1. Launch **Check Connection** and verify health, user identity, teams, and authenticated thread access.
+2. Open **Browse Threads** and traverse more than one page under All, Private, Shared, one team, and Public filters.
+3. Search for a thread beyond the first page and confirm visibility plus `User · Actor` attribution.
+4. Create a private thread, then post a reply with two attachments, including duplicate basenames from different directories.
+5. Download an attachment and verify a purged or missing object shows an unavailable state instead of a download action.
+6. Add and remove team shares, enable/disable the public URL, and regenerate it once. Confirm the previous URL stops working.
+7. With a non-owner test user, remove the final team access path only after the warning, then confirm the thread disappears and direct read/post/download calls fail.
+8. Rotate only this Raycast connection, replace the preference with the new key, and confirm the old key fails while other user credentials continue to work.
+9. Disable the non-owner test user from the owner dashboard and confirm every credential for that user, including Raycast, stops authenticating.
+
+## Rotation, revocation, and recovery
+
+- Reopen **Onboarding** or **Credentials**, reconnect the Raycast connector, and copy the new one-time key.
+- Replace `apiKey` in this installation's Raycast preferences.
+- The prior Raycast key is revoked immediately; other installations and connector keys are unaffected.
+- Disabling the user revokes effective access for every credential belonging to that user.
+- If a key was lost before it was entered, create a new Raycast connection. AgentBox cannot redisplay the old secret.
+
+Do not publish this extension as part of the user/team migration. Public, private, or centrally managed Store distribution remains deferred; production import and smoke verification are reserved for the credentialed local Phase 20 handoff.

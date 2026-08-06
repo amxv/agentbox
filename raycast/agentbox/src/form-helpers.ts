@@ -9,6 +9,7 @@ import {
   uploadFileToPresignedUrl,
   uploadIntentFileFromPath,
 } from "./api";
+import { disambiguateUploadFileNames } from "./upload-file-names";
 
 export const BODY_FORMATS: Array<{ value: BodyContentType; title: string }> = [
   { value: "auto", title: "Auto" },
@@ -30,13 +31,18 @@ export async function uploadFilesForThread(
     return [];
   }
 
+  const displayNames = disambiguateUploadFileNames(paths);
+
   const files = await Promise.all(
-    paths.map(async (filePath) => {
+    paths.map(async (filePath, index) => {
       const info = await stat(filePath);
       if (!info.isFile()) {
         throw new Error(`${filePath} is not a file.`);
       }
-      return uploadIntentFileFromPath(filePath, info.size);
+      return {
+        ...(await uploadIntentFileFromPath(filePath, info.size)),
+        file_name: displayNames[index],
+      };
     }),
   );
 

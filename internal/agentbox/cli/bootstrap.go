@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"agentbox/internal/agentbox/profiles"
 )
@@ -37,112 +37,6 @@ func defaultExternalCommand(name string, args []string, stdin string, env map[st
 	return stdout.String(), stderr.String(), err
 }
 
-func (r *Runner) runInit(args []string, globalProfileName string) error {
-	fs := newFlagSet("init")
-	profileName := fs.String("profile-name", defaultString(globalProfileName, "local"), "stored profile name")
-	baseURL := fs.String("base-url", "", "Agentbox base URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
-	localKeyName := fs.String("local-key-name", "local", "API key name for this CLI")
-	chatgptKeyName := fs.String("chatgpt-key-name", "chatgpt", "API key name for ChatGPT")
-	skipDoctor := fs.Bool("skip-doctor", false, "skip the doctor verification step")
-	jsonOut := fs.Bool("json", false, "print raw JSON")
-	if err := parseFlags(fs, args); err != nil {
-		return err
-	}
-
-	reader := bufio.NewReader(r.Stdin)
-	if strings.TrimSpace(*baseURL) == "" {
-		value, err := promptRequired(reader, r.Stdout, "Agentbox base URL")
-		if err != nil {
-			return err
-		}
-		*baseURL = value
-	}
-	if strings.TrimSpace(*adminKey) == "" {
-		if value := strings.TrimSpace(os.Getenv("AGENTBOX_ADMIN_KEY")); value != "" {
-			*adminKey = value
-		}
-	}
-	if strings.TrimSpace(*adminKey) == "" {
-		value, err := promptRequired(reader, r.Stdout, "Agentbox admin API key")
-		if err != nil {
-			return err
-		}
-		*adminKey = value
-	}
-	if strings.TrimSpace(*profileName) == "" {
-		value, err := promptWithDefault(reader, r.Stdout, "Profile name", "local")
-		if err != nil {
-			return err
-		}
-		*profileName = value
-	}
-	if strings.TrimSpace(*localKeyName) == "" {
-		value, err := promptWithDefault(reader, r.Stdout, "Local API key name", "local")
-		if err != nil {
-			return err
-		}
-		*localKeyName = value
-	}
-	if strings.TrimSpace(*chatgptKeyName) == "" {
-		value, err := promptWithDefault(reader, r.Stdout, "ChatGPT API key name", "chatgpt")
-		if err != nil {
-			return err
-		}
-		*chatgptKeyName = value
-	}
-
-	localKey, err := r.createRemoteAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(*localKeyName))
-	if err != nil {
-		return err
-	}
-	chatgptKey, err := r.createRemoteAPIKey(strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), strings.TrimSpace(*chatgptKeyName))
-	if err != nil {
-		return err
-	}
-
-	store, err := profiles.SaveProfile(profiles.Profile{
-		Name:    strings.TrimSpace(*profileName),
-		BaseURL: strings.TrimSpace(*baseURL),
-		APIKey:  localKey.Secret,
-	}, true)
-	if err != nil {
-		return err
-	}
-
-	result := map[string]any{
-		"profile":         strings.TrimSpace(*profileName),
-		"base_url":        strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
-		"config_path":     profiles.DefaultConfigPath(),
-		"active_profile":  nullString(store.ActiveProfileName),
-		"doctor_skipped":  *skipDoctor,
-		"api_key_name":    localKey.Name,
-		"api_key_masked":  localKey.KeyMasked,
-		"chatgpt_key":     chatgptKey.Secret,
-		"chatgpt_name":    chatgptKey.Name,
-		"resolved_source": "config",
-		"mcp_url":         strings.TrimRight(strings.TrimSpace(*baseURL), "/") + "/api/mcp?key=" + url.QueryEscape(chatgptKey.Secret),
-	}
-	if *jsonOut {
-		if !*skipDoctor {
-			result["checks"] = r.doctorChecks(strings.TrimSpace(*profileName))
-		}
-		return printJSON(r.Stdout, result)
-	}
-
-	fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", *profileName, profiles.DefaultConfigPath())
-	fmt.Fprintf(r.Stdout, "Created local API key %q and saved it to the profile.\n", localKey.Name)
-	fmt.Fprintf(r.Stdout, "Created ChatGPT API key %q. Store this secret now: %s\n", chatgptKey.Name, chatgptKey.Secret)
-	fmt.Fprintf(r.Stdout, "ChatGPT MCP URL: %s\n\n", result["mcp_url"])
-	printChatGPTSteps(r.Stdout)
-	if !*skipDoctor {
-		if err := r.runDoctor(nil, strings.TrimSpace(*profileName)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *Runner) runConnect(args []string, profileName string) error {
 	if len(args) == 0 || args[0] != "chatgpt" {
 		return errors.New(`Usage: agentbox connect chatgpt [--json]`)
@@ -152,7 +46,7 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	if err := parseFlags(fs, args[1:]); err != nil {
 		return err
 	}
-	key, err := r.createTenantAPIKeyForProfile(profileName, "chatgpt", "chatgpt")
+	key, err := r.createProfileAPIKey(profileName, "chatgpt", "chatgpt")
 	if err != nil {
 		return err
 	}
@@ -178,112 +72,67 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 			"source":         cfg.Source,
 			"key_name":       key.Name,
 			"key_masked":     key.KeyMasked,
-			"tenant":         tenantMetadata(cfg.Profile),
 			"mcp_url":        endpoint.String(),
 			"mcp_url_masked": profiles.SanitizeURL(endpoint.String()),
 			"steps":          steps,
 		})
 	}
 	fmt.Fprintf(r.Stdout, "Profile: %s (%s)\n", cfg.ProfileName, cfg.Source)
-	if cfg.Profile.TenantSlug != "" || cfg.Profile.TenantID != "" {
-		fmt.Fprintf(r.Stdout, "Tenant: %s\n", tenantLabel(cfg.Profile))
-	}
+
 	fmt.Fprintf(r.Stdout, "Created ChatGPT API key %q. Store this secret now: %s\n", key.Name, key.Secret)
 	fmt.Fprintf(r.Stdout, "MCP URL: %s\n\n", endpoint.String())
 	printNumberedSteps(r.Stdout, "ChatGPT setup:", steps)
 	return nil
 }
 
-func (r *Runner) runProvision(args []string, profileName string) error {
-	if len(args) == 0 || args[0] != "tenant" {
-		return errors.New(`Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key]`)
+func (r *Runner) runOwner(args []string, profileName string) error {
+	if len(args) == 0 || args[0] != "setup-token" {
+		return errors.New("Usage: agentbox owner setup-token [--base-url <url>] [--app-url <url>] [--admin-key <key>] [--expires 30m] [--json]")
 	}
-	fs := newFlagSet("provision tenant")
+	fs := newFlagSet("owner setup-token")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
-	tenantSlug := fs.String("tenant-slug", "", "tenant slug")
-	tenantName := fs.String("tenant-name", "", "tenant display name")
-	userEmail := fs.String("user-email", "", "initial tenant admin email")
-	userName := fs.String("user-name", "", "initial tenant admin display name")
-	password := fs.String("password", "", "initial password; if omitted, a setup token is returned")
-	createCLIKey := fs.Bool("create-cli-key", false, "create an initial tenant-scoped API key and save a CLI profile")
-	keyName := fs.String("key-name", "cli", "initial API key name")
-	provisionProfileName := fs.String("profile-name", "", "stored profile name for --create-cli-key")
+	appURL := fs.String("app-url", "", "dashboard URL used when the backend returns a relative setup path")
+	adminKey := fs.String("admin-key", "", "Agentbox deployment admin key")
+	expires := fs.Duration("expires", 30*time.Minute, "one-time token lifetime, up to 24h")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args[1:]); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("Usage: agentbox provision tenant [options]")
+		return errors.New("Usage: agentbox owner setup-token [options]")
+	}
+	if *expires <= 0 || *expires > 24*time.Hour {
+		return errors.New("--expires must be greater than zero and no more than 24h")
 	}
 	resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
 	if err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"tenant_slug": strings.TrimSpace(*tenantSlug),
-		"tenant_name": strings.TrimSpace(*tenantName),
-		"user_email":  strings.TrimSpace(*userEmail),
-		"user_name":   strings.TrimSpace(*userName),
-		"password":    *password,
-		"create_key":  *createCLIKey,
-		"key_name":    strings.TrimSpace(*keyName),
-	})
-	var result remoteProvisionTenantResult
-	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/tenants", http.MethodPost, bytes.NewReader(payload), &result); err != nil {
+	minutes := int((*expires + time.Minute - time.Nanosecond) / time.Minute)
+	payload, _ := json.Marshal(map[string]int{"expires_in_minutes": minutes})
+	var result struct {
+		Token     string `json:"token"`
+		Purpose   string `json:"purpose"`
+		ExpiresAt string `json:"expires_at"`
+		SetupURL  string `json:"setup_url"`
+	}
+	if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/owner/setup-token", http.MethodPost, bytes.NewReader(payload), &result); err != nil {
 		return err
 	}
-	profileSaved := ""
-	if *createCLIKey && result.APIKey.Secret != "" {
-		profileSaved = strings.TrimSpace(*provisionProfileName)
-		if profileSaved == "" {
-			profileSaved = result.Tenant.Slug
+	if strings.HasPrefix(result.SetupURL, "/") {
+		setupBaseURL := strings.TrimSpace(*appURL)
+		if setupBaseURL == "" {
+			setupBaseURL = resolvedBaseURL
 		}
-		if profileSaved == "" {
-			profileSaved = "local"
-		}
-		if _, err := profiles.SaveProfile(profiles.Profile{
-			Name:       profileSaved,
-			BaseURL:    resolvedBaseURL,
-			APIKey:     result.APIKey.Secret,
-			TenantID:   result.Tenant.ID,
-			TenantSlug: result.Tenant.Slug,
-			TenantName: result.Tenant.Name,
-			UserID:     result.User.ID,
-			KeyName:    result.APIKey.Name,
-			AuthType:   "api_key",
-		}, true); err != nil {
-			return err
-		}
+		result.SetupURL = strings.TrimRight(setupBaseURL, "/") + result.SetupURL
 	}
 	if *jsonOut {
-		output := map[string]any{
-			"tenant":       result.Tenant,
-			"user":         result.User,
-			"profile_name": profileSaved,
-		}
-		if result.SetupToken != "" {
-			output["setup_token"] = result.SetupToken
-		}
-		if result.APIKey.Secret != "" {
-			output["api_key"] = result.APIKey
-		}
-		return printJSON(r.Stdout, output)
+		return printJSON(r.Stdout, result)
 	}
-	fmt.Fprintf(r.Stdout, "Provisioned tenant %q (%s).\n", result.Tenant.Name, result.Tenant.ID)
-	fmt.Fprintf(r.Stdout, "Provisioned admin user %s.\n", result.User.Email)
-	if result.SetupToken != "" {
-		fmt.Fprintf(r.Stdout, "Setup token: %s\n", result.SetupToken)
-		fmt.Fprintln(r.Stdout, "Use this token as the initial password and rotate it after first sign-in.")
-	}
-	if result.APIKey.Secret != "" {
-		fmt.Fprintf(r.Stdout, "Created API key %q.\n", result.APIKey.Name)
-		fmt.Fprintf(r.Stdout, "Secret: %s\n", result.APIKey.Secret)
-		if profileSaved != "" {
-			fmt.Fprintf(r.Stdout, "Saved profile %q in %s.\n", profileSaved, profiles.DefaultConfigPath())
-		}
-		fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
-	}
+	fmt.Fprintf(r.Stdout, "Issued owner %s token.\n", result.Purpose)
+	fmt.Fprintf(r.Stdout, "Expires: %s\n", result.ExpiresAt)
+	fmt.Fprintf(r.Stdout, "Setup URL: %s\n", result.SetupURL)
+	fmt.Fprintln(r.Stdout, "Open this URL once in a trusted browser. It contains the one-time token, not the deployment secret.")
 	return nil
 }
 
@@ -312,6 +161,7 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel link --yes --project agentbox-go",
 		"vercel env add DATABASE_URL production",
 		"vercel env add AGENTBOX_ADMIN_KEY production",
+		"printf 'https://YOUR-DASHBOARD.vercel.app' | vercel env add AGENTBOX_APP_PUBLIC_URL production",
 		"vercel env add R2_ACCOUNT_ID production",
 		"vercel env add R2_ACCESS_KEY_ID production",
 		"vercel env add R2_SECRET_ACCESS_KEY production",
@@ -319,10 +169,10 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel env add AGENTBOX_ENV production",
 		"vercel --prod --yes -A deploy/vercel/backend/vercel.json",
 		"bun run db:migrate",
-		"agentbox provision tenant --base-url https://YOUR-BACKEND.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\" --tenant-slug default --tenant-name Default --user-email you@example.com --user-name \"Your Name\" --create-cli-key --profile-name production",
 		"vercel link --yes --project agentbox",
 		"printf 'https://YOUR-BACKEND.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production",
 		"vercel --prod --yes -A deploy/vercel/dashboard/vercel.json",
+		"agentbox owner setup-token --base-url https://YOUR-BACKEND.vercel.app --app-url https://YOUR-DASHBOARD.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\" --expires 30m",
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, map[string]any{"commands": commands})
@@ -336,43 +186,50 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 }
 
 type remoteAPIKey struct {
-	ID        string `json:"id"`
-	TenantID  string `json:"tenant_id"`
-	Name      string `json:"name"`
-	Secret    string `json:"key"`
-	KeyMasked string `json:"key_masked"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID          string   `json:"id"`
+	UserID      string   `json:"user_id"`
+	Name        string   `json:"name"`
+	Purpose     string   `json:"purpose"`
+	Secret      string   `json:"key,omitempty"`
+	KeyMasked   string   `json:"key_masked"`
+	TokenPrefix string   `json:"token_prefix"`
+	Scopes      []string `json:"scopes"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+	LastUsedAt  *string  `json:"last_used_at,omitempty"`
+	RevokedAt   *string  `json:"revoked_at,omitempty"`
 }
 
-type remoteTenant struct {
-	ID        string `json:"id"`
-	Slug      string `json:"slug"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+type remoteCredentialPage struct {
+	Credentials []remoteAPIKey `json:"credentials"`
+	Page        struct {
+		Limit      int     `json:"limit"`
+		Offset     int     `json:"offset"`
+		HasMore    bool    `json:"has_more"`
+		NextCursor *string `json:"next_cursor,omitempty"`
+	} `json:"page"`
 }
 
-type remoteUser struct {
-	ID          string `json:"id"`
-	TenantID    string `json:"tenant_id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Role        string `json:"role"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-type remoteProvisionTenantResult struct {
-	Tenant     remoteTenant `json:"tenant"`
-	User       remoteUser   `json:"user"`
-	APIKey     remoteAPIKey `json:"api_key"`
-	SetupToken string       `json:"setup_token"`
+type remoteRaycastSetup struct {
+	CredentialID    string   `json:"credential_id"`
+	Label           string   `json:"label"`
+	BaseURL         string   `json:"base_url"`
+	APIKey          string   `json:"api_key,omitempty"`
+	RepositoryURL   string   `json:"repository_url"`
+	ExtensionPath   string   `json:"extension_path"`
+	InstallCommands []string `json:"install_commands"`
+	Preferences     []struct {
+		Name   string `json:"name"`
+		Title  string `json:"title"`
+		Value  string `json:"value"`
+		Secret bool   `json:"secret,omitempty"`
+	} `json:"preferences"`
+	FinalCheck string `json:"final_check"`
 }
 
 func (r *Runner) runKeys(args []string, profileName string) error {
 	if len(args) == 0 {
-		return errors.New(`Usage: agentbox keys [create|list|revoke]`)
+		return errors.New(`Usage: agentbox keys [create|list|rotate|revoke]`)
 	}
 	if isHelpArg(args[0]) {
 		r.printCommandHelp("keys")
@@ -389,6 +246,8 @@ func (r *Runner) runKeys(args []string, profileName string) error {
 		return r.runKeysList(args[1:], profileName)
 	case "revoke":
 		return r.runKeysRevoke(args[1:], profileName)
+	case "rotate":
+		return r.runKeysRotate(args[1:], profileName)
 	default:
 		return fmt.Errorf("Unknown keys command %q.", args[0])
 	}
@@ -397,26 +256,35 @@ func (r *Runner) runKeys(args []string, profileName string) error {
 func (r *Runner) runKeysCreate(args []string, profileName string) error {
 	fs := newFlagSet("keys create")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]")
+		return errors.New("Usage: agentbox keys create <name> [--json]")
+	}
+	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
+		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
 	}
 	name := strings.TrimSpace(fs.Arg(0))
-	if strings.EqualFold(name, "raycast") && strings.TrimSpace(*adminKey) == "" {
-		return r.printRaycastKey(profileName, *jsonOut)
+	if strings.EqualFold(name, "raycast") {
+		return errors.New(`Use "agentbox raycast-key <installation-label>" so each Raycast installation has an independent least-privilege credential.`)
 	}
-	key, err := r.createRemoteAPIKeyForProfile(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey), name)
+	key, err := r.createProfileAPIKey(profileName, name, "custom")
 	if err != nil {
 		return err
 	}
 	result := map[string]any{
+		"id":         key.ID,
+		"user_id":    key.UserID,
 		"name":       key.Name,
+		"purpose":    key.Purpose,
 		"key":        key.Secret,
 		"key_masked": key.KeyMasked,
+		"scopes":     key.Scopes,
+		"created_at": key.CreatedAt,
+		"updated_at": key.UpdatedAt,
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, result)
@@ -433,43 +301,39 @@ func (r *Runner) runRaycastKey(args []string, profileName string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return errors.New("Usage: agentbox raycast-key [--json]")
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox raycast-key <installation-label> [--json]")
 	}
-	return r.printRaycastKey(profileName, *jsonOut)
+	return r.printRaycastKey(profileName, strings.TrimSpace(fs.Arg(0)), *jsonOut)
 }
 
-func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
-	cfg, err := r.runtimeConfig(profileName)
-	if err != nil {
-		return err
+func (r *Runner) printRaycastKey(profileName string, label string, jsonOut bool) error {
+	if strings.TrimSpace(label) == "" {
+		return errors.New("Raycast installation label is required.")
 	}
-	key, err := r.createTenantAPIKeyForProfile(profileName, "raycast", "raycast")
-	if err != nil {
-		return err
+	payload, _ := json.Marshal(map[string]string{"label": label})
+	var result struct {
+		Credential remoteAPIKey       `json:"credential"`
+		Setup      remoteRaycastSetup `json:"raycast_setup"`
 	}
-	result := map[string]any{
-		"profile":             cfg.ProfileName,
-		"source":              cfg.Source,
-		"tenant":              tenantMetadata(cfg.Profile),
-		"key_name":            key.Name,
-		"key":                 key.Secret,
-		"key_masked":          key.KeyMasked,
-		"raycast_base_url":    strings.TrimRight(cfg.BaseURL, "/"),
-		"raycast_api_key":     key.Secret,
-		"preference_base_url": "Agentbox URL",
-		"preference_api_key":  "Agentbox API Key",
+	if err := r.request("/api/raycast-installations", http.MethodPost, bytes.NewReader(payload), map[string]string{"content-type": "application/json"}, profileName, &result); err != nil {
+		return err
 	}
 	if jsonOut {
 		return printJSON(r.Stdout, result)
 	}
-	fmt.Fprintf(r.Stdout, "Created Raycast API key %q.\n", key.Name)
-	if cfg.Profile.TenantSlug != "" || cfg.Profile.TenantID != "" {
-		fmt.Fprintf(r.Stdout, "Tenant: %s\n", tenantLabel(cfg.Profile))
+	fmt.Fprintf(r.Stdout, "Created Raycast installation %q (%s).\n", result.Credential.Name, result.Credential.ID)
+	fmt.Fprintf(r.Stdout, "Repository: %s\n", result.Setup.RepositoryURL)
+	fmt.Fprintf(r.Stdout, "Extension path: %s\n", result.Setup.ExtensionPath)
+	fmt.Fprintln(r.Stdout, "Install commands:")
+	for _, command := range result.Setup.InstallCommands {
+		fmt.Fprintf(r.Stdout, "  %s\n", command)
 	}
 	fmt.Fprintln(r.Stdout, "Raycast preferences:")
-	fmt.Fprintf(r.Stdout, "Agentbox URL: %s\n", strings.TrimRight(cfg.BaseURL, "/"))
-	fmt.Fprintf(r.Stdout, "Agentbox API Key: %s\n", key.Secret)
+	for _, preference := range result.Setup.Preferences {
+		fmt.Fprintf(r.Stdout, "%s: %s\n", preference.Title, preference.Value)
+	}
+	fmt.Fprintf(r.Stdout, "Check: %s\n", result.Setup.FinalCheck)
 	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
 	return nil
 }
@@ -477,36 +341,44 @@ func (r *Runner) printRaycastKey(profileName string, jsonOut bool) error {
 func (r *Runner) runKeysList(args []string, profileName string) error {
 	fs := newFlagSet("keys list")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
+	limit := fs.Int("limit", 25, "maximum credentials to return (1-100)")
+	cursor := fs.String("cursor", "", "continuation cursor from a previous page")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	var data struct {
-		Keys []remoteAPIKey `json:"keys"`
+	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
+		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
 	}
-	if strings.TrimSpace(*adminKey) == "" && strings.TrimSpace(*baseURL) == "" {
-		if err := r.request("/api/keys", http.MethodGet, nil, nil, profileName, &data); err != nil {
-			return err
-		}
-	} else {
-		resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-		if err != nil {
-			return err
-		}
-		if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys", http.MethodGet, nil, &data); err != nil {
-			return err
-		}
+	path := fmt.Sprintf("/api/keys?limit=%d", *limit)
+	if strings.TrimSpace(*cursor) != "" {
+		path += "&cursor=" + url.QueryEscape(strings.TrimSpace(*cursor))
+	}
+	var data remoteCredentialPage
+	if err := r.request(path, http.MethodGet, nil, nil, profileName, &data); err != nil {
+		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
 	}
-	if len(data.Keys) == 0 {
+	if len(data.Credentials) == 0 {
 		fmt.Fprintln(r.Stdout, "No Agentbox API keys found.")
 		return nil
 	}
-	for _, key := range data.Keys {
-		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\n", key.Name, key.KeyMasked, key.UpdatedAt)
+	for _, key := range data.Credentials {
+		state := "active"
+		if key.RevokedAt != nil {
+			state = "revoked " + *key.RevokedAt
+		}
+		lastUsed := "never"
+		if key.LastUsedAt != nil {
+			lastUsed = *key.LastUsedAt
+		}
+		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\t%s\t%s\tlast-used=%s\n", key.ID, key.Name, key.Purpose, key.KeyMasked, state, lastUsed)
+	}
+	if data.Page.NextCursor != nil {
+		fmt.Fprintf(r.Stdout, "Next cursor: %s\n", *data.Page.NextCursor)
 	}
 	return nil
 }
@@ -514,50 +386,61 @@ func (r *Runner) runKeysList(args []string, profileName string) error {
 func (r *Runner) runKeysRevoke(args []string, profileName string) error {
 	fs := newFlagSet("keys revoke")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")
-	adminKey := fs.String("admin-key", "", "Agentbox admin API key")
+	adminKey := fs.String("admin-key", "", "deprecated; use an authenticated user profile")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]")
+		return errors.New("Usage: agentbox keys revoke <credential-id> [--json]")
 	}
-	name := strings.TrimSpace(fs.Arg(0))
+	if strings.TrimSpace(*adminKey) != "" || strings.TrimSpace(*baseURL) != "" {
+		return errors.New("--admin-key and --base-url are no longer supported for keys commands. Use an authenticated user profile.")
+	}
+	credentialID := strings.TrimSpace(fs.Arg(0))
 	var data struct {
 		Revoked string `json:"revoked"`
 	}
-	if strings.TrimSpace(*adminKey) == "" && strings.TrimSpace(*baseURL) == "" {
-		if err := r.request("/api/keys/"+url.PathEscape(name), http.MethodDelete, nil, nil, profileName, &data); err != nil {
-			return err
-		}
-	} else {
-		resolvedBaseURL, resolvedAdminKey, err := r.adminConnection(profileName, strings.TrimSpace(*baseURL), strings.TrimSpace(*adminKey))
-		if err != nil {
-			return err
-		}
-		if err := r.adminRequest(resolvedBaseURL, resolvedAdminKey, "/api/admin/keys/"+url.PathEscape(name), http.MethodDelete, nil, &data); err != nil {
-			return err
-		}
+	if err := r.request("/api/keys/"+url.PathEscape(credentialID), http.MethodDelete, nil, nil, profileName, &data); err != nil {
+		return err
 	}
 	if *jsonOut {
 		return printJSON(r.Stdout, data)
 	}
-	fmt.Fprintf(r.Stdout, "Revoked API key %q.\n", data.Revoked)
+	fmt.Fprintf(r.Stdout, "Revoked credential %s.\n", data.Revoked)
 	return nil
 }
 
-func (r *Runner) createRemoteAPIKeyForProfile(profileName string, explicitBaseURL string, explicitAdminKey string, name string) (remoteAPIKey, error) {
-	if strings.TrimSpace(explicitAdminKey) == "" && strings.TrimSpace(explicitBaseURL) == "" {
-		return r.createTenantAPIKeyForProfile(profileName, name, "")
+func (r *Runner) runKeysRotate(args []string, profileName string) error {
+	fs := newFlagSet("keys rotate")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
 	}
-	baseURL, adminKey, err := r.adminConnection(profileName, explicitBaseURL, explicitAdminKey)
-	if err != nil {
-		return remoteAPIKey{}, err
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox keys rotate <credential-id> [--json]")
 	}
-	return r.createRemoteAPIKey(baseURL, adminKey, name)
+	credentialID := strings.TrimSpace(fs.Arg(0))
+	var data struct {
+		Credential remoteAPIKey        `json:"credential"`
+		Setup      *remoteRaycastSetup `json:"raycast_setup,omitempty"`
+	}
+	if err := r.request("/api/keys/"+url.PathEscape(credentialID), http.MethodPatch, nil, nil, profileName, &data); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(r.Stdout, data)
+	}
+	fmt.Fprintf(r.Stdout, "Rotated credential %q (%s).\n", data.Credential.Name, data.Credential.ID)
+	fmt.Fprintf(r.Stdout, "Secret: %s\n", data.Credential.Secret)
+	if data.Setup != nil {
+		fmt.Fprintf(r.Stdout, "Raycast URL: %s\n", data.Setup.BaseURL)
+	}
+	fmt.Fprintln(r.Stdout, "Store this secret now; it is shown only in this response.")
+	return nil
 }
 
-func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, purpose string) (remoteAPIKey, error) {
+func (r *Runner) createProfileAPIKey(profileName string, name string, purpose string) (remoteAPIKey, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return remoteAPIKey{}, errors.New("API key name is required.")
@@ -571,20 +454,6 @@ func (r *Runner) createTenantAPIKeyForProfile(profileName string, name string, p
 		Key remoteAPIKey `json:"key"`
 	}
 	if err := r.request("/api/keys", http.MethodPost, bytes.NewReader(payloadBytes), map[string]string{"content-type": "application/json"}, profileName, &data); err != nil {
-		return remoteAPIKey{}, err
-	}
-	return data.Key, nil
-}
-
-func (r *Runner) createRemoteAPIKey(baseURL string, adminKey string, name string) (remoteAPIKey, error) {
-	if strings.TrimSpace(name) == "" {
-		return remoteAPIKey{}, errors.New("API key name is required.")
-	}
-	payload, _ := json.Marshal(map[string]string{"name": strings.TrimSpace(name)})
-	var data struct {
-		Key remoteAPIKey `json:"key"`
-	}
-	if err := r.adminRequest(baseURL, adminKey, "/api/admin/keys", http.MethodPost, bytes.NewReader(payload), &data); err != nil {
 		return remoteAPIKey{}, err
 	}
 	return data.Key, nil
@@ -631,6 +500,9 @@ func (r *Runner) adminRequest(baseURL string, adminKey string, path string, meth
 		return err
 	}
 	req.Header.Set("x-agentbox-admin-key", adminKey)
+	if maintenanceKey := strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")); maintenanceKey != "" {
+		req.Header.Set("x-agentbox-maintenance-key", maintenanceKey)
+	}
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
 	}
@@ -663,15 +535,18 @@ func (r *Runner) adminRequest(baseURL string, adminKey string, path string, meth
 
 func (r *Runner) printKeysSubcommandHelp(command string) {
 	usage := map[string]string{
-		"create": `Usage: agentbox keys create <name> [--base-url <url>] [--admin-key <key>] [--json]
+		"create": `Usage: agentbox keys create <name> [--json]
 
-Create or replace a named tenant-scoped API key. With a logged-in profile this uses the tenant API; --admin-key is a legacy/provisioning fallback. Use "raycast" to print Raycast preference values.`,
-		"list": `Usage: agentbox keys list [--base-url <url>] [--admin-key <key>] [--json]
+Create or rotate a named custom credential for the signed-in profile's user. Use "agentbox raycast-key <installation-label>" for Raycast.`,
+		"list": `Usage: agentbox keys list [--limit <n>] [--cursor <cursor>] [--json]
 
-List tenant API key names and masked key values. A logged-in profile lists the current tenant; --admin-key is a legacy/provisioning fallback.`,
-		"revoke": `Usage: agentbox keys revoke <name> [--base-url <url>] [--admin-key <key>] [--json]
+List active and revoked credential metadata for the signed-in profile's user.`,
+		"rotate": `Usage: agentbox keys rotate <credential-id> [--json]
 
-Revoke a tenant API key by name. A logged-in profile revokes inside the current tenant; --admin-key is a legacy/provisioning fallback.`,
+Rotate one active credential by stable ID and print the replacement secret once.`,
+		"revoke": `Usage: agentbox keys revoke <credential-id> [--json]
+
+Revoke one credential by stable ID while retaining its audit row.`,
 	}
 	if text, ok := usage[command]; ok {
 		fmt.Fprintln(r.Stdout, text)
@@ -697,61 +572,4 @@ func printNumberedSteps(output io.Writer, title string, steps []string) {
 	for i, step := range steps {
 		fmt.Fprintf(output, "%d. %s\n", i+1, step)
 	}
-}
-
-func tenantMetadata(profile profiles.Profile) map[string]any {
-	return map[string]any{
-		"id":   profile.TenantID,
-		"slug": profile.TenantSlug,
-		"name": profile.TenantName,
-	}
-}
-
-func tenantLabel(profile profiles.Profile) string {
-	parts := []string{}
-	if profile.TenantName != "" {
-		parts = append(parts, profile.TenantName)
-	}
-	if profile.TenantSlug != "" {
-		parts = append(parts, "slug "+profile.TenantSlug)
-	}
-	if profile.TenantID != "" {
-		parts = append(parts, "id "+profile.TenantID)
-	}
-	if len(parts) == 0 {
-		return "unknown"
-	}
-	return strings.Join(parts, ", ")
-}
-
-func promptRequired(reader *bufio.Reader, output io.Writer, label string) (string, error) {
-	for {
-		value, err := promptWithDefault(reader, output, label, "")
-		if err != nil {
-			return "", err
-		}
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value), nil
-		}
-	}
-}
-
-func promptWithDefault(reader *bufio.Reader, output io.Writer, label string, fallback string) (string, error) {
-	prompt := label
-	if fallback != "" {
-		prompt += " [" + fallback + "]"
-	}
-	prompt += ": "
-	if _, err := fmt.Fprint(output, prompt); err != nil {
-		return "", err
-	}
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	value := strings.TrimSpace(line)
-	if value == "" {
-		return fallback, nil
-	}
-	return value, nil
 }

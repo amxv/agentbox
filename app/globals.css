@@ -756,6 +756,69 @@ pre,
   gap: 1rem;
 }
 
+.inbox-filter-shell {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: var(--soft);
+}
+
+.inbox-filter-heading,
+.thread-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.inbox-filter-heading > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.inbox-filter-list,
+.visibility-badge-list {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.inbox-filter {
+  min-height: 2.2rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.inbox-filter:hover,
+.inbox-filter--active {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.inbox-filter--active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.visibility-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.65rem;
+  border: 1px solid var(--line);
+  padding: 0.2rem 0.45rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
 .thread-card,
 .message-card {
   display: grid;
@@ -1336,6 +1399,13 @@ pre,
   border-bottom: 1px solid var(--ink);
 }
 
+.asset-tombstone {
+  width: fit-content;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1435,6 +1505,12 @@ pre,
 
   .message-id-chip {
     max-width: 100%;
+  }
+
+  .inbox-filter-heading,
+  .thread-card__footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
@@ -1809,6 +1885,8 @@ pre,
 
 .composer-toggle-row {
   display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
   justify-content: flex-start;
   margin-bottom: 0.75rem;
 }
@@ -1910,6 +1988,125 @@ pre,
   .composer-card__header,
   .composer-title-row {
     align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.credential-create-stack,
+.credential-inventory,
+.raycast-setup-panel,
+.setup-command-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.credential-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(8rem, 1fr));
+  gap: 0.75rem;
+}
+
+.credential-inventory {
+  gap: 0.85rem;
+}
+
+.credential-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.credential-card__header,
+.credential-card__title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.credential-card__title-row {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.credential-card h3 {
+  font-size: 1rem;
+}
+
+.credential-id {
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.credential-state {
+  display: inline-flex;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.credential-state--active {
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.credential-state--revoked {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.credential-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin: 0;
+}
+
+.credential-metadata > div {
+  min-width: 0;
+}
+
+.credential-metadata dt {
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.credential-metadata dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.raycast-setup-panel .secret-row > div {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.raycast-setup-panel .secret-row code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 840px) {
+  .credential-stats,
+  .credential-metadata {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-card__header {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

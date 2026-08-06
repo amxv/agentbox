@@ -9,14 +9,26 @@ import { MessageComposer } from "../../components/message-composer";
 import { postDashboardMessage } from "../../components/agentbox-write";
 import { AuthContext, fetchSession, signOutSession } from "../../components/session";
 import { ThemeSwitcher } from "../../components/theme-switcher";
+import { ThreadVisibilityControl } from "./thread-visibility-control";
+import { attributionLabel } from "../../components/attribution";
 
 type Asset = {
   id: string;
   file_name: string;
   mime_type: string | null;
   size_bytes: number;
-  download_url?: string | null;
-  preview_url?: string | null;
+  download_path?: string | null;
+  preview_path?: string | null;
+  purged_at?: string | null;
+  unavailable?: boolean;
+  unavailable_reason?: string;
+};
+
+type AssetResolution = {
+  available: boolean;
+  download_url?: string;
+  preview_url?: string;
+  unavailable_reason?: string;
 };
 
 type Message = {
@@ -26,12 +38,17 @@ type Message = {
   body_content_type?: string | null;
   created_at: string;
   assets: Asset[];
+  created_by_user_display_name?: string;
+  created_by_actor_name?: string;
 };
 
 type Thread = {
   id: string;
   title: string;
   updated_at: string;
+  created_by: string;
+  created_by_user_display_name?: string;
+  created_by_actor_name?: string;
   messages: Message[];
 };
 
@@ -71,6 +88,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [showReplyComposer, setShowReplyComposer] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
+  const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
+  const [assetBusy, setAssetBusy] = useState<string | null>(null);
 
   const loadThread = useCallback(async function loadThread() {
     setLoading(true);
@@ -82,10 +101,11 @@ export function ThreadView({ threadId }: { threadId: string }) {
         return;
       }
       setAuth(session);
-      const response = await fetch(`/api/viewer/threads/${encodeURIComponent(threadId)}`, { cache: "no-store" });
+      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/view`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       setThread(data.thread);
+      setAssetResolutions({});
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -129,6 +149,43 @@ export function ThreadView({ threadId }: { threadId: string }) {
     });
   }
 
+  async function resolveAsset(asset: Asset, kind: "download" | "preview") {
+    const path = kind === "preview" ? asset.preview_path : asset.download_path;
+    if (!path || asset.purged_at) return;
+    const busyKey = `${kind}:${asset.id}`;
+    setAssetBusy(busyKey);
+    setError(null);
+    try {
+      const response = await fetch(path, { cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (data.available === false) {
+        setAssetResolutions((current) => ({
+          ...current,
+          [asset.id]: {
+            available: false,
+            unavailable_reason: data.unavailable_reason || "Attachment unavailable"
+          }
+        }));
+        return;
+      }
+      const field = kind === "preview" ? "preview_url" : "download_url";
+      const signedURL = data[field];
+      if (typeof signedURL !== "string" || signedURL === "") {
+        throw new Error(`The attachment ${kind} URL was not returned.`);
+      }
+      setAssetResolutions((current) => ({
+        ...current,
+        [asset.id]: { ...current[asset.id], available: true, [field]: signedURL }
+      }));
+      if (kind === "download") window.location.assign(signedURL);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAssetBusy((current) => current === busyKey ? null : current);
+    }
+  }
+
   return (
     <div className="dashboard-page">
       <header className="site-header">
@@ -141,7 +198,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
             <Link className="site-nav__link" href="/threads">Inbox</Link>
             <Link className="site-nav__link" href="/keys">Keys</Link>
             <Link className="site-nav__link" href="/">Home</Link>
-            {auth && <span className="session-chip">{auth.actor_name}</span>}
+            {auth && <span className="session-chip">{attributionLabel(auth.user_display_name, auth.actor_name)}</span>}
             {auth && <button className="site-nav__link" type="button" onClick={() => void signOut()}>Sign out</button>}
             <ThemeSwitcher />
           </nav>
@@ -152,7 +209,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
         <section className="dashboard-header">
           <div className="dashboard-header__row">
             <div>
-              <p className="section-label">Shared thread</p>
+              <p className="section-label">Accessible thread</p>
               <h1 className="dashboard-title">{thread?.title ?? "Thread"}</h1>
               <div className="thread-id-row">
                 <p className="dashboard-copy mono">
@@ -160,6 +217,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 </p>
                 <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" />
               </div>
+              {thread && <p className="thread-meta">Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</p>}
             </div>
             {thread && (
               <div className="card card--compact">
@@ -175,6 +233,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           <button className="button button--solid" type="button" onClick={() => setShowReplyComposer((value) => !value)}>
             {showReplyComposer ? "Close" : "+ Reply"}
           </button>
+          {thread && <ThreadVisibilityControl threadId={thread.id} />}
         </div>
 
         {showReplyComposer && (
@@ -237,7 +296,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                     <span className="message-index">#{index + 1}</span>
                     <span className="message-heading">
                       <span className="message-title-row">
-                        <strong className="message-author">{message.author}</strong>
+                        <strong className="message-author">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
                         {message.id && (
                           <span className="message-id-chip" onClick={(event) => event.stopPropagation()}>
                             <span className="message-id-label">Message ID</span>
@@ -262,23 +321,45 @@ export function ThreadView({ threadId }: { threadId: string }) {
                     {message.assets.length > 0 && (
                       <div className="asset-list">
                         <span className="asset-label">Attachments</span>
-                        {message.assets.map((asset) => (
-                          <div key={asset.id} className="asset-card">
-                            {asset.preview_url && (
-                              <a className="preview-link" href={asset.download_url ?? asset.preview_url} target="_blank" rel="noreferrer">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img className="preview-image" src={asset.preview_url} alt={asset.file_name} loading="lazy" />
-                              </a>
-                            )}
-                            <div className="asset-row">
-                              <span className="thread-title">{asset.file_name}</span>
-                              <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+                        {message.assets.map((asset) => {
+                          const resolution = assetResolutions[asset.id];
+                          const unavailable = asset.unavailable || resolution?.available === false;
+                          const unavailableReason = resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable";
+                          const previewBusy = assetBusy === `preview:${asset.id}`;
+                          const downloadBusy = assetBusy === `download:${asset.id}`;
+                          return (
+                            <div key={asset.id} className="asset-card">
+                              {!asset.purged_at && !unavailable && resolution?.preview_url && (
+                                <div className="preview-link">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img className="preview-image" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
+                                </div>
+                              )}
+                              <div className="asset-row">
+                                <span className="thread-title">{asset.file_name}</span>
+                                <span className="asset-meta">{asset.mime_type ?? "unknown type"} · {formatBytes(asset.size_bytes)}</span>
+                              </div>
+                              {asset.purged_at ? (
+                                <span className="asset-tombstone">Attachment deleted by deployment owner</span>
+                              ) : unavailable ? (
+                                <span className="asset-tombstone">{unavailableReason}</span>
+                              ) : (
+                                <div className="asset-row">
+                                  {asset.preview_path && !resolution?.preview_url && (
+                                    <button className="download-link" type="button" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
+                                      {previewBusy ? "Loading preview…" : "Load preview"}
+                                    </button>
+                                  )}
+                                  {asset.download_path && (
+                                    <button className="download-link" type="button" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
+                                      {downloadBusy ? "Signing…" : "Open attachment"}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                            {asset.download_url && (
-                              <a className="download-link" href={asset.download_url} target="_blank" rel="noreferrer">Open attachment</a>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>

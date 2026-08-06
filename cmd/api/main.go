@@ -33,7 +33,7 @@ func main() {
 	}
 
 	if cfg.AutoMigrate {
-		if err := opened.EnsureSchema(context.Background()); err != nil {
+		if err := opened.Migrate(context.Background()); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -67,16 +67,19 @@ func validateRuntimeConfig(cfg config.Config) error {
 	if cfg.R2Bucket == "" {
 		missing = append(missing, "R2_BUCKET")
 	}
-	if len(missing) == 0 {
-		return nil
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required backend configuration: %v", missing)
 	}
-	return fmt.Errorf("missing required backend configuration: %v", missing)
+	if _, err := cfg.TrustedAppPublicURL(); err != nil {
+		return err
+	}
+	return nil
 }
 
 type repositoryWithClose interface {
 	service.Repository
 	Close()
-	EnsureSchema(context.Context) error
+	Migrate(context.Context) error
 }
 
 func openRepository(ctx context.Context, cfg config.Config) (repositoryWithClose, error) {

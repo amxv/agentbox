@@ -51,39 +51,62 @@ type asset struct {
 }
 
 type message struct {
-	ID              string  `json:"id"`
-	ThreadID        string  `json:"thread_id"`
-	Author          string  `json:"author"`
-	Body            string  `json:"body"`
-	BodyContentType *string `json:"body_content_type"`
-	CreatedAt       string  `json:"created_at"`
-	Assets          []asset `json:"assets"`
+	ID                       string  `json:"id"`
+	ThreadID                 string  `json:"thread_id"`
+	Author                   string  `json:"author"`
+	Body                     string  `json:"body"`
+	BodyContentType          *string `json:"body_content_type"`
+	CreatedAt                string  `json:"created_at"`
+	Assets                   []asset `json:"assets"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name"`
+	CreatedByActorName       *string `json:"created_by_actor_name"`
 }
 
 type thread struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt string    `json:"created_at"`
-	UpdatedAt string    `json:"updated_at"`
-	CreatedBy string    `json:"created_by"`
-	Messages  []message `json:"messages,omitempty"`
+	ID                       string                        `json:"id"`
+	Title                    string                        `json:"title"`
+	CreatedAt                string                        `json:"created_at"`
+	UpdatedAt                string                        `json:"updated_at"`
+	CreatedBy                string                        `json:"created_by"`
+	CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+	CreatedByActorName       *string                       `json:"created_by_actor_name"`
+	VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
+	Messages                 []message                     `json:"messages,omitempty"`
 }
 
 type searchThreadResult struct {
-	ID                 string   `json:"id"`
-	Title              string   `json:"title"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
-	CreatedBy          string   `json:"created_by"`
-	MessageCount       int      `json:"message_count"`
-	LastMessagePreview string   `json:"last_message_preview"`
-	MatchedSnippets    []string `json:"matched_snippets"`
+	ID                       string                        `json:"id"`
+	Title                    string                        `json:"title"`
+	CreatedAt                string                        `json:"created_at"`
+	UpdatedAt                string                        `json:"updated_at"`
+	CreatedBy                string                        `json:"created_by"`
+	CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+	CreatedByActorName       *string                       `json:"created_by_actor_name"`
+	MessageCount             int                           `json:"message_count"`
+	LastMessagePreview       string                        `json:"last_message_preview"`
+	MatchedSnippets          []string                      `json:"matched_snippets"`
+	VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
 }
 
 type doctorCheck struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
 	Detail string `json:"detail,omitempty"`
+}
+
+type repeatedStringFlag []string
+
+func (values *repeatedStringFlag) String() string {
+	return strings.Join(*values, ",")
+}
+
+func (values *repeatedStringFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("team identifier must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
 }
 
 func Main(args []string) int {
@@ -168,10 +191,8 @@ func (r *Runner) run(args []string) error {
 		return r.runDoctor(cmdArgs, *profileName)
 	case "mcp-url":
 		return r.runMCPURL(cmdArgs, *profileName)
-	case "init":
-		return r.runInit(cmdArgs, *profileName)
-	case "provision":
-		return r.runProvision(cmdArgs, *profileName)
+	case "owner":
+		return r.runOwner(cmdArgs, *profileName)
 	case "connect":
 		return r.runConnect(cmdArgs, *profileName)
 	case "raycast-key":
@@ -188,6 +209,8 @@ func (r *Runner) run(args []string) error {
 		return r.runCreate(cmdArgs, *profileName)
 	case "get":
 		return r.runGet(cmdArgs, *profileName)
+	case "visibility":
+		return r.runVisibility(cmdArgs, *profileName)
 	case "download":
 		return r.runDownload(cmdArgs, *profileName)
 	case "post":
@@ -209,19 +232,19 @@ Options:
 
 Commands:
   profiles                inspect and manage CLI profiles
-  login                   sign in through the browser and save a tenant-scoped profile
+  login                   sign in through the browser and save a user-owned profile
   doctor                  check profile, API, MCP, and attachment access
   mcp-url                 print the full MCP URL for the selected profile
-  init                    save a local profile and optionally verify it
-  provision               create tenants and admin users with the deployment admin key
+  owner                   issue one-time owner bootstrap or recovery links
   connect                 print ChatGPT MCP setup instructions
-  raycast-key             create a Raycast API key and print preferences
+  raycast-key <label>     create an independent Raycast installation credential
   deploy                  print self-hosting deployment guidance
-  keys                    manage tenant-scoped API keys
+  keys                    manage credentials owned by the signed-in user
   list                    list recent threads
   search <query>          search threads by title and message body
   create <title>          create a thread
   get <thread-id>         read a thread
+  visibility <thread-id>  inspect or change thread visibility
   download <thread-id>    download all attachments from a thread
   post <thread-id>        post a message to a thread
 
@@ -245,36 +268,34 @@ Commands:
   show [name]             show the resolved profile`,
 		"login": `Usage: agentbox login [--base-url <url>] [--profile-name <name>] [--key-name <name>] [--no-open] [--timeout <seconds>] [--json]
 
-Open browser-based Agentbox auth, exchange the one-time CLI code for a tenant-scoped API key, and save a local profile.`,
+Open browser-based Agentbox auth, exchange the one-time CLI code for a user-owned credential, and save a local profile.`,
 		"doctor": `Usage: agentbox doctor [--json]
 
 Check profile, health, authenticated API access, signed download URLs, and MCP URL generation.`,
 		"mcp-url": `Usage: agentbox mcp-url [--json]
 
-Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized diagnostics and tenant metadata when available.`,
-		"init": `Usage: agentbox init [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--local-key-name local] [--chatgpt-key-name chatgpt] [--skip-doctor] [--json]
+Print the full MCP URL for the selected profile, including its API key. JSON output includes sanitized user and actor diagnostics when available.`,
+		"owner": `Usage: agentbox owner setup-token [--base-url <url>] [--app-url <url>] [--admin-key <key>] [--expires 30m] [--json]
 
-Legacy single-tenant bootstrap command. New deployments should use agentbox provision tenant, then agentbox login or tenant-scoped key commands.`,
-		"provision": `Usage: agentbox provision tenant --tenant-slug <slug> --tenant-name <name> --user-email <email> --user-name <name> [--password <password>] [--create-cli-key] [--key-name cli] [--profile-name <name>] [--base-url <url>] [--admin-key <key>] [--json]
-
-Create or update a tenant and initial tenant admin user through the deployment-owner admin API. No public signup endpoint is exposed.`,
+Issue a short-lived, one-time browser link that creates the permanent deployment owner or recovers that same owner account. The deployment secret is sent only to the backend and is never embedded in the browser URL.`,
 		"connect": `Usage: agentbox connect chatgpt [--json]
 
-Create a tenant-scoped ChatGPT key, then print the MCP URL and ChatGPT app setup steps. Store the printed MCP URL securely because it includes the key.`,
-		"raycast-key": `Usage: agentbox raycast-key [--json]
+Create a user-owned ChatGPT credential, then print the MCP URL and ChatGPT app setup steps. Store the printed MCP URL securely because it includes the key.`,
+		"raycast-key": `Usage: agentbox raycast-key <installation-label> [--json]
 
-Create a tenant-scoped Raycast key and print the Agentbox URL and API key preferences.`,
+Create an independently labeled user-owned Raycast credential and print the complete developer-mode setup bundle.`,
 		"deploy": `Usage: agentbox deploy vercel
 
 Print the Vercel commands for deploying the backend and optional dashboard. This command does not mutate Vercel projects or env vars.`,
 		"keys": `Usage: agentbox keys [command]
 
-Manage tenant-scoped API keys.
+Manage credentials owned by the signed-in profile's user.
 
 Commands:
-  create <name>           create or replace a named API key; use "raycast" for Raycast preferences
-  list                    show configured key names
-  revoke <name>           revoke a named API key`,
+  create <name>           create or replace a named custom API key
+  list                    page through active and revoked credential metadata
+  rotate <credential-id>  rotate one active credential by stable ID
+  revoke <credential-id>  revoke one credential by stable ID`,
 		"list": `Usage: agentbox list [-n <limit>] [--json]
 
 List recent Agentbox threads.`,
@@ -287,6 +308,9 @@ Create a new Agentbox thread. Use --message or --file to create the first messag
 		"get": `Usage: agentbox get <thread-id> [--json]
 
 Read an Agentbox thread and its messages.`,
+		"visibility": `Usage: agentbox visibility <thread-id> [--share-team <slug-or-id>] [--unshare-team <slug-or-id>] [--publish | --unpublish] [--regenerate-public-link] [--json]
+
+Read or atomically change a thread's team shares and public read-only link. Team flags may be repeated. Without mutation flags, prints the current visibility and teams available to the acting user.`,
 		"download": `Usage: agentbox download <thread-id> [-o <dir>] [--json]
 
 Download all attachments from a thread to a local directory.`,
@@ -367,6 +391,9 @@ func (r *Runner) request(path string, method string, body io.Reader, headers map
 	}
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	if maintenanceKey := strings.TrimSpace(os.Getenv("AGENTBOX_MAINTENANCE_BYPASS_KEY")); maintenanceKey != "" {
+		req.Header.Set("x-agentbox-maintenance-key", maintenanceKey)
 	}
 	res, err := r.HTTPClient.Do(req)
 	if err != nil {
@@ -452,22 +479,11 @@ func (r *Runner) runMCPURL(args []string, profileName string) error {
 			"profile":        cfg.ProfileName,
 			"source":         cfg.Source,
 		}
-		if cfg.Profile.TenantID != "" || cfg.Profile.TenantSlug != "" || cfg.Profile.TenantName != "" {
-			output["tenant"] = map[string]any{
-				"id":   cfg.Profile.TenantID,
-				"slug": cfg.Profile.TenantSlug,
-				"name": cfg.Profile.TenantName,
-			}
-		}
 		var me struct {
 			Auth types.AuthContext `json:"auth"`
 		}
-		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.TenantID != "" {
+		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil {
 			output["auth"] = me.Auth
-			output["tenant"] = map[string]any{
-				"id":   me.Auth.TenantID,
-				"slug": me.Auth.TenantSlug,
-			}
 		}
 		return printJSON(r.Stdout, output)
 	}
@@ -493,22 +509,6 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 	add("profile", "pass", fmt.Sprintf("%s (%s)", cfg.ProfileName, cfg.Source))
 	add("base URL", "pass", cfg.BaseURL)
 	add("API key", "pass", fmt.Sprintf("Profile %s includes key %s", cfg.ProfileName, profiles.MaskSecret(cfg.APIKey)))
-	if cfg.Profile.TenantID != "" || cfg.Profile.TenantSlug != "" || cfg.Profile.UserID != "" {
-		parts := []string{}
-		if cfg.Profile.TenantName != "" {
-			parts = append(parts, cfg.Profile.TenantName)
-		}
-		if cfg.Profile.TenantSlug != "" {
-			parts = append(parts, "slug "+cfg.Profile.TenantSlug)
-		}
-		if cfg.Profile.TenantID != "" {
-			parts = append(parts, "id "+cfg.Profile.TenantID)
-		}
-		if cfg.Profile.UserID != "" {
-			parts = append(parts, "user "+cfg.Profile.UserID)
-		}
-		add("profile tenant", "pass", strings.Join(parts, ", "))
-	}
 
 	healthURL, _ := url.JoinPath(strings.TrimRight(cfg.BaseURL, "/"), "/api/health")
 	if res, err := r.HTTPClient.Get(healthURL); err != nil {
@@ -530,21 +530,16 @@ func (r *Runner) doctorChecks(profileName string) []doctorCheck {
 		add("authenticated API", "pass", fmt.Sprintf("%d thread(s) visible", len(listed.Threads)))
 		var me struct {
 			Auth struct {
-				TenantID   string `json:"tenant_id"`
-				TenantSlug string `json:"tenant_slug"`
-				UserID     string `json:"user_id"`
-				ActorName  string `json:"actor_name"`
+				UserID    string `json:"user_id"`
+				ActorName string `json:"actor_name"`
 			} `json:"auth"`
 		}
-		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.TenantID != "" {
-			detail := me.Auth.TenantID
-			if me.Auth.TenantSlug != "" {
-				detail += " (" + me.Auth.TenantSlug + ")"
+		if err := r.request("/api/auth/me", http.MethodGet, nil, nil, profileName, &me); err == nil && me.Auth.UserID != "" {
+			detail := "user " + me.Auth.UserID
+			if me.Auth.ActorName != "" {
+				detail += " (" + me.Auth.ActorName + ")"
 			}
-			if me.Auth.UserID != "" {
-				detail += ", user " + me.Auth.UserID
-			}
-			add("resolved tenant", "pass", detail)
+			add("resolved user", "pass", detail)
 		}
 		asset, err := r.findRecentAsset(listed.Threads, profileName)
 		if err != nil {
@@ -610,6 +605,7 @@ func (r *Runner) runList(args []string, profileName string) error {
 	}
 	for _, thread := range data.Threads {
 		fmt.Fprintf(r.Stdout, "%s\t%s\t%s\n", thread.ID, thread.UpdatedAt, thread.Title)
+		fmt.Fprintf(r.Stdout, "  %s · Created by %s\n", visibilitySummaryLabel(thread.VisibilitySummary), attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
 	}
 	return nil
 }
@@ -647,6 +643,7 @@ func (r *Runner) runSearch(args []string, profileName string) error {
 	}
 	for _, thread := range data.Threads {
 		fmt.Fprintf(r.Stdout, "%s\t%s\t%d\t%s\n", thread.ID, thread.UpdatedAt, thread.MessageCount, thread.Title)
+		fmt.Fprintf(r.Stdout, "  %s · Created by %s\n", visibilitySummaryLabel(thread.VisibilitySummary), attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
 		if thread.LastMessagePreview != "" {
 			fmt.Fprintf(r.Stdout, "  %s\n", thread.LastMessagePreview)
 		}
@@ -737,6 +734,96 @@ func (r *Runner) runGet(args []string, profileName string) error {
 	}
 	printThread(r.Stdout, data.Thread)
 	return nil
+}
+
+func (r *Runner) runVisibility(args []string, profileName string) error {
+	fs := newFlagSet("visibility")
+	var shareTeams repeatedStringFlag
+	var unshareTeams repeatedStringFlag
+	fs.Var(&shareTeams, "share-team", "share with a team slug or ID; may be repeated")
+	fs.Var(&unshareTeams, "unshare-team", "remove a team share by slug or ID; may be repeated")
+	publish := fs.Bool("publish", false, "enable the public read-only link")
+	unpublish := fs.Bool("unpublish", false, "disable the public read-only link")
+	regenerate := fs.Bool("regenerate-public-link", false, "replace the active public link")
+	jsonOut := fs.Bool("json", false, "print raw JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("Usage: agentbox visibility <thread-id> [--share-team <slug-or-id>] [--unshare-team <slug-or-id>] [--publish | --unpublish] [--regenerate-public-link] [--json]")
+	}
+	if *publish && *unpublish {
+		return errors.New("Use only one of --publish or --unpublish.")
+	}
+	if *unpublish && *regenerate {
+		return errors.New("--regenerate-public-link cannot be combined with --unpublish.")
+	}
+
+	threadID := strings.TrimSpace(fs.Arg(0))
+	path := "/api/threads/" + url.PathEscape(threadID) + "/visibility"
+	mutation := len(shareTeams) > 0 || len(unshareTeams) > 0 || *publish || *unpublish || *regenerate
+	method := http.MethodGet
+	var body io.Reader
+	headers := map[string]string(nil)
+	if mutation {
+		method = http.MethodPatch
+		payload := types.ManageThreadVisibilityInput{
+			AddTeams:             append([]string(nil), shareTeams...),
+			RemoveTeams:          append([]string(nil), unshareTeams...),
+			RegeneratePublicLink: *regenerate,
+		}
+		if *publish || *unpublish {
+			public := *publish
+			payload.Public = &public
+		}
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(payloadBytes)
+		headers = map[string]string{"content-type": "application/json"}
+	}
+	var data struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := r.request(path, method, body, headers, profileName, &data); err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printJSON(r.Stdout, data)
+	}
+	printVisibility(r.Stdout, data.Visibility)
+	return nil
+}
+
+func printVisibility(w io.Writer, visibility types.ManagedThreadVisibility) {
+	fmt.Fprintf(w, "Thread: %s\n", visibility.ThreadID)
+	fmt.Fprintf(w, "Owner: %s\n", visibility.OwnerUserID)
+	if len(visibility.SharedTeams) == 0 {
+		fmt.Fprintln(w, "Team access: Private")
+	} else {
+		fmt.Fprintln(w, "Team access:")
+		for _, team := range visibility.SharedTeams {
+			fmt.Fprintf(w, "- %s (%s)\n", team.Name, team.Slug)
+		}
+	}
+	if visibility.Public {
+		if visibility.PublicURL != "" {
+			fmt.Fprintf(w, "Public: %s\n", visibility.PublicURL)
+		} else {
+			fmt.Fprintln(w, "Public: On")
+		}
+	} else {
+		fmt.Fprintln(w, "Public: Off")
+	}
+	if len(visibility.AvailableTeams) == 0 {
+		fmt.Fprintln(w, "Available teams: none")
+		return
+	}
+	fmt.Fprintln(w, "Available teams:")
+	for _, team := range visibility.AvailableTeams {
+		fmt.Fprintf(w, "- %s (%s)\n", team.Name, team.Slug)
+	}
 }
 
 func (r *Runner) runDownload(args []string, profileName string) error {
@@ -966,23 +1053,69 @@ func multipartBody(body string, bodyContentType string, assetPath string) (*byte
 func printThread(w io.Writer, thread thread) {
 	fmt.Fprintf(w, "# %s\n", thread.Title)
 	fmt.Fprintf(w, "id: %s\n", thread.ID)
-	fmt.Fprintf(w, "updated: %s\n\n", thread.UpdatedAt)
+	fmt.Fprintf(w, "updated: %s\n", thread.UpdatedAt)
+	fmt.Fprintf(w, "created by: %s\n", attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
+	fmt.Fprintf(w, "visibility: %s\n\n", visibilitySummaryLabel(thread.VisibilitySummary))
 	for _, message := range thread.Messages {
-		fmt.Fprintf(w, "--- %s · %s · %s\n", message.Author, message.CreatedAt, message.ID)
+		fmt.Fprintf(w, "--- %s · %s · %s\n", attributionLabel(message.CreatedByUserDisplayName, message.CreatedByActorName, message.Author), message.CreatedAt, message.ID)
 		fmt.Fprintln(w, message.Body)
 		if len(message.Assets) > 0 {
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Assets:")
 			for _, asset := range message.Assets {
-				location := asset.StorageKey
-				if asset.PublicURL != nil {
-					location = *asset.PublicURL
-				}
-				fmt.Fprintf(w, "- %s %s %s\n", asset.ID, asset.FileName, location)
+				fmt.Fprintf(w, "- %s %s %s\n", asset.ID, asset.FileName, asset.StorageKey)
 			}
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+func attributionLabel(userDisplayName *string, actorName *string, fallback string) string {
+	user := strings.TrimSpace(defaultStringValue(userDisplayName))
+	actor := strings.TrimSpace(defaultStringValue(actorName))
+	if user != "" && actor != "" && !strings.EqualFold(user, actor) {
+		return user + " · " + actor
+	}
+	if user != "" {
+		return user
+	}
+	if actor != "" {
+		return actor
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "Agentbox user"
+}
+
+func visibilitySummaryLabel(summary types.ThreadVisibilitySummary) string {
+	labels := []string{}
+	if summary.Private {
+		labels = append(labels, "Private")
+	}
+	for _, team := range summary.SharedTeams {
+		labels = append(labels, team.Name)
+	}
+	if summary.Public {
+		labels = append(labels, "Public")
+	}
+	if len(labels) == 0 {
+		if summary.OwnedByMe {
+			return "Owned"
+		}
+		if summary.SharedWithMe {
+			return "Shared"
+		}
+		return "Accessible"
+	}
+	return strings.Join(labels, ", ")
+}
+
+func defaultStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func printJSON(w io.Writer, value any) error {

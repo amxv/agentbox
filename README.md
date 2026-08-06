@@ -55,9 +55,24 @@ search_threads
 get_thread
 create_thread
 post_message
+manage_thread_visibility
 ```
 
-`create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. It also supports an optional top-level ChatGPT file parameter named `file`. Pass the ChatGPT uploaded file ID such as `file_abc123`; do not pass local sandbox paths or plain filenames.
+`create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. In ChatGPT, `post_message` can also attach one file artifact through its optional `file` parameter; ChatGPT supplies the authorized structured file value automatically. Generic HTTP clients use multipart or direct uploads instead. After deploying connector schema changes, refresh/recreate the connector and run Scan Tools when available. The credentialed acceptance procedure is [`docs/chatgpt-file-attachment-smoke.md`](docs/chatgpt-file-attachment-smoke.md).
+
+## Connect Raycast
+
+Open **Onboarding** or **Credentials** in the signed-in dashboard and create a dedicated Raycast connection for each local installation. Copy the one-time `baseUrl` and `apiKey`, then load the checked-in extension in Raycast developer mode:
+
+```bash
+git clone https://github.com/amxv/agentbox.git
+cd agentbox/raycast/agentbox
+npm ci
+npm run verify
+npm run dev
+```
+
+Configure the required `baseUrl` and password `apiKey` preferences from the setup bundle. The extension browses/searches the complete accessible inbox, creates private threads, posts ordered attachments, downloads authorized files, and manages team/public visibility through ordinary user APIs. It cannot use the owner-browser-only content viewer. Store publication remains deferred.
 
 ## CLI commands
 
@@ -68,6 +83,9 @@ agentbox search "design"
 agentbox create "Design thread"
 agentbox create "Design thread" --message "Please implement this." --format markdown
 agentbox get thr_xxx
+agentbox visibility thr_xxx
+agentbox visibility thr_xxx --share-team engineering --publish
+agentbox visibility thr_xxx --unshare-team engineering --unpublish
 agentbox post thr_xxx "Message body"
 agentbox post thr_xxx --file message.md
 agentbox post thr_xxx --file raw-output.txt --format plain
@@ -76,7 +94,7 @@ agentbox download thr_xxx
 agentbox download thr_xxx --output ./downloads
 ```
 
-`download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
+`visibility` reads or atomically changes team shares and the revocable public URL. Team flags may be repeated, and `--json` exposes the current shares plus team slugs available to the acting user. `download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
 
 ## Web dashboard
 
@@ -86,7 +104,7 @@ Agentbox includes a simple browser viewer for inspecting threads and attachments
 https://your-agentbox.vercel.app/threads
 ```
 
-Create the first tenant admin with `agentbox provision tenant`, then sign in at `/login` with that tenant admin email and password or setup token. Browser requests use the first-party session cookie and tenant-scoped `/api/threads` and `/api/keys` routes; the deployment admin key is only for provisioning and should not be stored in the dashboard. Thread pages render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
+Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no account-partition selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. The unified inbox can filter accessible threads by Private, Shared with me, one of the signed-in user's teams, or active Public state; each card shows its current visibility and stable `User · Actor` attribution. Thread pages use the same attribution snapshots and render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
 
 ## API
 
@@ -113,6 +131,7 @@ bun run typecheck
 bun run lint
 bun run build
 bun run build:cli
+bun run verify:cutover
 ```
 
 The active backend and CLI are implemented in Go:
@@ -149,29 +168,50 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
-R2_PUBLIC_BASE_URL
+AGENTBOX_MAINTENANCE_BYPASS_KEY
 ```
 
-API keys are tenant-scoped, hashed in Postgres, and shown only once on creation. After the backend is deployed and migrated, provision a tenant and initial admin user:
+Direct-upload clients must calculate the lowercase hexadecimal SHA-256 digest
+of each file before requesting an upload intent. Send `file_name`, optional
+`mime_type`, exact `size_bytes`, and `sha256` to
+`POST /api/threads/:threadId/uploads`, PUT the unchanged bytes with the returned
+signed headers, then finalize the message with the returned `upload_id`. The
+presigned URL writes only to a temporary staging key. Authorized finalization
+verifies length, MIME type, SHA-256 metadata/checksum, and source ETag before a
+conditional copy to a new content-addressed final key; only that final key is
+persisted as the attachment. Replaying the original PUT URL can therefore alter
+or recreate only the staging object, never the canonical attachment.
+
+Expired, rejected, abandoned, and stale-finalization objects are drained in
+bounded exact-key cleanup passes. Normal upload traffic performs a small
+opportunistic pass. A trusted operator can drain a larger batch with
+`POST /api/admin/uploads/cleanup?limit=100` and the
+`x-agentbox-maintenance-key` header. The maintenance key is a deployment
+operator secret, not a user credential, and the endpoint never accepts an
+object prefix or caller-supplied storage key.
+
+Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. The permanent-owner browser can inspect deployment-wide credential metadata and force-revoke any credential from `/owner/users`, but secrets are never recoverable. Disabling a user revokes sessions, credentials, and pending CLI codes and removes every team membership in one transaction without deleting that user's threads, messages, assets, shares, or attribution snapshots. Enabling the account does not restore any of those access paths. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
 
 ```bash
-agentbox provision tenant \
-  --base-url https://youragentbox.vercel.app \
+agentbox owner setup-token \
+  --base-url https://youragentbox-api.vercel.app \
+  --app-url https://youragentbox.vercel.app \
   --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --tenant-slug default \
-  --tenant-name Default \
-  --user-email you@example.com \
-  --user-name "Your Name" \
-  --password "$AGENTBOX_INITIAL_PASSWORD" \
-  --create-cli-key \
-  --key-name local \
-  --profile-name prod
+  --expires 30m
 ```
 
-Use `agentbox login` for browser-assisted profile creation on other machines. With a logged-in tenant profile, `agentbox keys create|list|revoke`, `agentbox raycast-key`, and `agentbox connect chatgpt` use tenant-scoped key routes. `agentbox init` and `/api/admin/keys` remain legacy compatibility paths for existing single-tenant setups; prefer provisioning plus login for new deployments.
+After a non-owner user is disabled, the owner browser can separately purge that user's uploaded attachment objects from `/owner/users`. Purge runs in bounded, resumable batches using each asset's exact stored R2 key. Thread/message rows, filenames, and attribution remain as tombstones; authenticated and public readers display `Attachment deleted by deployment owner` and receive no download or preview URL. Attachments uploaded by other users are never selected merely because they appear in the disabled user's threads.
+
+The permanent-owner browser also has a separate read-only deployment content viewer at `/owner/content`. It can list, search, and inspect every thread, including another user's private threads, with optional user and team filters and non-purged attachment downloads. This bypass is intentionally isolated from the normal inbox and API authorization path: ordinary users, MCP/CLI/API credentials, owner API keys, and the deployment admin secret cannot use it, and the owner viewer exposes no posting, upload, or visibility controls.
+
+Production upgrades to the user/team model must follow [`docs/user-team-sharing-production-cutover.md`](docs/user-team-sharing-production-cutover.md). It defines the verified backup gate, maintenance mode, the migration stop at `0016`, permanent-owner setup, irreversible migration `0017`, postcheck SQL, smoke matrix, and full-restore rollback procedure.
+
+Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. There is no account-partition selector or deployment-wide daily credential.
 
 ## Docs
 
-- [`docs/first-time-setup.md`](docs/first-time-setup.md)
-- [`docs/agentbox-spec.md`](docs/agentbox-spec.md)
-- [`docs/go-rollout.md`](docs/go-rollout.md)
+- [`public/setup-self-host.md`](public/setup-self-host.md)
+- [`docs/user-team-sharing-spec.md`](docs/user-team-sharing-spec.md)
+- [`docs/owner-setup.md`](docs/owner-setup.md)
+- [`docs/user-invitations.md`](docs/user-invitations.md)
+- [`docs/user-team-sharing-production-cutover.md`](docs/user-team-sharing-production-cutover.md)

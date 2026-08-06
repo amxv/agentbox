@@ -31,6 +31,7 @@ Run the broad gate before shipping cross-runtime changes:
 bun run test:parity
 bun run typecheck
 bun run lint
+bun run verify:chatgpt-files
 go test ./...
 go vet ./...
 bun run build:api
@@ -69,8 +70,8 @@ Required production env on `agentbox-go`:
 
 ```text
 DATABASE_URL
-AGENTBOX_API_KEYS
-AGENTBOX_ADMIN_KEYS or AGENTBOX_ADMIN_KEY
+AGENTBOX_ADMIN_KEY
+AGENTBOX_APP_PUBLIC_URL
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -85,7 +86,6 @@ AGENTBOX_ALLOWED_ORIGINS
 AGENTBOX_AUTO_MIGRATE
 AGENTBOX_DB_POOL_SIZE
 AGENTBOX_MAX_FILE_SIZE_BYTES
-R2_PUBLIC_BASE_URL
 ```
 
 Verify backend:
@@ -114,7 +114,103 @@ This runs:
 go run ./cmd/migrate
 ```
 
+The ordered SQL files under `migrations/` are embedded in the Go binary and are
+the canonical schema history. Applied versions and checksums are recorded in
+`schema_migrations`. Normal repository requests never execute schema DDL.
+
 Do not rely on `AGENTBOX_AUTO_MIGRATE=true` for production by default.
+
+For the user/team production cutover, the migration CLI can stop immediately
+before the irreversible migration:
+
+```bash
+bun run db:migrate -- --through 0016 --timeout 5m
+```
+
+After permanent-owner setup succeeds, run the unbounded command to apply
+`0017`. Never bypass the owner prerequisite or hand-edit the removed columns.
+
+## Permanent Owner Setup
+
+The deployment admin secret is not a daily actor credential. Use it only from a
+trusted operator shell to issue a one-time owner bootstrap or recovery link:
+
+```bash
+agentbox owner setup-token \
+  --base-url https://api.agentbox.example.com \
+  --admin-key "$AGENTBOX_ADMIN_KEY" \
+  --expires 30m
+```
+
+Set `AGENTBOX_APP_PUBLIC_URL` on the Go backend to the Next.js dashboard origin when the
+projects are deployed separately. The token is hash-only in PostgreSQL,
+single-use, expiring, and replaced whenever a new token is issued. Recovery is
+restricted to the same permanent owner email. Browser sessions and API keys
+cannot issue setup tokens, and owner API keys never receive owner-browser-only
+authority. See `docs/owner-setup.md`.
+
+## User/team Cutover Backup Preflight
+
+Before any production user/team authorization cutover, run the content backup
+preflight from a trusted machine with production PostgreSQL/R2 env loaded and a
+compatible `pg_dump` installed:
+
+```bash
+bun run backup:preflight -- \
+  --output-dir /secure/off-host/agentbox-backups \
+  --run-id user-team-cutover-YYYY-MM-DD \
+  --source-prefix agentbox/ \
+  --backup-prefix agentbox-recovery/user-team-cutover-YYYY-MM-DD
+```
+
+The command writes `database.dump` and `manifest.json`, copies every referenced
+R2 object to the recovery prefix, and exits non-zero for missing objects, orphaned
+content rows, mismatched sizes, failed copies, or dump failures. Do not continue
+unless the manifest says `"ready": true`. Rerun the same run ID to resume safely.
+
+Read `docs/user-team-sharing-backup-preflight.md` for separate-bucket options,
+manifest semantics, and restore verification. The Zodex machine has no production
+credentials; the real backup and recorded production counts are a credentialed
+local-agent gate.
+
+The complete maintenance-mode, migration, preservation, smoke, reopen, and
+rollback sequence is in `docs/user-team-sharing-production-cutover.md`. Run the
+credential-free branch gate before handing off to the local operator:
+
+```bash
+bun run verify:cutover
+```
+
+That gate performs a clean Raycast package install and runs its contract tests,
+typecheck, native lint, and production build. Real developer-mode import and
+preference entry require a trusted macOS machine and follow
+`docs/raycast-developer-mode-smoke.md`; Zodex must not claim those live checks.
+The same gate runs the exact ChatGPT file-object descriptor, secure downloader,
+R2, HTTP-boundary, and compensation checks. Real connector refresh/Scan Tools
+and “attach the file I just created” verification require ChatGPT host access
+and follow `docs/chatgpt-file-attachment-smoke.md` during Phase 20.
+
+## Invitation-backed Users
+
+After the permanent owner is established, open `/owner/users` in the dashboard
+to create expiring one-time signup links, review invitation history, and
+disable or re-enable non-owner accounts. These endpoints require the owner's
+browser session; deployment secrets and API keys are not accepted.
+
+Disabling a user revokes browser sessions, API credentials, and pending CLI
+login codes in the same transaction while preserving content and attribution.
+Re-enabling does not restore old credentials. See `docs/user-invitations.md`.
+
+## Deployment-global Login
+
+Login is deployment-global and accepts only email and password. Do not add an
+account-partition selector to browser, CLI, API, or profile contracts. Saved
+CLI profiles contain only service, user, actor, and credential metadata.
+
+Normal users can be created only through owner-issued invitations; the
+permanent owner can be established or recovered only through the one-time
+operator token flow. See
+`docs/deployment-global-identity.md`.
 
 ## Deploy Dashboard
 

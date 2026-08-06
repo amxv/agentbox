@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"agentbox/internal/agentbox/assets"
+	authpkg "agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/httpapi"
@@ -22,6 +24,37 @@ import (
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/version"
 )
+
+func setThreadVisibilityForTest(ctx context.Context, repository interface {
+	ManageThreadVisibility(context.Context, string, string, types.ManageThreadVisibilityInput) (types.ManagedThreadVisibility, error)
+}, userID string, threadID string, desiredTeamIDs []string) (types.ThreadVisibility, error) {
+	current, err := repository.ManageThreadVisibility(ctx, userID, threadID, types.ManageThreadVisibilityInput{})
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	desired := map[string]bool{}
+	for _, teamID := range desiredTeamIDs {
+		desired[teamID] = true
+	}
+	currentIDs := map[string]bool{}
+	input := types.ManageThreadVisibilityInput{}
+	for _, team := range current.SharedTeams {
+		currentIDs[team.ID] = true
+		if !desired[team.ID] {
+			input.RemoveTeams = append(input.RemoveTeams, team.ID)
+		}
+	}
+	for _, teamID := range desiredTeamIDs {
+		if !currentIDs[teamID] {
+			input.AddTeams = append(input.AddTeams, teamID)
+		}
+	}
+	state, err := repository.ManageThreadVisibility(ctx, userID, threadID, input)
+	if err != nil {
+		return types.ThreadVisibility{}, err
+	}
+	return types.ThreadVisibility{ThreadID: state.ThreadID, OwnerUserID: state.OwnerUserID, SharedTeams: state.SharedTeams}, nil
+}
 
 func TestCLIGlobalVersionFlags(t *testing.T) {
 	for _, args := range [][]string{{"--version"}, {"-V"}, {"version"}} {
@@ -47,22 +80,24 @@ func TestCLIHelpOutput(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"--help"}, []string{"Usage: agentbox [options] <command>", "Commands:", "mcp-url"}},
+		{[]string{"--help"}, []string{"Usage: agentbox [options] <command>", "Commands:", "mcp-url", "owner"}},
 		{[]string{"-h"}, []string{"Usage: agentbox [options] <command>", "profiles"}},
 		{[]string{"profiles", "--help"}, []string{"Usage: agentbox profiles [options] [command]", "add <name>"}},
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
+		{[]string{"owner", "--help"}, []string{"Usage: agentbox owner setup-token", "permanent deployment owner"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
-		{[]string{"provision", "--help"}, []string{"Usage: agentbox provision tenant", "deployment-owner admin API"}},
-		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "tenant-scoped API key"}},
-		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "tenant metadata"}},
-		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "tenant-scoped ChatGPT key"}},
-		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key", "Raycast"}},
-		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "tenant-scoped API key"}},
-		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "current tenant"}},
-		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <name>", "current tenant"}},
+		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "user-owned credential"}},
+		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "user and actor diagnostics"}},
+		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "user-owned ChatGPT credential"}},
+		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key <installation-label>", "Raycast"}},
+		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "signed-in profile's user"}},
+		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "signed-in profile's user"}},
+		{[]string{"keys", "rotate", "--help"}, []string{"Usage: agentbox keys rotate <credential-id>", "stable ID"}},
+		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <credential-id>", "stable ID"}},
 		{[]string{"search", "--help"}, []string{"Usage: agentbox search <query>", "message counts"}},
 		{[]string{"create", "--help"}, []string{"--message <body>", "first message"}},
+		{[]string{"visibility", "--help"}, []string{"Usage: agentbox visibility <thread-id>", "atomically change", "--share-team"}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
@@ -142,6 +177,43 @@ func TestCLIMCPURLPrintsFullKeyURL(t *testing.T) {
 	}
 }
 
+func TestCLIProfilesAddPersistsOnboardingIdentityMetadata(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	server := newTestServer(t)
+	defer server.Close()
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{
+		"profiles", "add", "local",
+		"--base-url", server.URL,
+		"--api-key", "dev-key",
+		"--user-id", "usr_onboarding",
+		"--key-name", "Local CLI",
+		"--auth-type", "api_key",
+		"--activate",
+	}); code != 0 {
+		t.Fatalf("profiles add failed: code=%d stderr=%s", code, stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"profiles", "show", "local", "--json"}); code != 0 {
+		t.Fatalf("profiles show failed: code=%d stderr=%s", code, stderr.String())
+	}
+	profileJSON := out.String()
+	if !strings.Contains(profileJSON, `"user_id": "usr_onboarding"`) || !strings.Contains(profileJSON, `"key_name": "Local CLI"`) || !strings.Contains(profileJSON, `"auth_type": "api_key"`) {
+		t.Fatalf("profile metadata output=%s", profileJSON)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"list"}); code != 0 {
+		t.Fatalf("onboarding profile could not list: code=%d stderr=%s", code, stderr.String())
+	}
+}
+
 func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
@@ -214,7 +286,7 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("get failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "# CLI thread") || !strings.Contains(out.String(), "hello from cli") {
+	if !strings.Contains(out.String(), "# CLI thread") || !strings.Contains(out.String(), "hello from cli") || !strings.Contains(out.String(), "Seed · dev") || !strings.Contains(out.String(), "visibility: Private") {
 		t.Fatalf("get output = %s", out.String())
 	}
 
@@ -224,8 +296,18 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), `"threads"`) || !strings.Contains(out.String(), "CLI thread") {
+	if !strings.Contains(out.String(), `"threads"`) || !strings.Contains(out.String(), "CLI thread") || !strings.Contains(out.String(), `"private": true`) || !strings.Contains(out.String(), `"created_by_user_display_name": "Seed"`) || !strings.Contains(out.String(), `"created_by_actor_name": "dev"`) {
 		t.Fatalf("list output = %s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	code = runner.Run([]string{"list"})
+	if code != 0 {
+		t.Fatalf("plain list failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Private · Created by Seed · dev") {
+		t.Fatalf("plain list metadata = %s", out.String())
 	}
 
 	out.Reset()
@@ -236,16 +318,19 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	}
 	var searchPayload struct {
 		Threads []struct {
-			Title              string   `json:"title"`
-			MessageCount       int      `json:"message_count"`
-			LastMessagePreview string   `json:"last_message_preview"`
-			MatchedSnippets    []string `json:"matched_snippets"`
+			Title                    string                        `json:"title"`
+			CreatedByUserDisplayName *string                       `json:"created_by_user_display_name"`
+			CreatedByActorName       *string                       `json:"created_by_actor_name"`
+			MessageCount             int                           `json:"message_count"`
+			LastMessagePreview       string                        `json:"last_message_preview"`
+			MatchedSnippets          []string                      `json:"matched_snippets"`
+			VisibilitySummary        types.ThreadVisibilitySummary `json:"visibility_summary"`
 		} `json:"threads"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &searchPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(searchPayload.Threads) == 0 || searchPayload.Threads[0].Title != "Initial CLI thread" || searchPayload.Threads[0].MessageCount != 1 || searchPayload.Threads[0].LastMessagePreview == "" {
+	if len(searchPayload.Threads) == 0 || searchPayload.Threads[0].Title != "Initial CLI thread" || searchPayload.Threads[0].MessageCount != 1 || searchPayload.Threads[0].LastMessagePreview == "" || !searchPayload.Threads[0].VisibilitySummary.Private || searchPayload.Threads[0].CreatedByUserDisplayName == nil || *searchPayload.Threads[0].CreatedByUserDisplayName != "Seed" || searchPayload.Threads[0].CreatedByActorName == nil || *searchPayload.Threads[0].CreatedByActorName != "dev" {
 		t.Fatalf("search payload = %#v", searchPayload)
 	}
 
@@ -255,8 +340,162 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("search text failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "Initial CLI thread") || !strings.Contains(out.String(), "first message from cli") {
+	if !strings.Contains(out.String(), "Initial CLI thread") || !strings.Contains(out.String(), "first message from cli") || !strings.Contains(out.String(), "Private · Created by Seed · dev") {
 		t.Fatalf("search text output = %s", out.String())
+	}
+}
+
+func TestAttributionLabelUsesSnapshotsAndLegacyFallback(t *testing.T) {
+	user := "Ashray"
+	actor := "ChatGPT"
+	if got := attributionLabel(&user, &actor, "legacy"); got != "Ashray · ChatGPT" {
+		t.Fatalf("snapshot attribution = %q", got)
+	}
+	if got := attributionLabel(nil, nil, " Legacy agent "); got != " Legacy agent " {
+		t.Fatalf("legacy attribution = %q", got)
+	}
+	if got := attributionLabel(nil, nil, ""); got != "Agentbox user" {
+		t.Fatalf("empty attribution = %q", got)
+	}
+}
+
+func TestCLIVisibilityReadsAndMutatesAtomically(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	repo := &db.MemoryRepository{}
+	authContext := types.AuthContext{
+		UserID:          "usr_visibility_cli",
+		UserDisplayName: "Visibility CLI",
+		SubjectType:     types.AuthSubjectUserSession,
+		ActorName:       "Web dashboard",
+	}
+	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, Email: "visibility-cli@example.com", DisplayName: authContext.UserDisplayName})
+	svc := service.New(repo, &assets.FakeStore{})
+	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use"}); err != nil {
+		t.Fatal(err)
+	}
+	repo.APIKeys[0].Key = "visibility-dev-key"
+	repo.APIKeys[0].TokenHash = dbHashForTest("visibility-dev-key")
+	svc = service.New(repo, &assets.FakeStore{})
+
+	oldTeam, err := repo.CreateTeam(t.Context(), "cli-old", "CLI Old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTeam, err := repo.CreateTeam(t.Context(), "cli-new", "CLI New")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailableTeam, err := repo.CreateTeam(t.Context(), "cli-unavailable", "CLI Unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, teamID := range []string{oldTeam.ID, newTeam.ID} {
+		if _, err := repo.AddTeamMember(t.Context(), teamID, authContext.UserID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	thread, err := svc.CreateThread(t.Context(), authContext, "CLI visibility thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setThreadVisibilityForTest(t.Context(), repo, authContext.UserID, thread.ID, []string{oldTeam.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(httpapi.NewServer(config.Config{AppPublicURL: "https://agentbox.example"}, svc))
+	defer server.Close()
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"profiles", "add", "visibility", "--base-url", server.URL, "--api-key", "visibility-dev-key", "--activate"}); code != 0 {
+		t.Fatalf("profiles add failed: code=%d stderr=%s", code, stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID}); code != 0 {
+		t.Fatalf("visibility read failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "CLI Old (cli-old)") || !strings.Contains(out.String(), "CLI New (cli-new)") || !strings.Contains(out.String(), "Public: Off") {
+		t.Fatalf("visibility text output=%s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{
+		"visibility", thread.ID,
+		"--share-team", "cli-new",
+		"--share-team", newTeam.ID,
+		"--unshare-team", oldTeam.ID,
+		"--publish",
+		"--json",
+	}); code != 0 {
+		t.Fatalf("visibility mutation failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var mutated struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &mutated); err != nil {
+		t.Fatal(err)
+	}
+	if len(mutated.Visibility.SharedTeams) != 1 || mutated.Visibility.SharedTeams[0].ID != newTeam.ID || !mutated.Visibility.Public || !strings.HasPrefix(mutated.Visibility.PublicURL, "https://agentbox.example/share/agpub_") {
+		t.Fatalf("visibility mutation=%#v", mutated.Visibility)
+	}
+	firstPublicURL := mutated.Visibility.PublicURL
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--json"}); code != 0 {
+		t.Fatalf("visibility redisplay failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), firstPublicURL) || !strings.Contains(out.String(), `"slug": "cli-new"`) {
+		t.Fatalf("visibility redisplay output=%s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--regenerate-public-link", "--json"}); code != 0 {
+		t.Fatalf("visibility regenerate failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var regenerated struct {
+		Visibility types.ManagedThreadVisibility `json:"visibility"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &regenerated); err != nil {
+		t.Fatal(err)
+	}
+	if regenerated.Visibility.PublicURL == "" || regenerated.Visibility.PublicURL == firstPublicURL {
+		t.Fatalf("regenerated visibility=%#v", regenerated.Visibility)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--publish", "--unpublish"}); code == 0 {
+		t.Fatal("conflicting public flags unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr.String(), "Use only one of --publish or --unpublish") {
+		t.Fatalf("conflicting public flags stderr=%s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--share-team", unavailableTeam.Slug}); code == 0 {
+		t.Fatal("unavailable team share unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr.String(), "TEAM_NOT_AVAILABLE") {
+		t.Fatalf("unavailable team stderr=%s", stderr.String())
+	}
+	state, err := repo.ManageThreadVisibility(t.Context(), authContext.UserID, thread.ID, types.ManageThreadVisibilityInput{})
+	if err != nil || len(state.SharedTeams) != 1 || state.SharedTeams[0].ID != newTeam.ID || !state.Public {
+		t.Fatalf("failed mutation changed state=%#v err=%v", state, err)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID, "--unpublish", "--json"}); code != 0 {
+		t.Fatalf("visibility unpublish failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(out.String(), `"public": true`) || !strings.Contains(out.String(), `"public": false`) {
+		t.Fatalf("unpublish output=%s", out.String())
 	}
 }
 
@@ -405,35 +644,6 @@ func TestCLIDoctorChecksSignedDownloadURL(t *testing.T) {
 	}
 }
 
-func TestCLIInitSavesProfile(t *testing.T) {
-	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
-	server := newTestServer(t)
-	defer server.Close()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	runner := &Runner{
-		Stdout:     &out,
-		Stderr:     &stderr,
-		Stdin:      bytes.NewReader(nil),
-		HTTPClient: server.Client(),
-	}
-
-	if code := runner.Run([]string{"init", "--profile-name", "prod", "--base-url", server.URL, "--admin-key", "adm", "--local-key-name", "workstation", "--chatgpt-key-name", "chatgpt", "--skip-doctor"}); code != 0 {
-		t.Fatalf("init failed: code=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), `Saved profile "prod"`) || !strings.Contains(out.String(), `Created ChatGPT API key "chatgpt"`) {
-		t.Fatalf("init output = %s", out.String())
-	}
-	resolved, err := profiles.Resolve("prod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.APIKey == "adm" {
-		t.Fatalf("resolved profile = %#v", resolved)
-	}
-}
-
 func TestCLIConnectChatGPTPrintsMCPInstructions(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
@@ -474,21 +684,34 @@ func TestCLIRaycastKeyPrintsPreferences(t *testing.T) {
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"raycast-key"}); code != 0 {
+	if code := runner.Run([]string{"raycast-key", "MacBook Air"}); code != 0 {
 		t.Fatalf("raycast-key failed: code=%d stderr=%s", code, stderr.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, `Created Raycast API key "raycast"`) || !strings.Contains(output, "Agentbox URL: "+server.URL) || !strings.Contains(output, "Agentbox API Key: ") {
+	if !strings.Contains(output, `Created Raycast installation "MacBook Air"`) || !strings.Contains(output, "Repository: https://github.com/amxv/agentbox.git") || !strings.Contains(output, "Agentbox URL: "+server.URL) || !strings.Contains(output, "Agentbox API Key: ") || !strings.Contains(output, "Browse Threads") {
 		t.Fatalf("raycast-key output = %s", output)
 	}
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"keys", "create", "raycast", "--json"}); code != 0 {
-		t.Fatalf("keys create raycast failed: code=%d stderr=%s", code, stderr.String())
+	if code := runner.Run([]string{"raycast-key", "Studio Mac", "--json"}); code != 0 {
+		t.Fatalf("second raycast-key failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), `"raycast_base_url": "`+server.URL+`"`) || !strings.Contains(out.String(), `"raycast_api_key": "`) {
-		t.Fatalf("keys create raycast json = %s", out.String())
+	var second struct {
+		Credential remoteAPIKey       `json:"credential"`
+		Setup      remoteRaycastSetup `json:"raycast_setup"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &second); err != nil {
+		t.Fatalf("second raycast output is not JSON: %v output=%s", err, out.String())
+	}
+	if second.Credential.ID == "" || second.Credential.Name != "Studio Mac" || second.Credential.Purpose != "raycast" || second.Credential.Secret == "" || second.Setup.APIKey != second.Credential.Secret || second.Setup.BaseURL != server.URL {
+		t.Fatalf("second Raycast installation=%#v", second)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"keys", "create", "raycast", "--json"}); code == 0 || !strings.Contains(stderr.String(), "raycast-key <installation-label>") {
+		t.Fatalf("ambiguous keys create raycast was not rejected: code=%d stdout=%s stderr=%s", code, out.String(), stderr.String())
 	}
 }
 
@@ -515,7 +738,7 @@ func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 		t.Fatalf("deploy vercel failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
 	}
 	output := out.String()
-	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "agentbox provision tenant --base-url") {
+	if !strings.Contains(output, "Vercel deployment guide:") || !strings.Contains(output, "vercel env add AGENTBOX_APP_PUBLIC_URL production") || !strings.Contains(output, "agentbox owner setup-token --base-url") {
 		t.Fatalf("deploy output = %s", output)
 	}
 	if called {
@@ -523,7 +746,7 @@ func TestCLIDeployVercelPrintsGuideWithoutMutating(t *testing.T) {
 	}
 }
 
-func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
+func TestCLIAdminKeyManagementIsDisabled(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
 	defer server.Close()
@@ -532,45 +755,53 @@ func TestCLIKeysManageRemoteDBKeys(t *testing.T) {
 	var stderr bytes.Buffer
 	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
 
-	if code := runner.Run([]string{"keys", "create", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
-		t.Fatalf("keys create failed: code=%d stderr=%s", code, stderr.String())
+	if code := runner.Run([]string{"keys", "create", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code == 0 {
+		t.Fatalf("legacy admin key creation unexpectedly succeeded: stdout=%s", out.String())
 	}
-	created := out.String()
-	if !strings.Contains(created, `Created API key "builder"`) || !strings.Contains(created, "Secret: ") {
-		t.Fatalf("create output = %s", created)
-	}
-
-	out.Reset()
-	stderr.Reset()
-	if code := runner.Run([]string{"keys", "list", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
-		t.Fatalf("keys list failed: code=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), "builder") {
-		t.Fatalf("list output = %s", out.String())
-	}
-
-	out.Reset()
-	stderr.Reset()
-	if code := runner.Run([]string{"keys", "revoke", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code != 0 {
-		t.Fatalf("keys revoke failed: code=%d stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(out.String(), `Revoked API key "builder"`) {
-		t.Fatalf("revoke output = %s", out.String())
+	if !strings.Contains(stderr.String(), "--admin-key and --base-url are no longer supported") {
+		t.Fatalf("stderr = %s", stderr.String())
 	}
 }
 
-func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
+func TestCLIOwnerSetupTokenPrintsBrowserLinkWithoutDeploymentSecret(t *testing.T) {
+	repo := &db.MemoryRepository{}
+	server := httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "deployment-secret"}, service.New(repo, &assets.FakeStore{})))
+	t.Cleanup(server.Close)
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"owner", "setup-token", "--base-url", server.URL, "--admin-key", "deployment-secret", "--expires", "15m"}); code != 0 {
+		t.Fatalf("owner setup-token failed: code=%d stderr=%s", code, stderr.String())
+	}
+	output := out.String()
+	if !strings.Contains(output, "Issued owner bootstrap token.") || !strings.Contains(output, server.URL+"/owner/setup?token=agos_") {
+		t.Fatalf("owner setup-token output=%s", output)
+	}
+	if strings.Contains(output, "deployment-secret") {
+		t.Fatalf("deployment secret leaked in CLI output: %s", output)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"owner", "setup-token", "--base-url", server.URL, "--admin-key", "deployment-secret", "--expires", "25h"}); code == 0 {
+		t.Fatalf("oversized setup token expiry unexpectedly succeeded: %s", out.String())
+	}
+	if !strings.Contains(stderr.String(), "no more than 24h") {
+		t.Fatalf("oversized expiry stderr=%s", stderr.String())
+	}
+}
+
+func TestCLIKeysListAndRevokeUseUserProfile(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)
 	defer server.Close()
 	if _, err := profiles.SaveProfile(profiles.Profile{
-		Name:       "tenant",
-		BaseURL:    server.URL,
-		APIKey:     "dev-key",
-		TenantID:   types.DefaultTenantID,
-		TenantSlug: "default",
-		KeyName:    "dev",
-		AuthType:   "api_key",
+		Name:     "user",
+		BaseURL:  server.URL,
+		APIKey:   "dev-key",
+		KeyName:  "dev",
+		AuthType: "api_key",
 	}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -579,36 +810,52 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	var stderr bytes.Buffer
 	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
 
-	if code := runner.Run([]string{"--profile", "tenant", "keys", "create", "tenant-managed"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "create", "user-managed", "--json"}); code != 0 {
 		t.Fatalf("profile keys create failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var created remoteAPIKey
+	if err := json.Unmarshal(out.Bytes(), &created); err != nil || created.ID == "" {
+		t.Fatalf("create output is not a credential: err=%v output=%s", err, out.String())
 	}
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"--profile", "tenant", "keys", "list", "--json"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "list", "--json"}); code != 0 {
 		t.Fatalf("profile keys list failed: code=%d stderr=%s", code, stderr.String())
 	}
 	var listed struct {
-		Keys []remoteAPIKey `json:"keys"`
+		Credentials []remoteAPIKey `json:"credentials"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &listed); err != nil {
 		t.Fatalf("list output is not JSON: %v output=%s", err, out.String())
 	}
 	found := false
-	for _, key := range listed.Keys {
-		if key.Name == "tenant-managed" {
+	for _, key := range listed.Credentials {
+		if key.Name == "user-managed" {
 			found = true
-			if key.TenantID != types.DefaultTenantID {
-				t.Fatalf("tenant-managed key tenant_id=%q", key.TenantID)
+			if key.UserID != "usr_seed" || key.ID != created.ID || key.Purpose != "custom" || key.RevokedAt != nil {
+				t.Fatalf("user-managed key user_id=%q", key.UserID)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("tenant-managed key missing from tenant list: %#v", listed.Keys)
+		t.Fatalf("user-managed key missing from user list: %#v", listed.Credentials)
 	}
 
 	out.Reset()
 	stderr.Reset()
-	if code := runner.Run([]string{"--profile", "tenant", "keys", "revoke", "tenant-managed", "--json"}); code != 0 {
+	if code := runner.Run([]string{"--profile", "user", "keys", "rotate", created.ID, "--json"}); code != 0 {
+		t.Fatalf("profile keys rotate failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var rotated struct {
+		Credential remoteAPIKey `json:"credential"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rotated); err != nil || rotated.Credential.ID != created.ID || rotated.Credential.Secret == "" || rotated.Credential.Secret == created.Secret {
+		t.Fatalf("rotate output invalid: err=%v output=%s", err, out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "user", "keys", "revoke", created.ID, "--json"}); code != 0 {
 		t.Fatalf("profile keys revoke failed: code=%d stderr=%s", code, stderr.String())
 	}
 	var revoked struct {
@@ -617,83 +864,46 @@ func TestCLIKeysListAndRevokeUseTenantProfile(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &revoked); err != nil {
 		t.Fatalf("revoke output is not JSON: %v output=%s", err, out.String())
 	}
-	if revoked.Revoked != "tenant-managed" {
+	if revoked.Revoked != created.ID {
 		t.Fatalf("revoked payload = %#v", revoked)
 	}
-}
 
-func TestCLIProvisionTenantCreatesProfile(t *testing.T) {
-	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
-	server := newTestServer(t)
-	defer server.Close()
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
-
-	if code := runner.Run([]string{
-		"provision", "tenant",
-		"--base-url", server.URL,
-		"--admin-key", "adm",
-		"--tenant-slug", "acme",
-		"--tenant-name", "Acme",
-		"--user-email", "admin@example.com",
-		"--user-name", "Acme Admin",
-		"--password", "secret-password",
-		"--create-cli-key",
-		"--key-name", "workstation",
-		"--profile-name", "acme-prod",
-		"--json",
-	}); code != 0 {
-		t.Fatalf("provision tenant failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"--profile", "user", "keys", "list", "--limit", "100", "--json"}); code != 0 {
+		t.Fatalf("post-revoke list failed: code=%d stderr=%s", code, stderr.String())
 	}
-	var payload struct {
-		Tenant struct {
-			ID   string `json:"id"`
-			Slug string `json:"slug"`
-		} `json:"tenant"`
-		User struct {
-			Email string `json:"email"`
-			Role  string `json:"role"`
-		} `json:"user"`
-		APIKey struct {
-			Name   string `json:"name"`
-			Secret string `json:"key"`
-		} `json:"api_key"`
-		ProfileName string `json:"profile_name"`
+	var history remoteCredentialPage
+	if err := json.Unmarshal(out.Bytes(), &history); err != nil {
+		t.Fatalf("history output is not JSON: %v output=%s", err, out.String())
 	}
-	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
-		t.Fatal(err)
+	var revokedHistory bool
+	for _, credential := range history.Credentials {
+		if credential.ID == created.ID {
+			revokedHistory = credential.RevokedAt != nil
+		}
 	}
-	if payload.Tenant.ID != "ten_acme" || payload.Tenant.Slug != "acme" || payload.User.Email != "admin@example.com" || payload.User.Role != "admin" {
-		t.Fatalf("payload = %#v", payload)
-	}
-	if payload.APIKey.Name != "workstation" || payload.APIKey.Secret == "" || payload.ProfileName != "acme-prod" {
-		t.Fatalf("api/profile payload = %#v", payload)
-	}
-	resolved, err := profiles.Resolve("acme-prod")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey != payload.APIKey.Secret {
-		t.Fatalf("resolved profile = %#v payload key=%q", resolved, payload.APIKey.Secret)
+	if !revokedHistory {
+		t.Fatalf("revoked credential disappeared from CLI history: %#v", history.Credentials)
 	}
 }
 
-func TestCLILoginSavesTenantProfile(t *testing.T) {
+func TestCLILoginSavesUserProfile(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
-	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
-	provisioned, err := svc.ProvisionTenant(t.Context(), service.ProvisionTenantParams{
-		TenantSlug: "acme",
-		TenantName: "Acme",
-		UserEmail:  "admin@example.com",
-		UserName:   "Acme Admin",
-		Password:   "secret-password",
-	})
+	passwordHash, err := authpkg.HashPassword("secret-password")
 	if err != nil {
 		t.Fatal(err)
 	}
+	user := types.User{
+		ID:           "usr_acme",
+		Email:        "admin@example.com",
+		DisplayName:  "Acme Admin",
+		PasswordHash: &passwordHash,
+	}
+	repo := &db.MemoryRepository{
+		Users: []types.User{user},
+	}
+	svc := service.New(repo, &assets.FakeStore{})
 	apiServer := httpapi.NewServer(config.Config{SessionCookieName: config.DefaultSessionCookieName}, svc)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -701,12 +911,11 @@ func TestCLILoginSavesTenantProfile(t *testing.T) {
 			state := req.URL.Query().Get("state")
 			redirectURI := req.URL.Query().Get("redirect_uri")
 			result, err := svc.AuthorizeCLILogin(req.Context(), types.AuthContext{
-				TenantID:    provisioned.Tenant.ID,
-				TenantSlug:  provisioned.Tenant.Slug,
-				UserID:      provisioned.User.ID,
+				UserID:      user.ID,
 				SubjectType: types.AuthSubjectUserSession,
-				ActorName:   provisioned.User.DisplayName,
-				Role:        provisioned.User.Role,
+				ActorID:     "sess_browser",
+				ActorName:   "Web dashboard",
+				SessionID:   "sess_browser",
 			}, state, redirectURI)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -749,9 +958,10 @@ func TestCLILoginSavesTenantProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.TenantID != "ten_acme" || resolved.TenantSlug != "acme" || resolved.TenantName != "Acme" || resolved.UserID != provisioned.User.ID || resolved.KeyName != "cli-test" || resolved.AuthType != "api_key" {
+	if resolved == nil || resolved.BaseURL != server.URL || resolved.APIKey == "" || resolved.UserID != user.ID || resolved.KeyName != "cli-test" || resolved.AuthType != "api_key" {
 		t.Fatalf("resolved profile = %#v", resolved)
 	}
+
 	out.Reset()
 	stderr.Reset()
 	if code := runner.Run([]string{"--profile", "acme-prod", "list", "--json"}); code != 0 {
@@ -775,28 +985,29 @@ func TestShouldReadStdinForPipe(t *testing.T) {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := &db.MemoryRepository{}
-	authContext := types.AuthContext{TenantID: types.DefaultTenantID, SubjectType: types.AuthSubjectAdmin, ActorName: "seed", Role: "admin"}
-	svc := service.New(repo, &assets.FakeStore{PublicBaseURL: "https://assets.example.com"})
+	authContext := types.AuthContext{UserID: "usr_seed", SubjectType: types.AuthSubjectUserSession, ActorName: "seed"}
+	repo.Users = append(repo.Users, types.User{ID: authContext.UserID, Email: "seed@example.com", DisplayName: "Seed"})
+	svc := service.New(repo, &assets.FakeStore{})
 	if _, err := svc.CreateAPIKeyWithScopes(t.Context(), authContext, "dev", []string{"threads:read", "threads:write", "assets:read", "assets:write", "mcp:use", "keys:read", "keys:write"}); err != nil {
 		t.Fatal(err)
 	}
 	repo.APIKeys[0].Key = "dev-key"
 	repo.APIKeys[0].TokenHash = dbHashForTest("dev-key")
-	fake := &assets.FakeStore{PublicBaseURL: "https://assets.example.com"}
+	fake := &assets.FakeStore{}
 	svc = service.New(repo, fake)
 	thread, err := svc.CreateThread(t.Context(), authContext, "Seed")
 	if err != nil {
 		t.Fatal(err)
 	}
 	textType := "text/plain"
-	if _, err := repo.PostMessage(t.Context(), types.DefaultTenantID, thread.ID, authContext, "seed asset", nil, []types.NewAsset{{
-		TenantID:   types.DefaultTenantID,
-		StorageKey: "agentbox/ten_default/seed/message/seed.txt",
+	if _, err := repo.PostMessage(t.Context(), authContext.UserID, thread.ID, authContext, "seed asset", nil, []types.NewAsset{{
+		StorageKey: "agentbox/usr_seed/seed/message/seed.txt",
 		FileName:   "seed.txt",
 		MimeType:   &textType,
 		SizeBytes:  int64(len("seed bytes")),
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	fake.PutAssetObject("agentbox/usr_seed/seed/message/seed.txt", int64(len("seed bytes")), &textType)
 	return httptest.NewServer(httpapi.NewServer(config.Config{AdminKey: "adm"}, svc))
 }

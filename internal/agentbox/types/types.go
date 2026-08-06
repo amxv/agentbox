@@ -1,6 +1,33 @@
 package types
 
-const DefaultTenantID = "ten_default"
+import (
+	"context"
+	"errors"
+)
+
+var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
+var ErrOwnerSetupTokenInvalid = errors.New("owner setup token is invalid or expired")
+var ErrSignupInvitationInvalid = errors.New("signup invitation is invalid or expired")
+var ErrEmailAlreadyRegistered = errors.New("email is already registered")
+var ErrUserNotFound = errors.New("user not found")
+var ErrUserDisabled = errors.New("user is disabled")
+var ErrUserMustBeDisabled = errors.New("user must be disabled")
+var ErrOwnerCannotBeDisabled = errors.New("deployment owner cannot be disabled")
+var ErrThreadNotFound = errors.New("Thread not found.")
+var ErrTeamNotFound = errors.New("team not found")
+var ErrTeamSlugConflict = errors.New("team slug is already in use")
+var ErrInvalidOnboardingConnector = errors.New("invalid onboarding connector")
+var ErrOnboardingCredentialExists = errors.New("onboarding credential already exists")
+var ErrOnboardingCredentialNotFound = errors.New("onboarding credential is not active")
+var ErrThreadPublicLinkExists = errors.New("thread public link already exists")
+var ErrThreadPublicLinkNotFound = errors.New("thread public link not found")
+var ErrThreadVisibilityTeamUnavailable = errors.New("team is not available to the acting user")
+var ErrThreadVisibilityConflict = errors.New("the same team cannot be added and removed in one visibility change")
+var ErrPendingUploadUnavailable = errors.New("pending upload is unavailable, expired, or already consumed")
+var ErrPendingUploadQuotaExceeded = errors.New("pending upload quota exceeded")
+var ErrPendingUploadFinalizing = errors.New("pending upload is already finalizing")
+var ErrCredentialLabelConflict = errors.New("an active credential already uses that label")
+var ErrRaycastSetupUnavailable = errors.New("raycast setup metadata is unavailable")
 
 type Actor struct {
 	Name    string `json:"name"`
@@ -12,36 +39,26 @@ type AuthSubjectType string
 const (
 	AuthSubjectUserSession AuthSubjectType = "user_session"
 	AuthSubjectAPIKey      AuthSubjectType = "api_key"
-	AuthSubjectAdmin       AuthSubjectType = "admin"
 )
 
 type AuthContext struct {
-	TenantID    string          `json:"tenant_id"`
-	TenantSlug  string          `json:"tenant_slug,omitempty"`
-	UserID      string          `json:"user_id,omitempty"`
-	SubjectType AuthSubjectType `json:"subject_type"`
-	ActorName   string          `json:"actor_name"`
-	KeyID       string          `json:"key_id,omitempty"`
-	SessionID   string          `json:"session_id,omitempty"`
-	Scopes      []string        `json:"scopes,omitempty"`
-	Role        string          `json:"role,omitempty"`
-}
-
-type Tenant struct {
-	ID        string `json:"id"`
-	Slug      string `json:"slug"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	UserID          string          `json:"user_id,omitempty"`
+	UserDisplayName string          `json:"user_display_name,omitempty"`
+	SubjectType     AuthSubjectType `json:"subject_type"`
+	ActorID         string          `json:"actor_id,omitempty"`
+	ActorName       string          `json:"actor_name"`
+	KeyID           string          `json:"key_id,omitempty"`
+	SessionID       string          `json:"session_id,omitempty"`
+	Scopes          []string        `json:"scopes,omitempty"`
+	IsOwner         bool            `json:"is_owner,omitempty"`
 }
 
 type User struct {
 	ID           string  `json:"id"`
-	TenantID     string  `json:"tenant_id"`
 	Email        string  `json:"email"`
 	DisplayName  string  `json:"display_name"`
 	PasswordHash *string `json:"-"`
-	Role         string  `json:"role"`
+	IsOwner      bool    `json:"is_owner"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	DisabledAt   *string `json:"disabled_at,omitempty"`
@@ -49,7 +66,6 @@ type User struct {
 
 type UserSession struct {
 	ID         string  `json:"id"`
-	TenantID   string  `json:"tenant_id"`
 	UserID     string  `json:"user_id"`
 	SecretHash string  `json:"-"`
 	CreatedAt  string  `json:"created_at"`
@@ -60,7 +76,6 @@ type UserSession struct {
 
 type CLILoginCode struct {
 	ID          string  `json:"id"`
-	TenantID    string  `json:"tenant_id"`
 	UserID      string  `json:"user_id"`
 	CodeHash    string  `json:"-"`
 	StateHash   string  `json:"-"`
@@ -70,50 +85,324 @@ type CLILoginCode struct {
 	ConsumedAt  *string `json:"consumed_at,omitempty"`
 }
 
+type OwnerSetupToken struct {
+	ID         string  `json:"id"`
+	Purpose    string  `json:"purpose"`
+	CreatedAt  string  `json:"created_at"`
+	ExpiresAt  string  `json:"expires_at"`
+	ConsumedAt *string `json:"consumed_at,omitempty"`
+	RevokedAt  *string `json:"revoked_at,omitempty"`
+}
+
+type SignupInvitation struct {
+	ID               string  `json:"id"`
+	CreatedByUserID  string  `json:"created_by_user_id"`
+	CreatedAt        string  `json:"created_at"`
+	ExpiresAt        string  `json:"expires_at"`
+	ConsumedAt       *string `json:"consumed_at,omitempty"`
+	ConsumedByUserID *string `json:"consumed_by_user_id,omitempty"`
+	RevokedAt        *string `json:"revoked_at,omitempty"`
+	Teams            []Team  `json:"teams"`
+}
+
+type Team struct {
+	ID        string `json:"id"`
+	Slug      string `json:"slug"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type TeamMembership struct {
+	TeamID    string `json:"team_id"`
+	UserID    string `json:"user_id"`
+	CreatedAt string `json:"created_at"`
+}
+
+type TeamWithMembers struct {
+	Team
+	Members     []User   `json:"members"`
+	MemberCount int      `json:"member_count"`
+	MembersPage PageInfo `json:"members_page"`
+}
+
+type OnboardingStep struct {
+	Connector   string  `json:"connector"`
+	CompletedAt *string `json:"completed_at,omitempty"`
+	UpdatedAt   *string `json:"updated_at,omitempty"`
+	Credential  *APIKey `json:"credential,omitempty"`
+}
+
+type OnboardingState struct {
+	UserID      string           `json:"user_id"`
+	DismissedAt *string          `json:"dismissed_at,omitempty"`
+	CreatedAt   *string          `json:"created_at,omitempty"`
+	UpdatedAt   *string          `json:"updated_at,omitempty"`
+	Steps       []OnboardingStep `json:"steps"`
+}
+
+type RaycastSetupPreference struct {
+	Name   string `json:"name"`
+	Title  string `json:"title"`
+	Value  string `json:"value"`
+	Secret bool   `json:"secret,omitempty"`
+}
+
+type RaycastSetupMaterial struct {
+	CredentialID    string                   `json:"credential_id"`
+	Label           string                   `json:"label"`
+	BaseURL         string                   `json:"base_url"`
+	APIKey          string                   `json:"api_key,omitempty"`
+	RepositoryURL   string                   `json:"repository_url"`
+	ExtensionPath   string                   `json:"extension_path"`
+	InstallCommands []string                 `json:"install_commands"`
+	Preferences     []RaycastSetupPreference `json:"preferences"`
+	FinalCheck      string                   `json:"final_check"`
+}
+
 type Thread struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	Title           string  `json:"title"`
+	ID                       string                  `json:"id"`
+	OwnerUserID              string                  `json:"owner_user_id"`
+	Title                    string                  `json:"title"`
+	CreatedAt                string                  `json:"created_at"`
+	UpdatedAt                string                  `json:"updated_at"`
+	CreatedBy                string                  `json:"created_by"`
+	CreatedByUserID          *string                 `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string                 `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string                 `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string                 `json:"created_by_actor_name,omitempty"`
+	MessageCount             *int                    `json:"message_count,omitempty"`
+	LastMessagePreview       *string                 `json:"last_message_preview,omitempty"`
+	VisibilitySummary        ThreadVisibilitySummary `json:"visibility_summary"`
+}
+
+type ThreadTeamSummary struct {
+	ID   string `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+type ThreadVisibilitySummary struct {
+	OwnedByMe    bool                `json:"owned_by_me"`
+	Private      bool                `json:"private"`
+	SharedWithMe bool                `json:"shared_with_me"`
+	SharedTeams  []ThreadTeamSummary `json:"shared_teams"`
+	MatchedTeams []ThreadTeamSummary `json:"matched_teams"`
+	Public       bool                `json:"public"`
+}
+
+const (
+	ThreadFilterAll     = "all"
+	ThreadFilterPrivate = "private"
+	ThreadFilterShared  = "shared"
+	ThreadFilterTeam    = "team"
+	ThreadFilterPublic  = "public"
+)
+
+type ThreadListParams struct {
+	Limit   int
+	Filter  string
+	TeamRef string
+	Cursor  *ThreadPageCursor
+}
+
+type ThreadAccess struct {
+	ThreadID       string   `json:"thread_id"`
+	OwnerUserID    string   `json:"owner_user_id"`
+	UserID         string   `json:"user_id"`
+	IsOwner        bool     `json:"is_owner"`
+	MatchedTeamIDs []string `json:"matched_team_ids"`
+}
+
+type ThreadTeamShare struct {
+	ThreadID        string  `json:"thread_id"`
+	TeamID          string  `json:"team_id"`
+	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+}
+
+type ThreadVisibility struct {
+	ThreadID    string `json:"thread_id"`
+	OwnerUserID string `json:"owner_user_id"`
+	SharedTeams []Team `json:"shared_teams"`
+}
+
+type ThreadPublicLink struct {
+	ThreadID        string  `json:"thread_id"`
+	Token           string  `json:"-"`
+	TokenHash       string  `json:"-"`
+	TokenPrefix     string  `json:"token_prefix"`
+	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 	UpdatedAt       string  `json:"updated_at"`
-	CreatedBy       string  `json:"created_by"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
+	RevokedAt       *string `json:"revoked_at,omitempty"`
+}
+
+type ManageThreadVisibilityInput struct {
+	AddTeams             []string `json:"add_teams,omitempty"`
+	RemoveTeams          []string `json:"remove_teams,omitempty"`
+	Public               *bool    `json:"public,omitempty"`
+	RegeneratePublicLink bool     `json:"regenerate_public_link,omitempty"`
+	PublicToken          string   `json:"-"`
+	PublicTokenHash      string   `json:"-"`
+	PublicTokenPrefix    string   `json:"-"`
+}
+
+type ManagedThreadVisibility struct {
+	ThreadID       string            `json:"thread_id"`
+	OwnerUserID    string            `json:"owner_user_id"`
+	SharedTeams    []Team            `json:"shared_teams"`
+	AvailableTeams []Team            `json:"available_teams"`
+	Public         bool              `json:"public"`
+	PublicLink     *ThreadPublicLink `json:"public_link,omitempty"`
+	PublicURL      string            `json:"public_url,omitempty"`
+}
+
+type PublicAsset struct {
+	ID                       string  `json:"id"`
+	FileName                 string  `json:"file_name"`
+	MimeType                 *string `json:"mime_type,omitempty"`
+	SizeBytes                int64   `json:"size_bytes"`
+	CreatedAt                string  `json:"created_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	PurgedAt                 *string `json:"purged_at,omitempty"`
+	Unavailable              bool    `json:"unavailable,omitempty"`
+	UnavailableReason        string  `json:"unavailable_reason,omitempty"`
+	DownloadPath             string  `json:"download_path,omitempty"`
+	PreviewPath              string  `json:"preview_path,omitempty"`
+}
+
+type PublicMessage struct {
+	ID                       string        `json:"id"`
+	Author                   string        `json:"author"`
+	Body                     string        `json:"body"`
+	BodyContentType          *string       `json:"body_content_type,omitempty"`
+	CreatedAt                string        `json:"created_at"`
+	CreatedByUserDisplayName *string       `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string       `json:"created_by_actor_name,omitempty"`
+	Assets                   []PublicAsset `json:"assets"`
+}
+
+type PublicThreadView struct {
+	ID                       string          `json:"id"`
+	Title                    string          `json:"title"`
+	CreatedAt                string          `json:"created_at"`
+	UpdatedAt                string          `json:"updated_at"`
+	CreatedBy                string          `json:"created_by"`
+	CreatedByUserDisplayName *string         `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string         `json:"created_by_actor_name,omitempty"`
+	Messages                 []PublicMessage `json:"messages"`
 }
 
 type Asset struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	MessageID       string  `json:"message_id"`
-	StorageKey      string  `json:"storage_key"`
-	FileName        string  `json:"file_name"`
-	Filename        string  `json:"filename"`
-	MimeType        *string `json:"mime_type"`
-	SizeBytes       int64   `json:"size_bytes"`
-	PublicURL       *string `json:"public_url"`
-	DownloadURL     *string `json:"download_url,omitempty"`
-	CreatedAt       string  `json:"created_at"`
-	CreatedBy       string  `json:"created_by"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
+	ID                       string  `json:"id"`
+	MessageID                string  `json:"message_id"`
+	StorageKey               string  `json:"-"`
+	FileName                 string  `json:"file_name"`
+	Filename                 string  `json:"filename"`
+	MimeType                 *string `json:"mime_type"`
+	SizeBytes                int64   `json:"size_bytes"`
+	DownloadURL              *string `json:"download_url,omitempty"`
+	CreatedAt                string  `json:"created_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	PurgedAt                 *string `json:"purged_at,omitempty"`
+	Unavailable              bool    `json:"unavailable,omitempty"`
+	UnavailableReason        string  `json:"unavailable_reason,omitempty"`
+	PurgedByUserID           *string `json:"-"`
+	PurgeLastAttemptAt       *string `json:"-"`
+	PurgeError               *string `json:"-"`
+	Position                 int64   `json:"-"`
+}
+
+type AssetAuthorizationLease interface {
+	Asset() Asset
+	Close(ctx context.Context) error
+}
+
+type PublicThreadAuthorizationLease interface {
+	Thread() ThreadWithMessages
+	Close(ctx context.Context) error
+}
+
+type AttachmentPurgeLease interface {
+	Close(ctx context.Context) error
+}
+
+type AssetPurgeCandidate struct {
+	AssetID    string
+	StorageKey string
+}
+
+type AttachmentPurgeFailure struct {
+	AssetID string `json:"asset_id"`
+	Error   string `json:"error"`
+}
+
+type AttachmentPurgeResult struct {
+	UserID    string                   `json:"user_id"`
+	Attempted int                      `json:"attempted"`
+	Purged    int                      `json:"purged"`
+	Failed    int                      `json:"failed"`
+	Remaining int                      `json:"remaining"`
+	Complete  bool                     `json:"complete"`
+	Failures  []AttachmentPurgeFailure `json:"failures"`
 }
 
 type Message struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	ThreadID        string  `json:"thread_id"`
-	Author          string  `json:"author"`
-	Body            string  `json:"body"`
-	BodyContentType *string `json:"body_content_type"`
-	CreatedAt       string  `json:"created_at"`
-	Assets          []Asset `json:"assets"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
+	ID                       string  `json:"id"`
+	ThreadID                 string  `json:"thread_id"`
+	Author                   string  `json:"author"`
+	Body                     string  `json:"body"`
+	BodyContentType          *string `json:"body_content_type"`
+	CreatedAt                string  `json:"created_at"`
+	Assets                   []Asset `json:"assets"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	Position                 int64   `json:"-"`
 }
 
 type ThreadWithMessages struct {
 	Thread
-	Messages []Message `json:"messages"`
+	Messages   []Message        `json:"messages"`
+	Visibility ThreadVisibility `json:"visibility"`
+}
+
+type OwnerContentThreadSummary struct {
+	Thread
+	Owner              User     `json:"owner"`
+	MessageCount       int      `json:"message_count"`
+	LastMessagePreview string   `json:"last_message_preview"`
+	MatchedSnippets    []string `json:"matched_snippets"`
+}
+
+type OwnerContentThreadDetail struct {
+	Thread
+	Owner      User             `json:"owner"`
+	Messages   []Message        `json:"messages"`
+	Visibility ThreadVisibility `json:"visibility"`
+}
+
+type OwnerContentListParams struct {
+	Limit   int
+	Offset  int
+	UserID  string
+	TeamRef string
+}
+
+type OwnerContentSearchParams struct {
+	Query   string
+	Limit   int
+	Offset  int
+	UserID  string
+	TeamRef string
 }
 
 type ChatGPTFileReference struct {
@@ -124,35 +413,42 @@ type ChatGPTFileReference struct {
 }
 
 type NewAsset struct {
-	TenantID   string
-	StorageKey string
-	FileName   string
-	MimeType   *string
-	SizeBytes  int64
-	PublicURL  *string
+	StorageKey    string
+	FileName      string
+	MimeType      *string
+	SizeBytes     int64
+	ContentSHA256 string
 }
 
 type PendingUpload struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id,omitempty"`
-	ThreadID        string  `json:"thread_id"`
-	StorageKey      string  `json:"storage_key"`
-	FileName        string  `json:"file_name"`
-	MimeType        *string `json:"mime_type"`
-	SizeBytes       int64   `json:"size_bytes"`
-	PublicURL       *string `json:"public_url"`
-	CreatedAt       string  `json:"created_at"`
-	ExpiresAt       string  `json:"expires_at"`
-	CreatedBy       string  `json:"created_by"`
-	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
-	CreatedByKeyID  *string `json:"created_by_key_id,omitempty"`
-	ConsumedAt      *string `json:"consumed_at,omitempty"`
+	ID                       string  `json:"id"`
+	ThreadID                 string  `json:"thread_id"`
+	StorageKey               string  `json:"storage_key"`
+	FileName                 string  `json:"file_name"`
+	MimeType                 *string `json:"mime_type"`
+	SizeBytes                int64   `json:"size_bytes"`
+	ExpectedSHA256           string  `json:"sha256,omitempty"`
+	Status                   string  `json:"status,omitempty"`
+	FinalStorageKey          string  `json:"-"`
+	FinalizationToken        string  `json:"-"`
+	FinalizationStartedAt    *string `json:"-"`
+	RejectedAt               *string `json:"rejected_at,omitempty"`
+	RejectionReason          string  `json:"rejection_reason,omitempty"`
+	CreatedAt                string  `json:"created_at"`
+	ExpiresAt                string  `json:"expires_at"`
+	CreatedBy                string  `json:"created_by"`
+	CreatedByUserID          *string `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID           *string `json:"created_by_key_id,omitempty"`
+	CreatedByUserDisplayName *string `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string `json:"created_by_actor_name,omitempty"`
+	ConsumedAt               *string `json:"consumed_at,omitempty"`
 }
 
 type UploadIntentFile struct {
 	FileName  string  `json:"file_name"`
 	MimeType  *string `json:"mime_type"`
 	SizeBytes int64   `json:"size_bytes"`
+	SHA256    string  `json:"sha256"`
 }
 
 type PresignedUpload struct {
@@ -161,7 +457,7 @@ type PresignedUpload struct {
 	FileName        string            `json:"file_name"`
 	MimeType        *string           `json:"mime_type"`
 	SizeBytes       int64             `json:"size_bytes"`
-	PublicURL       *string           `json:"public_url"`
+	SHA256          string            `json:"sha256"`
 	UploadURL       string            `json:"upload_url"`
 	ExpiresIn       int               `json:"expires_in"`
 	RequiredHeaders map[string]string `json:"required_headers"`
@@ -171,16 +467,38 @@ type UploadedAssetReference struct {
 	UploadID string `json:"upload_id"`
 }
 
+type UploadFinalizationTarget struct {
+	UploadID        string
+	FinalStorageKey string
+}
+
+type UploadCleanupCandidate struct {
+	ID         string `json:"id"`
+	UploadID   string `json:"upload_id,omitempty"`
+	StorageKey string `json:"-"`
+	ObjectKind string `json:"object_kind"`
+}
+
+type UploadCleanupResult struct {
+	Attempted int      `json:"attempted"`
+	Cleaned   int      `json:"cleaned"`
+	Failed    int      `json:"failed"`
+	Failures  []string `json:"failures"`
+}
+
 type SearchThreadResult struct {
-	ID                 string   `json:"id"`
-	TenantID           string   `json:"tenant_id,omitempty"`
-	Title              string   `json:"title"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
-	CreatedBy          string   `json:"created_by"`
-	MessageCount       int      `json:"message_count"`
-	LastMessagePreview string   `json:"last_message_preview"`
-	MatchedSnippets    []string `json:"matched_snippets"`
+	ID                       string                  `json:"id"`
+	OwnerUserID              string                  `json:"owner_user_id"`
+	Title                    string                  `json:"title"`
+	CreatedAt                string                  `json:"created_at"`
+	UpdatedAt                string                  `json:"updated_at"`
+	CreatedBy                string                  `json:"created_by"`
+	CreatedByUserDisplayName *string                 `json:"created_by_user_display_name,omitempty"`
+	CreatedByActorName       *string                 `json:"created_by_actor_name,omitempty"`
+	MessageCount             int                     `json:"message_count"`
+	LastMessagePreview       string                  `json:"last_message_preview"`
+	MatchedSnippets          []string                `json:"matched_snippets"`
+	VisibilitySummary        ThreadVisibilitySummary `json:"visibility_summary"`
 }
 
 type SearchThreadParams struct {
@@ -188,13 +506,16 @@ type SearchThreadParams struct {
 	Limit        int
 	CreatedBy    *string
 	UpdatedAfter *string
+	Filter       string
+	TeamRef      string
+	Cursor       *ThreadPageCursor
 }
 
 type APIKey struct {
 	ID          string   `json:"id,omitempty"`
-	TenantID    string   `json:"tenant_id,omitempty"`
-	UserID      *string  `json:"user_id,omitempty"`
+	UserID      string   `json:"user_id"`
 	Name        string   `json:"name"`
+	Purpose     string   `json:"purpose"`
 	Key         string   `json:"-"`
 	KeyMasked   string   `json:"key_masked"`
 	TokenPrefix string   `json:"token_prefix,omitempty"`

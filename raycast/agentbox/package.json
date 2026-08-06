@@ -1,35 +1,45 @@
 {
   "name": "agentbox",
   "version": "0.1.0",
-  "description": "Search, create, and update Agentbox threads from Raycast.",
-  "title": "Agentbox",
+  "description": "Browse and participate in your AgentBox inbox from Raycast.",
+  "title": "AgentBox",
   "icon": "icon.png",
   "author": "amxv",
-  "owner": "zue-ai",
   "license": "MIT",
-  "platforms": ["macOS"],
-  "categories": ["Productivity", "Developer Tools"],
-  "keywords": ["agentbox", "agents", "mcp", "threads", "messages"],
+  "platforms": [
+    "macOS"
+  ],
+  "categories": [
+    "Productivity",
+    "Developer Tools"
+  ],
+  "keywords": [
+    "agentbox",
+    "agents",
+    "threads",
+    "messages"
+  ],
   "scripts": {
     "dev": "ray develop",
-    "build": "ray build -e dist",
-    "lint": "ray lint",
-    "publish": "ray publish"
+    "build": "ray build -I -e dist",
+    "lint": "ray lint -I",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test test/api-client.test.ts",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run test && npm run typecheck && npm run lint && npm run build"
   },
   "preferences": [
     {
       "name": "baseUrl",
       "title": "Agentbox URL",
-      "description": "Dashboard or API proxy URL. The production dashboard proxies /api requests.",
+      "description": "Dashboard origin from the one-time AgentBox Raycast setup bundle.",
       "type": "textfield",
       "required": true,
-      "placeholder": "https://agentbox-black.vercel.app",
-      "default": "https://agentbox-black.vercel.app"
+      "placeholder": "https://your-agentbox.example.com"
     },
     {
       "name": "apiKey",
       "title": "Agentbox API Key",
-      "description": "Actor API key for thread, message, attachment, and MCP requests.",
+      "description": "Dedicated Raycast API key for threads, messages, attachments, and visibility.",
       "type": "password",
       "required": true,
       "placeholder": "Paste an Agentbox API key"
@@ -44,24 +54,17 @@
   ],
   "commands": [
     {
-      "name": "latest-messages",
-      "title": "Latest Messages",
-      "subtitle": "Agentbox",
-      "description": "Browse recent messages across Agentbox threads and copy message content.",
-      "mode": "view"
-    },
-    {
-      "name": "search-threads",
-      "title": "Search Threads",
-      "subtitle": "Agentbox",
-      "description": "Search recent Agentbox threads, inspect messages, and open thread actions.",
-      "mode": "view"
-    },
-    {
       "name": "list-threads",
-      "title": "List Threads",
+      "title": "Browse Threads",
       "subtitle": "Agentbox",
-      "description": "Browse recent Agentbox threads, inspect messages, and open thread actions.",
+      "description": "Browse and search every Agentbox thread currently accessible to your user.",
+      "mode": "view"
+    },
+    {
+      "name": "create-thread",
+      "title": "Create Thread",
+      "subtitle": "Agentbox",
+      "description": "Create a private Agentbox thread with an optional first message and attachments.",
       "mode": "view"
     },
     {
@@ -75,7 +78,7 @@
       "name": "doctor",
       "title": "Check Connection",
       "subtitle": "Agentbox",
-      "description": "Check preferences, health, authenticated API access, and MCP URL setup.",
+      "description": "Check preferences, health, user identity, teams, and authenticated thread access.",
       "mode": "view"
     }
   ],

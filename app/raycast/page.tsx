@@ -10,35 +10,34 @@ const repoUrl = "https://github.com/amxv/agentbox";
 const sourceUrl = `${repoUrl}/tree/main/raycast/agentbox`;
 
 const commands = [
-  ["01", "Latest Messages", "Browse recent messages across every thread, copy content, inspect context, open the source thread, and work with attachments."],
-  ["02", "Search Threads", "Find threads by title or message content, inspect messages, open dashboard links, post replies, and copy thread details."],
-  ["03", "List Threads", "Browse the shared inbox chronologically and jump into the same durable threads used by every other participant."],
-  ["04", "Post Message", "Reply to an existing thread or create a new one with an optional first message and local attachments from macOS."],
-  ["05", "Check Connection", "Verify preferences, health, authenticated thread access, attachment behavior, and MCP URL construction."]
+  ["01", "Browse Threads", "Page and search the complete accessible inbox with All, Private, Shared, team, and Public filters, then inspect messages, files, and visibility."],
+  ["02", "Create Thread", "Create a private thread with an optional first message and ordered local attachments."],
+  ["03", "Post Message", "Choose an accessible thread, post a reply with ordered attachments, or use an explicit thread ID as an expert path."],
+  ["04", "Check Connection", "Verify preferences, health, authenticated user identity, teams, and ordinary thread API access."]
 ];
 
 const installSteps = [
   {
-    title: "Create a Raycast identity",
-    body: "Run this from an authenticated tenant profile. The printed actor key is scoped to the same tenant and appears as its own participant in thread attribution.",
-    code: "agentbox login --base-url https://youragentbox.vercel.app --profile-name prod\nagentbox raycast-key"
+    title: "Create an installation credential",
+    body: "Sign in to AgentBox, open Onboarding or Credentials, and connect Raycast. Copy the one-time base URL and dedicated key for this Mac only.",
+    code: "AgentBox dashboard\n→ Onboarding or Credentials\n→ Connect Raycast\n→ Copy baseUrl + apiKey once"
   },
   {
     title: "Load the extension locally",
-    body: "The extension lives inside the Agentbox repository and uses the standard Raycast development workflow.",
-    code: "git clone https://github.com/amxv/agentbox.git\ncd agentbox/raycast/agentbox\nnpm install\nnpm run dev"
+    body: "Use the checked-in extension and the standard Raycast developer-mode workflow. A production cutover pins the exact deployed commit before import.",
+    code: "git clone https://github.com/amxv/agentbox.git\ncd agentbox/raycast/agentbox\nnpm ci\nnpm run verify\nnpm run dev"
   },
   {
-    title: "Validate before publishing",
-    body: "Run the Raycast checks from the extension directory. Private team publishing is available to the configured owner when appropriate.",
-    code: "npm run lint\nnpm run build\n\n# Private team store, maintainer only:\nnpm run publish"
+    title: "Configure and verify",
+    body: "Enter the one-time values in Raycast preferences, then run Check Connection and confirm Browse Threads lists only this user's accessible threads.",
+    code: "baseUrl = <dashboard origin>\napiKey = <dedicated Raycast key>\ndownloadDirectory = <optional>\n\nRun: Check Connection → Browse Threads"
   }
 ];
 
 const preferences = [
-  ["01", "Agentbox URL", "https://youragentbox.vercel.app"],
-  ["02", "Agentbox API Key", "The output from agentbox raycast-key"],
-  ["03", "Attachment folder", "Optional; defaults to ~/Downloads/Agentbox"]
+  ["01", "baseUrl", "Dashboard origin from the setup bundle"],
+  ["02", "apiKey", "Dedicated one-time Raycast installation key"],
+  ["03", "downloadDirectory", "Optional local attachment folder"]
 ];
 
 const workflows = [
@@ -83,9 +82,9 @@ export default function RaycastPage() {
       <main>
         <section className={styles.hero}>
           <div className={styles.heroCopy}>
-            <p className={styles.eyebrow}>Agentbox / macOS desk / Five commands</p>
+            <p className={styles.eyebrow}>Agentbox / macOS / Developer mode</p>
             <h1>The shared inbox, one keystroke away.</h1>
-            <p>Agentbox for Raycast is not a companion viewer or a one-way shortcut. It is another full participant surface for the same threads, messages, files, identities, and history used by the dashboard, MCP hosts, CLI agents, scripts, and CI.</p>
+            <p>Agentbox for Raycast is an ordinary user surface over the same private, team-shared, and public-status threads used by the dashboard, MCP hosts, CLI agents, scripts, and CI.</p>
             <div className={styles.actions}>
               <a className={styles.primaryAction} href="#install">Install locally</a>
               <PublicCopyButton className={styles.secondaryAction} sourceUrl="/raycast.md" label="Copy setup Markdown" copiedLabel="Markdown copied" />
@@ -107,7 +106,7 @@ export default function RaycastPage() {
           <div className={styles.sectionIntro}>
             <p className={styles.sectionLabel}>01 / Command directory</p>
             <h2>Everything needed for the inbox. Nothing pretending to be a second inbox.</h2>
-            <p>The extension talks to the existing HTTP API and stores its actor key only in Raycast preferences. It does not require the Go CLI at runtime.</p>
+            <p>The extension talks to the ordinary authenticated HTTP API and stores its dedicated key only in Raycast preferences. It does not require the Go CLI at runtime and cannot use owner-browser-only routes.</p>
           </div>
           <div className={styles.commandList}>
             {commands.map(([number, title, body]) => (
@@ -120,7 +119,7 @@ export default function RaycastPage() {
           <aside>
             <p className={styles.sectionLabel}>02 / Local installation</p>
             <h2>Give Raycast its own named seat.</h2>
-            <p>Create a tenant-scoped Raycast identity, load the extension, and paste the URL and key into Raycast preferences.</p>
+            <p>Create one user-owned credential per installation, load the extension locally, and enter the one-time setup values in Raycast preferences.</p>
             <PublicCopyButton className={styles.copyGuide} sourceUrl="/raycast.md" label="Copy entire guide" copiedLabel="Guide copied" />
           </aside>
           <div className={styles.installSteps}>
@@ -137,7 +136,7 @@ export default function RaycastPage() {
           <div className={styles.sectionIntro}>
             <p className={styles.sectionLabel}>03 / Three preferences</p>
             <h2>Configure the participant, not another backend.</h2>
-            <p>Each person can use their own URL and actor key. Credentials stay inside Raycast preferences and never touch the CLI profile.</p>
+            <p>Each installation uses its own deployment URL and key. Credentials stay inside Raycast preferences and never reuse a CLI or MCP credential.</p>
           </div>
           <div className={styles.preferenceTable}>
             <div><span>Field</span><span>Preference</span><span>Value</span></div>

@@ -1,15 +1,17 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
-	"agentbox/internal/agentbox/assets"
 	"agentbox/internal/agentbox/auth"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/mcpserver"
@@ -35,29 +37,635 @@ func NewServer(cfg config.Config, svc *service.Service) *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.MaintenanceMode && !maintenanceExemptPath(r.URL.Path) && !s.hasMaintenanceBypass(r) && !s.hasOwnerBrowserMaintenanceAccess(r) {
+		writeCodedError(w, http.StatusServiceUnavailable, "MAINTENANCE_MODE", "AgentBox is temporarily unavailable for the user/team cutover.")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func maintenanceExemptPath(path string) bool {
+	switch path {
+	case "/api/health", "/api/admin/owner/setup-token", "/api/auth/owner/setup":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) hasMaintenanceBypass(r *http.Request) bool {
+	expected := strings.TrimSpace(s.cfg.MaintenanceBypassKey)
+	provided := strings.TrimSpace(r.Header.Get("x-agentbox-maintenance-key"))
+	if expected == "" || provided == "" || len(expected) != len(provided) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
+}
+
+func (s *Server) hasOwnerBrowserMaintenanceAccess(r *http.Request) bool {
+	secret := s.sessionSecretFromRequest(r)
+	if secret == "" {
+		return false
+	}
+	authContext, err := s.service.AuthenticateSession(r.Context(), secret)
+	if err != nil || authContext == nil {
+		return false
+	}
+	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.IsOwner && strings.TrimSpace(authContext.SessionID) != ""
 }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", s.health)
 	s.mux.HandleFunc("/api/auth/login", s.authLogin)
+	s.mux.HandleFunc("/api/auth/owner/setup", s.authOwnerSetup)
+	s.mux.HandleFunc("/api/auth/invitations/inspect", s.authInvitationInspect)
+	s.mux.HandleFunc("/api/auth/invitations/register", s.authInvitationRegister)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
 	s.mux.HandleFunc("/api/me", s.authMe)
+	s.mux.HandleFunc("/api/me/teams", s.myTeams)
 	s.mux.HandleFunc("/api/auth/cli/authorize", s.authCLIAuthorize)
 	s.mux.HandleFunc("/api/auth/cli/exchange", s.authCLIExchange)
-	s.mux.HandleFunc("/api/admin/tenants", s.adminTenants)
-	s.mux.HandleFunc("/api/admin/tenants/", s.adminTenantSubroutes)
-	s.mux.HandleFunc("/api/admin/keys", s.adminKeys)
-	s.mux.HandleFunc("/api/admin/keys/", s.adminKey)
+	s.mux.HandleFunc("/api/admin/owner/setup-token", s.adminOwnerSetupToken)
+	s.mux.HandleFunc("/api/admin/uploads/cleanup", s.adminUploadCleanup)
+	s.mux.HandleFunc("/api/owner/invitations", s.ownerInvitations)
+	s.mux.HandleFunc("/api/owner/invitations/", s.ownerInvitation)
+	s.mux.HandleFunc("/api/owner/users", s.ownerUsers)
+	s.mux.HandleFunc("/api/owner/users/", s.ownerUserAction)
+	s.mux.HandleFunc("/api/owner/credentials", s.ownerCredentials)
+	s.mux.HandleFunc("/api/owner/credentials/", s.ownerCredential)
+	s.mux.HandleFunc("/api/owner/content/threads", s.ownerContentThreads)
+	s.mux.HandleFunc("/api/owner/content/search", s.ownerContentSearch)
+	s.mux.HandleFunc("/api/owner/content/threads/", s.ownerContentThread)
+	s.mux.HandleFunc("/api/owner/content/assets/", s.ownerContentAsset)
+	s.mux.HandleFunc("/api/owner/teams", s.ownerTeams)
+	s.mux.HandleFunc("/api/owner/teams/", s.ownerTeam)
 	s.mux.HandleFunc("/api/keys", s.keys)
 	s.mux.HandleFunc("/api/keys/", s.key)
+	s.mux.HandleFunc("/api/raycast-installations", s.raycastInstallations)
+	s.mux.HandleFunc("/api/onboarding", s.onboarding)
+	s.mux.HandleFunc("/api/onboarding/skip", s.onboardingSkip)
+	s.mux.HandleFunc("/api/onboarding/connectors/", s.onboardingConnector)
 	s.mux.HandleFunc("/api/threads", s.threads)
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
+	s.mux.HandleFunc("/api/public/threads/", s.publicThreadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
-	s.mux.HandleFunc("/api/viewer/threads", s.viewerThreads)
-	s.mux.HandleFunc("/api/viewer/threads/", s.viewerThread)
 	s.mux.Handle("/api/mcp", s.mcpHandler())
+}
+
+func (s *Server) ownerInvitations(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListSignupInvitationsPage(r.Context(), *authContext, pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+	case http.MethodPost:
+		var input struct {
+			ExpiresInMinutes int      `json:"expires_in_minutes"`
+			TeamIDs          []string `json:"team_ids"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			if err := parseJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		if input.ExpiresInMinutes < 0 {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "expires_in_minutes must not be negative.")
+			return
+		}
+		if len(input.TeamIDs) > types.MaxOwnerPageLimit {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "at most 100 initial teams may be selected")
+			return
+		}
+		result, err := s.service.CreateSignupInvitation(r.Context(), *authContext, time.Duration(input.ExpiresInMinutes)*time.Minute, input.TeamIDs...)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		signupPath := "/signup?token=" + url.QueryEscape(result.Token)
+		signupURL := signupPath
+		if baseURL := s.requestBaseURL(r); baseURL != "" {
+			signupURL = baseURL + signupPath
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"invitation": result.Invitation, "token": result.Token, "signup_url": signupURL})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) adminUploadCleanup(w http.ResponseWriter, r *http.Request) {
+	if !s.hasMaintenanceBypass(r) {
+		writeCodedError(w, http.StatusUnauthorized, "UNAUTHORIZED", "A valid maintenance key is required.")
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "limit must be between 1 and 100.")
+			return
+		}
+		limit = parsed
+	}
+	result, err := s.service.CleanupPendingUploads(r.Context(), limit)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) ownerInvitation(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	invitationID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/invitations/"), "/")
+	if invitationID == "" || strings.Contains(invitationID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodDelete) {
+		return
+	}
+	if err := s.service.RevokeSignupInvitation(r.Context(), *authContext, invitationID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": invitationID})
+}
+
+func (s *Server) ownerUsers(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.ListUsersPage(r.Context(), *authContext, pageRequest)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) ownerCredentials(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.ListOwnerAPIKeysPage(r.Context(), *authContext, pageRequest)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) ownerCredential(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	if !method(w, r, http.MethodDelete) {
+		return
+	}
+	credentialID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/credentials/"), "/")
+	if credentialID == "" || strings.Contains(credentialID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if err := s.service.RevokeOwnerAPIKey(r.Context(), *authContext, credentialID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": credentialID})
+}
+
+func (s *Server) ownerContentThreads(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.ListOwnerContentThreadsPage(r.Context(), ownerContext, types.OwnerContentListParams{
+		Limit: pageRequest.Limit, Offset: pageRequest.Offset,
+		UserID: strings.TrimSpace(r.URL.Query().Get("user_id")), TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) ownerContentSearch(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	pageRequest, err := ownerPageRequest(r)
+	if err != nil {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+		return
+	}
+	page, err := s.service.SearchOwnerContentThreadsPage(r.Context(), ownerContext, types.OwnerContentSearchParams{
+		Query: strings.TrimSpace(r.URL.Query().Get("query")), Limit: pageRequest.Limit, Offset: pageRequest.Offset,
+		UserID: strings.TrimSpace(r.URL.Query().Get("user_id")), TeamRef: strings.TrimSpace(r.URL.Query().Get("team")),
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) ownerContentThread(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	threadID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/content/threads/"), "/")
+	if threadID == "" || strings.Contains(threadID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	thread, err := s.service.GetOwnerContentThread(r.Context(), ownerContext, threadID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	viewer := withOwnerContentAssetPaths(thread)
+	writeJSON(w, http.StatusOK, map[string]any{"thread": viewer})
+}
+
+func (s *Server) ownerContentAsset(w http.ResponseWriter, r *http.Request) {
+	ownerContext, ok := s.requireOwnerContentContext(w, r)
+	if !ok {
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/owner/content/assets/")
+	assetID, tail, pathOK := splitFirst(rest)
+	if !pathOK || (tail != "download" && tail != "preview") {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	safeExpires := validate.ClampSignedURLExpiry(numberQuery(r, "expires_in", 300))
+	urlField := "download_url"
+	signedURL := ""
+	var err error
+	if tail == "preview" {
+		urlField = "preview_url"
+		signedURL, err = s.service.SignedOwnerContentAssetPreviewURL(r.Context(), ownerContext, assetID, safeExpires)
+	} else {
+		signedURL, err = s.service.SignedOwnerContentAssetDownloadURL(r.Context(), ownerContext, assetID, safeExpires)
+	}
+	payload := map[string]any{
+		"asset_id":   assetID,
+		"expires_in": safeExpires,
+	}
+	writeAssetResolution(w, payload, urlField, signedURL, err)
+}
+
+func (s *Server) ownerTeams(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListOwnerTeamsPage(r.Context(), *authContext, pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+	case http.MethodPost:
+		var input struct {
+			Slug string `json:"slug"`
+			Name string `json:"name"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		team, err := s.service.CreateTeam(r.Context(), *authContext, input.Slug, input.Name)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"team": team})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) ownerTeam(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/teams/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 1 && parts[0] != "" {
+		if !method(w, r, http.MethodPatch) {
+			return
+		}
+		var input struct {
+			Name string `json:"name"`
+		}
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		team, err := s.service.RenameTeam(r.Context(), *authContext, parts[0], input.Name)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"team": team})
+		return
+	}
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "members" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListOwnerTeamMembersPage(r.Context(), *authContext, parts[0], pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
+	if len(parts) == 3 && parts[0] != "" && parts[1] == "members" && parts[2] != "" {
+		switch r.Method {
+		case http.MethodPut:
+			membership, err := s.service.AddTeamMember(r.Context(), *authContext, parts[0], parts[2])
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"membership": membership})
+		case http.MethodDelete:
+			if err := s.service.RemoveTeamMember(r.Context(), *authContext, parts[0], parts[2]); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"removed": true})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) myTeams(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	teams, err := s.service.ListMyTeams(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"teams": teams})
+}
+
+func (s *Server) ownerUserAction(w http.ResponseWriter, r *http.Request) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/owner/users/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet && parts[1] == "teams" {
+		pageRequest, err := ownerPageRequest(r)
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
+			return
+		}
+		page, err := s.service.ListOwnerUserTeamsPage(r.Context(), *authContext, parts[0], pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	disabled := false
+	switch parts[1] {
+	case "disable":
+		disabled = true
+	case "enable":
+		disabled = false
+	case "purge-attachments":
+		var input struct {
+			Limit int `json:"limit"`
+		}
+		if r.Body != nil && r.ContentLength != 0 {
+			if err := parseJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		result, err := s.service.PurgeUserAttachments(r.Context(), *authContext, parts[0], input.Limit)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"purge": result})
+		return
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	user, err := s.service.SetUserDisabled(r.Context(), *authContext, parts[0], disabled)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func (s *Server) authInvitationInspect(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Token string `json:"token"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	inspection, err := s.service.InspectSignupInvitation(r.Context(), input.Token)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, inspection)
+}
+
+func (s *Server) authInvitationRegister(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Token       string `json:"token"`
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authContext, sessionSecret, user, err := s.service.RegisterWithSignupInvitation(r.Context(), input.Token, input.Email, input.DisplayName, input.Password)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	s.setSessionCookie(w, sessionSecret)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"auth":     authContext,
+		"user":     user,
+		"redirect": "/onboarding",
+	})
+}
+
+func (s *Server) adminOwnerSetupToken(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		ExpiresInMinutes int `json:"expires_in_minutes"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if input.ExpiresInMinutes < 0 {
+		writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "expires_in_minutes must not be negative.")
+		return
+	}
+	ttl := time.Duration(input.ExpiresInMinutes) * time.Minute
+	result, err := s.service.IssueOwnerSetupToken(r.Context(), ttl)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	setupPath := "/owner/setup?token=" + url.QueryEscape(result.Token)
+	setupURL := setupPath
+	if baseURL := s.requestBaseURL(r); baseURL != "" {
+		setupURL = baseURL + setupPath
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token":      result.Token,
+		"purpose":    result.Purpose,
+		"expires_at": result.ExpiresAt,
+		"setup_url":  setupURL,
+	})
+}
+
+func (s *Server) authOwnerSetup(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Token       string `json:"token"`
+		Email       string `json:"email"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+	}
+	if err := parseJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	authContext, sessionSecret, owner, err := s.service.CompleteOwnerSetup(r.Context(), input.Token, input.Email, input.DisplayName, input.Password)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	s.setSessionCookie(w, sessionSecret)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auth":  authContext,
+		"owner": owner,
+	})
 }
 
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
@@ -67,13 +675,12 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
-		TenantID string `json:"tenant_id"`
 	}
 	if err := parseJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	authContext, secret, err := s.service.Login(r.Context(), input.TenantID, input.Email, input.Password)
+	authContext, secret, err := s.service.Login(r.Context(), "", input.Email, input.Password)
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := err.Error()
@@ -162,7 +769,6 @@ func (s *Server) authCLIExchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"api_key":   apiKeyResponse(result.APIKey),
 		"key":       apiKeyResponse(result.APIKey),
-		"tenant":    result.Tenant,
 		"user":      result.User,
 		"auth_type": result.AuthType,
 	})
@@ -186,28 +792,43 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit := numberQuery(r, "limit", 50)
+		filter := strings.TrimSpace(r.URL.Query().Get("filter"))
+		teamRef := strings.TrimSpace(r.URL.Query().Get("team"))
+		cursor, err := types.DecodeThreadPageCursor(r.URL.Query().Get("cursor"))
+		if err != nil {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "cursor is invalid.")
+			return
+		}
 		if query := strings.TrimSpace(r.URL.Query().Get("query")); query != "" {
 			createdBy := optionalQuery(r, "created_by")
 			updatedAfter := optionalQuery(r, "updated_after")
-			threads, err := s.service.SearchThreads(r.Context(), *authContext, types.SearchThreadParams{
+			page, err := s.service.SearchThreadsPage(r.Context(), *authContext, types.SearchThreadParams{
 				Query:        query,
 				Limit:        limit,
 				CreatedBy:    createdBy,
 				UpdatedAfter: updatedAfter,
+				Filter:       filter,
+				TeamRef:      teamRef,
+				Cursor:       cursor,
 			})
 			if err != nil {
 				writeServiceError(w, err)
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+			writeJSON(w, http.StatusOK, page)
 			return
 		}
-		threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
+		page, err := s.service.ListThreadsPage(r.Context(), *authContext, types.ThreadListParams{
+			Limit:   limit,
+			Filter:  filter,
+			TeamRef: teamRef,
+			Cursor:  cursor,
+		})
 		if err != nil {
 			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
+		writeJSON(w, http.StatusOK, page)
 	case http.MethodPost:
 		authContext, ok := s.requireAuth(w, r)
 		if !ok {
@@ -242,175 +863,6 @@ func (s *Server) threads(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) adminTenants(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	if !method(w, r, http.MethodPost) {
-		return
-	}
-	var input struct {
-		TenantSlug string `json:"tenant_slug"`
-		TenantName string `json:"tenant_name"`
-		UserEmail  string `json:"user_email"`
-		UserName   string `json:"user_name"`
-		Password   string `json:"password"`
-		CreateKey  bool   `json:"create_key"`
-		KeyName    string `json:"key_name"`
-	}
-	if err := parseJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	result, err := s.service.ProvisionTenant(r.Context(), service.ProvisionTenantParams{
-		TenantSlug: input.TenantSlug,
-		TenantName: input.TenantName,
-		UserEmail:  input.UserEmail,
-		UserName:   input.UserName,
-		Password:   input.Password,
-		CreateKey:  input.CreateKey,
-		KeyName:    input.KeyName,
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, provisionTenantResponse(result))
-}
-
-func (s *Server) adminTenantSubroutes(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	rest := strings.TrimPrefix(r.URL.Path, "/api/admin/tenants/")
-	tenantID, tail, ok := splitFirst(rest)
-	if !ok || tenantID == "" {
-		http.NotFound(w, r)
-		return
-	}
-	switch tail {
-	case "users":
-		s.adminTenantUsers(w, r, tenantID)
-	case "keys":
-		s.adminTenantKeys(w, r, tenantID)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func (s *Server) adminTenantUsers(w http.ResponseWriter, r *http.Request, tenantID string) {
-	if !method(w, r, http.MethodPost) {
-		return
-	}
-	var input struct {
-		Email       string `json:"email"`
-		UserEmail   string `json:"user_email"`
-		DisplayName string `json:"display_name"`
-		UserName    string `json:"user_name"`
-		Password    string `json:"password"`
-		Role        string `json:"role"`
-	}
-	if err := parseJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	email := firstNonEmpty(input.Email, input.UserEmail)
-	displayName := firstNonEmpty(input.DisplayName, input.UserName)
-	user, setupToken, err := s.service.ProvisionUser(r.Context(), service.ProvisionUserParams{
-		TenantIDOrSlug: tenantID,
-		Email:          email,
-		DisplayName:    displayName,
-		Password:       input.Password,
-		Role:           input.Role,
-	})
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	response := map[string]any{"user": user}
-	if setupToken != "" {
-		response["setup_token"] = setupToken
-	}
-	writeJSON(w, http.StatusCreated, response)
-}
-
-func (s *Server) adminTenantKeys(w http.ResponseWriter, r *http.Request, tenantID string) {
-	if !method(w, r, http.MethodPost) {
-		return
-	}
-	var input struct {
-		Name string `json:"name"`
-	}
-	if err := parseJSON(r, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	key, err := s.service.ProvisionTenantAPIKey(r.Context(), tenantID, input.Name)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"key": apiKeyResponse(key)})
-}
-
-func (s *Server) adminKeys(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		keys, err := s.service.ListAPIKeys(r.Context(), adminAuthContext())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
-	case http.MethodPost:
-		var input struct {
-			Name string `json:"name"`
-		}
-		if err := parseJSON(r, &input); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		key, err := s.service.CreateAPIKey(r.Context(), adminAuthContext(), input.Name)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"key": apiKeyResponse(key),
-		})
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *Server) adminKey(w http.ResponseWriter, r *http.Request) {
-	if !s.requireAdmin(w, r) {
-		return
-	}
-	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/keys/"), "/")
-	if name == "" || strings.Contains(name, "/") {
-		http.NotFound(w, r)
-		return
-	}
-	switch r.Method {
-	case http.MethodDelete:
-		if err := s.service.RevokeAPIKey(r.Context(), adminAuthContext(), name); err != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(err, service.ErrAPIKeyNotFound) {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"revoked": name})
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
 func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	authContext, ok := s.requireAuth(w, r)
 	if !ok {
@@ -419,18 +871,24 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if !canReadKeys(*authContext) {
-			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:read scope is required.")
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:read scope is required.")
 			return
 		}
-		keys, err := s.service.ListAPIKeys(r.Context(), *authContext)
+		pageRequest, err := ownerPageRequest(r)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
+		page, err := s.service.ListAPIKeysPage(r.Context(), *authContext, pageRequest)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		credentials := apiKeyResponses(page.Credentials)
+		writeJSON(w, http.StatusOK, map[string]any{"credentials": credentials, "keys": credentials, "page": page.Page})
 	case http.MethodPost:
 		if !canManageKeys(*authContext) {
-			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:write scope is required.")
+			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
 			return
 		}
 		var input struct {
@@ -442,13 +900,17 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if strings.EqualFold(strings.TrimSpace(input.Purpose), "raycast") {
+			writeCodedError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "Use the dedicated Raycast installation flow so purpose and scopes are fixed safely.")
+			return
+		}
 		scopes := input.Scopes
 		if len(scopes) == 0 {
 			scopes = service.ConnectorAPIKeyScopes(input.Purpose)
 		}
-		key, err := s.service.CreateAPIKeyWithScopes(r.Context(), *authContext, input.Name, scopes)
+		key, err := s.service.CreateAPIKeyWithPurposeAndScopes(r.Context(), *authContext, input.Name, input.Purpose, scopes)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeServiceError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
@@ -459,34 +921,187 @@ func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) raycastInstallations(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !canManageKeys(*authContext) {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	var input struct {
+		Label string `json:"label"`
+	}
+	if err := parseJSONStrict(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := s.service.CreateRaycastInstallation(r.Context(), *authContext, input.Label, s.requestBaseURL(r))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"credential":    apiKeyResponse(result.Credential),
+		"raycast_setup": result.Setup,
+	})
+}
+
+func (s *Server) onboarding(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	state, err := s.service.GetOnboardingState(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"onboarding": state})
+}
+
+func (s *Server) onboardingSkip(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	state, err := s.service.DismissOnboarding(r.Context(), *authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"onboarding": state})
+}
+
+func (s *Server) onboardingConnector(w http.ResponseWriter, r *http.Request) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	connector := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/onboarding/connectors/"), "/")
+	if connector == "" || strings.Contains(connector, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	var input struct {
+		Rotate bool `json:"rotate"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	result, err := s.service.CreateOnboardingConnection(r.Context(), *authContext, connector, s.requestBaseURL(r), input.Rotate)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"connector":       result.Connector,
+		"credential":      apiKeyResponse(result.Credential),
+		"onboarding":      result.State,
+		"mcp_url":         result.MCPURL,
+		"profile_command": result.ProfileCommand,
+		"setup_prompt":    result.SetupPrompt,
+		"raycast_setup":   result.RaycastSetup,
+		"instructions":    result.Instructions,
+	})
+}
+
 func (s *Server) key(w http.ResponseWriter, r *http.Request) {
 	authContext, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	if !canManageKeys(*authContext) {
-		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Tenant admin role or keys:write scope is required.")
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "Browser session or keys:write scope is required.")
 		return
 	}
-	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
-	if name == "" || strings.Contains(name, "/") {
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/")
+	parts := strings.Split(remainder, "/")
+	if remainder == "" || len(parts) > 2 || strings.TrimSpace(parts[0]) == "" {
 		http.NotFound(w, r)
+		return
+	}
+	credentialID := parts[0]
+	if len(parts) == 2 {
+		if parts[1] != "setup" || !method(w, r, http.MethodGet) {
+			return
+		}
+		setup, err := s.service.RaycastInstallationSetup(r.Context(), *authContext, credentialID, s.requestBaseURL(r))
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"raycast_setup": setup})
 		return
 	}
 	switch r.Method {
 	case http.MethodDelete:
-		if err := s.service.RevokeAPIKey(r.Context(), *authContext, name); err != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(err, service.ErrAPIKeyNotFound) {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
+		var err error
+		if strings.HasPrefix(credentialID, "key_") {
+			err = s.service.RevokeAPIKeyByID(r.Context(), *authContext, credentialID)
+		} else {
+			// Compatibility for pre-inventory clients. Maintained clients use
+			// stable credential IDs so similarly named historical rows remain
+			// individually addressable.
+			err = s.service.RevokeAPIKey(r.Context(), *authContext, credentialID)
+		}
+		if err != nil {
+			writeServiceError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"revoked": name})
+		writeJSON(w, http.StatusOK, map[string]any{"revoked": credentialID})
+	case http.MethodPatch:
+		rotated, setup, err := s.service.RotateAPIKeyByID(r.Context(), *authContext, credentialID, s.requestBaseURL(r))
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"credential": apiKeyResponse(rotated), "raycast_setup": setup})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) requestBaseURL(r *http.Request) string {
+	if origin, err := s.cfg.TrustedAppPublicURL(); err == nil && origin != "" {
+		return origin
+	}
+	if s.cfg.IsProduction() {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return ""
+	}
+	// Development fallback deliberately ignores Forwarded and X-Forwarded-*
+	// headers. Production requires AGENTBOX_APP_PUBLIC_URL, and the local
+	// fallback may trust only the host observed by the Go server itself.
+	fallback := config.Config{AppPublicURL: scheme + "://" + host}
+	origin, err := fallback.TrustedAppPublicURL()
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +1115,10 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.getThread(w, r, threadID)
 		return
 	}
+	if tail == "view" {
+		s.threadView(w, r, threadID)
+		return
+	}
 	if tail == "messages" {
 		s.postMessage(w, r, threadID)
 		return
@@ -507,6 +1126,74 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 	if tail == "uploads" {
 		s.createUploadIntents(w, r, threadID)
 		return
+	}
+	if tail == "visibility" {
+		s.threadVisibility(w, r, threadID)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) threadVisibility(w http.ResponseWriter, r *http.Request, threadID string) {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		visibility, err := s.service.ManageThreadVisibility(r.Context(), *authContext, threadID, s.requestBaseURL(r), types.ManageThreadVisibilityInput{})
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
+	case http.MethodPatch:
+		var input types.ManageThreadVisibilityInput
+		if err := parseJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		visibility, err := s.service.ManageThreadVisibility(r.Context(), *authContext, threadID, s.requestBaseURL(r), input)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"visibility": visibility})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) publicThreadSubroutes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/public/threads/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) == 1 && parts[0] != "" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		thread, err := s.service.GetPublicThread(r.Context(), parts[0])
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
+		return
+	}
+	if len(parts) == 4 && parts[0] != "" && parts[1] == "assets" && parts[2] != "" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		switch parts[3] {
+		case "download":
+			downloadURL, err := s.service.PublicAssetDownloadURL(r.Context(), parts[0], parts[2])
+			writeAssetResolution(w, map[string]any{"asset_id": parts[2]}, "download_url", downloadURL, err)
+			return
+		case "preview":
+			previewURL, err := s.service.PublicAssetPreviewURL(r.Context(), parts[0], parts[2])
+			writeAssetResolution(w, map[string]any{"asset_id": parts[2]}, "preview_url", previewURL, err)
+			return
+		}
 	}
 	http.NotFound(w, r)
 }
@@ -547,7 +1234,7 @@ func (s *Server) createUploadIntents(w http.ResponseWriter, r *http.Request, thr
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"uploads": uploads})
+	writeJSON(w, http.StatusCreated, map[string]any{"uploads": safeUploadIntentResponses(uploads)})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -567,10 +1254,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	var input struct {
 		Body            *string                        `json:"body"`
 		BodyContentType *string                        `json:"body_content_type"`
-		File            *types.ChatGPTFileReference    `json:"file"`
 		UploadedAssets  []types.UploadedAssetReference `json:"uploaded_assets"`
+		UploadIDs       []string                       `json:"upload_ids"`
 	}
-	if err := parseJSON(r, &input); err != nil {
+	if err := parseJSONStrict(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -578,24 +1265,13 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, threadID st
 	if input.Body != nil {
 		body = *input.Body
 	}
-	var file *assets.ChatGPTFileInput
-	if input.File != nil {
-		if err := validate.FileReference(input.File.DownloadURL, input.File.FileID); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		file = &assets.ChatGPTFileInput{
-			DownloadURL: input.File.DownloadURL,
-			FileID:      input.File.FileID,
-			MimeType:    input.File.MimeType,
-			FileName:    input.File.FileName,
-		}
+	for _, uploadID := range input.UploadIDs {
+		input.UploadedAssets = append(input.UploadedAssets, types.UploadedAssetReference{UploadID: uploadID})
 	}
 	message, err := s.service.PostMessage(r.Context(), *authContext, service.PostMessageParams{
 		ThreadID:        threadID,
 		Body:            body,
 		BodyContentType: input.BodyContentType,
-		File:            file,
 		UploadedAssets:  input.UploadedAssets,
 	})
 	if err != nil {
@@ -665,7 +1341,7 @@ func (s *Server) postMessageMultipart(w http.ResponseWriter, r *http.Request, au
 func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/assets/")
 	assetID, tail, ok := splitFirst(rest)
-	if !ok || tail != "download-url" {
+	if !ok || (tail != "download-url" && tail != "download" && tail != "preview-url" && tail != "preview") {
 		http.NotFound(w, r)
 		return
 	}
@@ -687,22 +1363,25 @@ func (s *Server) assetSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := numberQuery(r, "expires_in", 300)
 	safeExpires := validate.ClampSignedURLExpiry(expires)
-	downloadURL, err := s.service.SignedAssetDownloadURL(r.Context(), *authContext, *asset, safeExpires)
-	if err != nil {
-		writeServiceError(w, err)
-		return
+	urlField := "download_url"
+	signedURL := ""
+	if tail == "preview-url" || tail == "preview" {
+		urlField = "preview_url"
+		signedURL, err = s.service.SignedAssetPreviewURL(r.Context(), *authContext, asset.ID, safeExpires)
+	} else {
+		signedURL, err = s.service.SignedAssetDownloadURL(r.Context(), *authContext, asset.ID, safeExpires)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"asset_id":     asset.ID,
-		"file_name":    asset.FileName,
-		"mime_type":    asset.MimeType,
-		"size_bytes":   asset.SizeBytes,
-		"expires_in":   safeExpires,
-		"download_url": downloadURL,
-	})
+	payload := map[string]any{
+		"asset_id":   asset.ID,
+		"file_name":  asset.FileName,
+		"mime_type":  asset.MimeType,
+		"size_bytes": asset.SizeBytes,
+		"expires_in": safeExpires,
+	}
+	writeAssetResolution(w, payload, urlField, signedURL, err)
 }
 
-func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
+func (s *Server) threadView(w http.ResponseWriter, r *http.Request, threadID string) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
@@ -710,32 +1389,8 @@ func (s *Server) viewerThreads(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := numberQuery(r, "limit", 100)
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 200 {
-		limit = 200
-	}
-	threads, err := s.service.ListThreads(r.Context(), *authContext, limit)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
-}
-
-func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
-	if !method(w, r, http.MethodGet) {
-		return
-	}
-	authContext, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	threadID := strings.TrimPrefix(r.URL.Path, "/api/viewer/threads/")
-	if threadID == "" || strings.Contains(threadID, "/") {
-		http.NotFound(w, r)
+	if authContext.SubjectType == types.AuthSubjectAPIKey && len(authContext.Scopes) > 0 && !hasScope(*authContext, "assets:read") {
+		writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "assets:read scope is required.")
 		return
 	}
 	thread, err := s.service.GetThread(r.Context(), *authContext, threadID)
@@ -743,11 +1398,7 @@ func (s *Server) viewerThread(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	viewer, err := withViewerAssetURLs(r, s.service, *authContext, thread)
-	if err != nil {
-		writeServiceError(w, err)
-		return
-	}
+	viewer := withViewerAssetPaths(thread)
 	writeJSON(w, http.StatusOK, map[string]any{"thread": viewer})
 }
 
@@ -774,7 +1425,7 @@ func (s *Server) mcpHandler() http.Handler {
 			writeCodedError(w, http.StatusForbidden, "PERMISSION_DENIED", "mcp:use scope is required.")
 			return
 		}
-		mcpserver.NewHTTPHandler(*authContext, s.service).ServeHTTP(w, r)
+		mcpserver.NewHTTPHandler(*authContext, s.service, s.requestBaseURL(r)).ServeHTTP(w, r)
 	})
 }
 
@@ -795,6 +1446,31 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (*types.Aut
 		return nil, false
 	}
 	return authContext, true
+}
+
+func (s *Server) requireOwnerBrowser(w http.ResponseWriter, r *http.Request) *types.AuthContext {
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return nil
+	}
+	if authContext.SubjectType != types.AuthSubjectUserSession || !authContext.IsOwner {
+		writeCodedError(w, http.StatusForbidden, "OWNER_BROWSER_REQUIRED", "Permanent owner browser session is required.")
+		return nil
+	}
+	return authContext
+}
+
+func (s *Server) requireOwnerContentContext(w http.ResponseWriter, r *http.Request) (service.OwnerWebContext, bool) {
+	authContext := s.requireOwnerBrowser(w, r)
+	if authContext == nil {
+		return service.OwnerWebContext{}, false
+	}
+	ownerContext, err := s.service.ResolveOwnerWebContext(*authContext)
+	if err != nil {
+		writeServiceError(w, err)
+		return service.OwnerWebContext{}, false
+	}
+	return ownerContext, true
 }
 
 func (s *Server) sessionCookieName() string {
@@ -859,48 +1535,40 @@ func authSecretFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.URL.Query().Get("key"))
 }
 
-func adminAuthContext() types.AuthContext {
-	return types.AuthContext{
-		TenantID:    types.DefaultTenantID,
-		SubjectType: types.AuthSubjectAdmin,
-		ActorName:   "admin",
-		Role:        "admin",
-	}
-}
-
-func provisionTenantResponse(result service.ProvisionTenantResult) map[string]any {
-	response := map[string]any{
-		"tenant": result.Tenant,
-		"user":   result.User,
-	}
-	if result.SetupToken != "" {
-		response["setup_token"] = result.SetupToken
-	}
-	if result.APIKey != nil {
-		response["api_key"] = apiKeyResponse(*result.APIKey)
-		response["key"] = apiKeyResponse(*result.APIKey)
-	}
-	return response
-}
-
 func apiKeyResponse(key types.APIKey) map[string]any {
-	return map[string]any{
-		"id":         key.ID,
-		"tenant_id":  key.TenantID,
-		"name":       key.Name,
-		"key":        key.Key,
-		"key_masked": key.KeyMasked,
-		"created_at": key.CreatedAt,
-		"updated_at": key.UpdatedAt,
+	result := map[string]any{
+		"id":           key.ID,
+		"user_id":      key.UserID,
+		"name":         key.Name,
+		"purpose":      key.Purpose,
+		"key_masked":   key.KeyMasked,
+		"token_prefix": key.TokenPrefix,
+		"scopes":       key.Scopes,
+		"created_at":   key.CreatedAt,
+		"updated_at":   key.UpdatedAt,
+		"last_used_at": key.LastUsedAt,
+		"revoked_at":   key.RevokedAt,
 	}
+	if key.Key != "" {
+		result["key"] = key.Key
+	}
+	return result
 }
 
-func tenantAdmin(authContext types.AuthContext) bool {
-	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.Role == "admin"
+func apiKeyResponses(keys []types.APIKey) []map[string]any {
+	result := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, apiKeyResponse(key))
+	}
+	return result
+}
+
+func browserUser(authContext types.AuthContext) bool {
+	return authContext.SubjectType == types.AuthSubjectUserSession && authContext.UserID != ""
 }
 
 func canManageKeys(authContext types.AuthContext) bool {
-	return tenantAdmin(authContext) || hasScope(authContext, "keys:write")
+	return browserUser(authContext) || hasScope(authContext, "keys:write")
 }
 
 func canReadKeys(authContext types.AuthContext) bool {
@@ -939,11 +1607,17 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		code = coded.Code
 		message = coded.Message
 		switch coded.Code {
-		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND":
+		case "THREAD_NOT_FOUND", "MESSAGE_NOT_FOUND", "ATTACHMENT_NOT_FOUND", "TENANT_NOT_FOUND", "TEAM_NOT_FOUND", "USER_NOT_FOUND", "PUBLIC_LINK_NOT_FOUND", "PUBLIC_ASSET_NOT_FOUND", "CREDENTIAL_NOT_FOUND":
 			status = http.StatusNotFound
-		case "PERMISSION_DENIED":
+		case "PERMISSION_DENIED", "BROWSER_SESSION_REQUIRED", "OWNER_BROWSER_REQUIRED":
 			status = http.StatusForbidden
-		case "RATE_LIMITED":
+		case "OWNER_EMAIL_MISMATCH", "ONBOARDING_CREDENTIAL_EXISTS", "PUBLIC_LINK_EXISTS", "CREDENTIAL_LABEL_CONFLICT", "UPLOAD_FINALIZING":
+			status = http.StatusConflict
+		case "ATTACHMENT_PURGED", "ATTACHMENT_UNAVAILABLE":
+			status = http.StatusGone
+		case "TEAM_SLUG_CONFLICT":
+			status = http.StatusConflict
+		case "RATE_LIMITED", "UPLOAD_QUOTA_EXCEEDED":
 			status = http.StatusTooManyRequests
 		case "INTERNAL_ERROR":
 			status = http.StatusInternalServerError
@@ -993,12 +1667,35 @@ func parseJSON(r *http.Request, target any) error {
 	return nil
 }
 
+func parseJSONStrict(r *http.Request, target any) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1_048_576))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return errors.New("Expected a JSON request body with only supported fields.")
+	}
+	return nil
+}
+
 func method(w http.ResponseWriter, r *http.Request, expected string) bool {
 	if r.Method == expected {
 		return true
 	}
 	w.WriteHeader(http.StatusMethodNotAllowed)
 	return false
+}
+
+func ownerPageRequest(r *http.Request) (types.PageRequest, error) {
+	request := types.PageRequest{Limit: numberQuery(r, "limit", types.DefaultOwnerPageLimit)}
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if cursor != "" {
+		offset, err := strconv.Atoi(cursor)
+		if err != nil || offset < 0 {
+			return types.PageRequest{}, errors.New("cursor must be a non-negative continuation offset")
+		}
+		request.Offset = offset
+	}
+	return types.NormalizePageRequest(request), nil
 }
 
 func numberQuery(r *http.Request, name string, fallback int) int {
@@ -1038,6 +1735,13 @@ type viewerThread struct {
 	Messages []viewerMessage `json:"messages"`
 }
 
+type ownerViewerThread struct {
+	types.Thread
+	Owner      types.User             `json:"owner"`
+	Messages   []viewerMessage        `json:"messages"`
+	Visibility types.ThreadVisibility `json:"visibility"`
+}
+
 type viewerMessage struct {
 	types.Message
 	Assets []viewerAsset `json:"assets"`
@@ -1045,35 +1749,93 @@ type viewerMessage struct {
 
 type viewerAsset struct {
 	types.Asset
-	DownloadURL string  `json:"download_url"`
-	PreviewURL  *string `json:"preview_url"`
+	DownloadPath string `json:"download_path,omitempty"`
+	PreviewPath  string `json:"preview_path,omitempty"`
 }
 
-func withViewerAssetURLs(r *http.Request, svc *service.Service, authContext types.AuthContext, thread *types.ThreadWithMessages) (viewerThread, error) {
+type uploadIntentResponse struct {
+	UploadID        string            `json:"upload_id"`
+	FileName        string            `json:"file_name"`
+	MimeType        *string           `json:"mime_type"`
+	SizeBytes       int64             `json:"size_bytes"`
+	SHA256          string            `json:"sha256"`
+	UploadURL       string            `json:"upload_url"`
+	ExpiresIn       int               `json:"expires_in"`
+	RequiredHeaders map[string]string `json:"required_headers"`
+}
+
+func safeUploadIntentResponses(uploads []types.PresignedUpload) []uploadIntentResponse {
+	result := make([]uploadIntentResponse, 0, len(uploads))
+	for _, upload := range uploads {
+		result = append(result, uploadIntentResponse{
+			UploadID:        upload.UploadID,
+			FileName:        upload.FileName,
+			MimeType:        upload.MimeType,
+			SizeBytes:       upload.SizeBytes,
+			SHA256:          upload.SHA256,
+			UploadURL:       upload.UploadURL,
+			ExpiresIn:       upload.ExpiresIn,
+			RequiredHeaders: upload.RequiredHeaders,
+		})
+	}
+	return result
+}
+
+func withViewerAssetPaths(thread *types.ThreadWithMessages) viewerThread {
 	result := viewerThread{Thread: thread.Thread, Messages: []viewerMessage{}}
 	for _, message := range thread.Messages {
 		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
 		for _, asset := range message.Assets {
-			expires := 300
-			isImage := asset.MimeType != nil && strings.HasPrefix(*asset.MimeType, "image/")
-			if isImage {
-				expires = 900
+			if asset.PurgedAt != nil {
+				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+				continue
 			}
-			downloadURL, err := svc.SignedAssetDownloadURL(r.Context(), authContext, asset, expires)
-			if err != nil {
-				return viewerThread{}, err
+			basePath := "/api/assets/" + url.PathEscape(asset.ID)
+			viewer := viewerAsset{Asset: asset, DownloadPath: basePath + "/download-url"}
+			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
+				viewer.PreviewPath = basePath + "/preview-url"
 			}
-			var previewURL *string
-			if isImage {
-				previewURL = &downloadURL
-			}
-			vm.Assets = append(vm.Assets, viewerAsset{
-				Asset:       asset,
-				DownloadURL: downloadURL,
-				PreviewURL:  previewURL,
-			})
+			vm.Assets = append(vm.Assets, viewer)
 		}
 		result.Messages = append(result.Messages, vm)
 	}
-	return result, nil
+	return result
+}
+
+func withOwnerContentAssetPaths(thread *types.OwnerContentThreadDetail) ownerViewerThread {
+	result := ownerViewerThread{Thread: thread.Thread, Owner: thread.Owner, Messages: []viewerMessage{}, Visibility: thread.Visibility}
+	for _, message := range thread.Messages {
+		vm := viewerMessage{Message: message, Assets: []viewerAsset{}}
+		for _, asset := range message.Assets {
+			if asset.PurgedAt != nil {
+				vm.Assets = append(vm.Assets, viewerAsset{Asset: asset})
+				continue
+			}
+			basePath := "/api/owner/content/assets/" + url.PathEscape(asset.ID)
+			viewer := viewerAsset{Asset: asset, DownloadPath: basePath + "/download"}
+			if asset.MimeType != nil && strings.HasPrefix(strings.ToLower(*asset.MimeType), "image/") {
+				viewer.PreviewPath = basePath + "/preview"
+			}
+			vm.Assets = append(vm.Assets, viewer)
+		}
+		result.Messages = append(result.Messages, vm)
+	}
+	return result
+}
+
+func writeAssetResolution(w http.ResponseWriter, payload map[string]any, urlField string, signedURL string, err error) {
+	if err == nil {
+		payload["available"] = true
+		payload[urlField] = signedURL
+		writeJSON(w, http.StatusOK, payload)
+		return
+	}
+	var coded service.CodedError
+	if errors.As(err, &coded) && coded.Code == "ATTACHMENT_UNAVAILABLE" {
+		payload["available"] = false
+		payload["unavailable_reason"] = coded.Message
+		writeJSON(w, http.StatusOK, payload)
+		return
+	}
+	writeServiceError(w, err)
 }
