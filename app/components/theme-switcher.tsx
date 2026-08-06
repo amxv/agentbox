@@ -16,6 +16,15 @@ function readStoredTheme(): ThemeMode {
   return isThemeMode(stored) ? stored : "system";
 }
 
+function prefersDark() {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+/**
+ * Writes both theme systems: `data-theme` for the legacy stylesheet and the
+ * `dark` class for Tailwind/shadcn. Keep this in sync with the pre-paint
+ * inline script in `app/layout.tsx`.
+ */
 function applyTheme(mode: ThemeMode) {
   const root = document.documentElement;
   root.dataset.themePreference = mode;
@@ -24,6 +33,8 @@ function applyTheme(mode: ThemeMode) {
   } else {
     root.dataset.theme = mode;
   }
+  const resolved = mode === "system" ? (prefersDark() ? "dark" : "light") : mode;
+  root.classList.toggle("dark", resolved === "dark");
 }
 
 export function ThemeSwitcher() {
@@ -37,6 +48,15 @@ export function ThemeSwitcher() {
     }, 0);
     return () => window.clearTimeout(timeout);
   }, []);
+
+  // While following the OS, re-resolve when the OS preference flips.
+  useEffect(() => {
+    if (mode !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme("system");
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [mode]);
 
   function selectMode(nextMode: ThemeMode) {
     setMode(nextMode);

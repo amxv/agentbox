@@ -12,15 +12,14 @@ Agentbox is split into two Vercel services:
 Production URLs:
 
 ```text
-Go backend: https://agentbox-go.vercel.app
-Dashboard:  https://agentbox-black.vercel.app
-Dashboard:  https://agentbox.amaimmigration.com
+Go backend: https://agentbox-backend.ashray.xyz
+Dashboard:  https://agentbox.ashray.xyz
 ```
 
 The dashboard must have:
 
 ```text
-AGENTBOX_BACKEND_URL=https://agentbox-go.vercel.app
+AGENTBOX_BACKEND_URL=https://agentbox-backend.ashray.xyz
 ```
 
 ## Local Checks
@@ -91,7 +90,7 @@ AGENTBOX_MAX_FILE_SIZE_BYTES
 Verify backend:
 
 ```bash
-curl https://agentbox-go.vercel.app/api/health
+curl https://agentbox-backend.ashray.xyz/api/health
 ```
 
 Expected:
@@ -226,7 +225,7 @@ Set or replace the backend URL on the dashboard project:
 
 ```bash
 vercel env rm AGENTBOX_BACKEND_URL production --yes
-printf 'https://agentbox-go.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production
+printf 'https://agentbox-backend.ashray.xyz' | vercel env add AGENTBOX_BACKEND_URL production
 ```
 
 Deploy:
@@ -238,8 +237,8 @@ vercel --prod --yes -A deploy/vercel/dashboard/vercel.json
 Verify dashboard and proxy:
 
 ```bash
-curl -i https://agentbox-black.vercel.app/threads
-curl -i https://agentbox-black.vercel.app/api/health
+curl -i https://agentbox.ashray.xyz/threads
+curl -i https://agentbox.ashray.xyz/api/health
 ```
 
 The `/api/health` request should return the Go backend health JSON through the dashboard proxy.
@@ -259,7 +258,7 @@ If the profile is missing:
 
 ```bash
 agentbox profiles add ashray \
-  --base-url https://agentbox-black.vercel.app \
+  --base-url https://agentbox.ashray.xyz \
   --api-key '<valid-api-key>' \
   --activate
 ```
