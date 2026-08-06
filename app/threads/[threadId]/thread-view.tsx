@@ -41,8 +41,7 @@ import { CopyButton } from "../../components/copy-button";
 import { MessageContent } from "./message-content";
 import { MessageComposer } from "../../components/message-composer";
 import { postDashboardMessage } from "../../components/agentbox-write";
-import { AppNav } from "../../components/app-nav";
-import { AuthContext, fetchSession } from "../../components/session";
+import { fetchSession } from "../../components/session";
 import { ThreadVisibilityControl } from "./thread-visibility-control";
 import { attributionLabel } from "../../components/attribution";
 import {
@@ -50,7 +49,6 @@ import {
   MonoValue,
   PanelHeader,
   PanelMain,
-  PanelPage
 } from "../../components/panel-shell";
 
 type Asset = {
@@ -69,6 +67,7 @@ type AssetResolution = {
   available: boolean;
   download_url?: string;
   preview_url?: string;
+  preview_failed?: boolean;
   unavailable_reason?: string;
 };
 
@@ -121,9 +120,12 @@ function getMessageKind(contentType?: string | null) {
   return contentType;
 }
 
+function isPreviewableImage(asset: Asset) {
+  return Boolean(asset.preview_path && asset.mime_type?.toLowerCase().startsWith("image/") && !asset.purged_at);
+}
+
 export function ThreadView({ threadId }: { threadId: string }) {
   const router = useRouter();
-  const [auth, setAuth] = useState<AuthContext | null>(null);
   const [thread, setThread] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +143,6 @@ export function ThreadView({ threadId }: { threadId: string }) {
         router.replace(`/login?next=/threads/${encodeURIComponent(threadId)}`);
         return;
       }
-      setAuth(session);
       const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/view`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
@@ -158,6 +159,51 @@ export function ThreadView({ threadId }: { threadId: string }) {
     const timeout = window.setTimeout(() => { void loadThread(); }, 0);
     return () => window.clearTimeout(timeout);
   }, [loadThread]);
+
+  useEffect(() => {
+    const assets = thread?.messages.flatMap((message) => message.assets).filter(isPreviewableImage) ?? [];
+    if (assets.length === 0) return;
+
+    const controller = new AbortController();
+    for (const asset of assets) {
+      if (!asset.preview_path) continue;
+      void fetch(asset.preview_path, { cache: "no-store", signal: controller.signal })
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            setAssetResolutions((current) => ({
+              ...current,
+              [asset.id]: { ...current[asset.id], available: true, preview_failed: true }
+            }));
+            return;
+          }
+          if (data.available === false) {
+            setAssetResolutions((current) => ({
+              ...current,
+              [asset.id]: {
+                available: false,
+                unavailable_reason: data.unavailable_reason || "Attachment unavailable"
+              }
+            }));
+            return;
+          }
+          if (typeof data.preview_url !== "string" || data.preview_url === "") return;
+          setAssetResolutions((current) => ({
+            ...current,
+            [asset.id]: { ...current[asset.id], available: true, preview_url: data.preview_url }
+          }));
+        })
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setAssetResolutions((current) => ({
+            ...current,
+            [asset.id]: { ...current[asset.id], available: true, preview_failed: true }
+          }));
+        });
+    }
+
+    return () => controller.abort();
+  }, [thread]);
 
   async function postReply(body: string, files: File[]) {
     await postDashboardMessage(threadId, body, files);
@@ -212,11 +258,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
   }
 
   return (
-    <PanelPage>
-      <AppNav title="Thread" auth={auth} />
       <PanelMain width="reading">
         <PanelHeader
-          eyebrow="Accessible thread"
           title={thread?.title ?? "Thread"}
           description={
             <span className="flex flex-col gap-3">
@@ -286,7 +329,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                       <Button
                         type="button"
                         variant="ghost"
-                        className="h-auto w-full items-start justify-between gap-6 p-6 text-left whitespace-normal hover:bg-muted/40"
+                        className="panel-message-trigger h-auto w-full items-start justify-between gap-5 rounded-none p-5 text-left whitespace-normal"
                       />
                     }
                   >
@@ -298,14 +341,14 @@ export function ThreadView({ threadId }: { threadId: string }) {
                           <Badge variant="outline">{getMessageKind(message.body_content_type)}</Badge>
                           {message.assets.length > 0 ? <Badge variant="outline">{message.assets.length} attachment{message.assets.length === 1 ? "" : "s"}</Badge> : null}
                         </span>
-                        <span className="line-clamp-2 text-sm/relaxed text-muted-foreground">{getMessagePreview(message.body)}</span>
+                        <span className="panel-message-preview line-clamp-2 text-sm/relaxed">{getMessagePreview(message.body)}</span>
                         <span className="flex flex-wrap items-center gap-3">
                           <MonoValue>{message.id}</MonoValue>
                           <span onClick={(event) => event.stopPropagation()}><CopyButton value={message.id} label="Copy message ID" /></span>
                         </span>
                       </span>
                     </span>
-                    <span className="flex shrink-0 items-center gap-3 text-sm text-muted-foreground">
+                    <span className="panel-message-meta flex shrink-0 items-center gap-3 text-sm">
                       <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
                       <ChevronDownIcon className={cn("transition-transform", isExpanded && "rotate-180")} />
                     </span>
@@ -330,6 +373,9 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                     // eslint-disable-next-line @next/next/no-img-element
                                     <img className="max-h-[32rem] w-full border-b bg-muted object-contain" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
                                   ) : null}
+                                  {isPreviewableImage(asset) && !resolution?.preview_url && !resolution?.preview_failed && !unavailable ? (
+                                    <Skeleton className="h-64 w-full rounded-none border-b" />
+                                  ) : null}
                                   <CardHeader>
                                     <div className="flex min-w-0 items-start gap-4">
                                       <span className="flex size-10 shrink-0 items-center justify-center border bg-muted"><FileTextIcon /></span>
@@ -346,10 +392,10 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                       <Alert variant="destructive"><AlertTitle>Attachment unavailable</AlertTitle><AlertDescription>{unavailableReason}</AlertDescription></Alert>
                                     ) : (
                                       <div className="flex flex-wrap gap-3">
-                                        {asset.preview_path && !resolution?.preview_url ? (
+                                        {asset.preview_path && !resolution?.preview_url && (!isPreviewableImage(asset) || resolution?.preview_failed) ? (
                                           <Button variant="outline" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
                                             {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
-                                            Load preview
+                                            {resolution?.preview_failed ? "Retry preview" : "Preview"}
                                           </Button>
                                         ) : null}
                                         {asset.download_path ? (
@@ -375,7 +421,6 @@ export function ThreadView({ threadId }: { threadId: string }) {
           }) : null}
         </section>
       </PanelMain>
-    </PanelPage>
   );
 }
 

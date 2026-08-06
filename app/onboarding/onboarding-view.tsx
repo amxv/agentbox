@@ -2,15 +2,12 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
-  BotMessageSquareIcon,
   CircleCheckIcon,
   InboxIcon,
   PlugZapIcon,
-  RocketIcon,
   RotateCwIcon,
   ShieldAlertIcon,
   SkipForwardIcon,
-  SparklesIcon,
   TerminalIcon
 } from "lucide-react";
 import Link from "next/link";
@@ -29,7 +26,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -43,15 +40,13 @@ import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
 import { CopyButton } from "../components/copy-button";
-import { AppNav } from "../components/app-nav";
+import { ConnectorLogo, type ConnectorBrand } from "../components/connector-logo";
 import {
   DetailRow,
   MonoValue,
   PanelHeader,
   PanelMain,
-  PanelPage
 } from "../components/panel-shell";
 
 type Connector = "chatgpt" | "claude" | "local" | "raycast";
@@ -114,7 +109,8 @@ const connectors: Array<{
   title: string;
   description: string;
   actor: string;
-  icon: LucideIcon;
+  icon?: LucideIcon;
+  brand?: ConnectorBrand;
 }> = [
   {
     id: "chatgpt",
@@ -122,7 +118,7 @@ const connectors: Array<{
     title: "Connect ChatGPT",
     description: "Give ChatGPT its own revocable MCP credential while keeping every message attributed to ChatGPT.",
     actor: "You · ChatGPT",
-    icon: BotMessageSquareIcon
+    brand: "chatgpt"
   },
   {
     id: "claude",
@@ -130,7 +126,7 @@ const connectors: Array<{
     title: "Connect Claude",
     description: "Create a separate Claude connector. Its secret and rotation lifecycle never affect ChatGPT.",
     actor: "You · Claude",
-    icon: SparklesIcon
+    brand: "claude"
   },
   {
     id: "local",
@@ -146,7 +142,7 @@ const connectors: Array<{
     title: "Connect Raycast",
     description: "Create one dedicated credential for this Mac and load the checked-in extension in Raycast developer mode.",
     actor: "You · Raycast",
-    icon: RocketIcon
+    brand: "raycast"
   }
 ];
 
@@ -244,11 +240,9 @@ export function OnboardingView() {
   const rotatingStep = rotateConnector ? steps.get(rotateConnector) : undefined;
 
   return (
-    <PanelPage>
-      <AppNav title="Connect agents" />
+    <>
       <PanelMain>
         <PanelHeader
-          eyebrow={state?.dismissed_at ? "Resume setup" : "One identity, separate actors"}
           title="Bring your agents into the same inbox."
           description="Each connection gets its own credential and actor label, but all four act for your user. Private threads stay private until you explicitly share them."
           aside={
@@ -291,7 +285,7 @@ export function OnboardingView() {
                 <CardHeader className="border-b">
                   <div className="flex min-w-0 items-start gap-3">
                     <span className="flex size-10 shrink-0 items-center justify-center border bg-muted">
-                      <Icon />
+                      {connector.brand ? <ConnectorLogo brand={connector.brand} /> : Icon ? <Icon /> : null}
                     </span>
                     <div className="flex min-w-0 flex-col gap-1">
                       <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">0{index + 1} / {connector.eyebrow}</span>
@@ -331,10 +325,10 @@ export function OnboardingView() {
               {busy === "skip" ? <Spinner data-icon="inline-start" /> : <SkipForwardIcon data-icon="inline-start" />}
               Skip for now
             </Button>
-            <Link className={cn(buttonVariants({ variant: "default" }))} href="/threads">
+            <Button render={<Link href="/threads" />}>
               <InboxIcon data-icon="inline-start" />
               Open inbox
-            </Link>
+            </Button>
           </CardFooter>
         </Card>
       </PanelMain>
@@ -357,7 +351,7 @@ export function OnboardingView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </PanelPage>
+    </>
   );
 }
 

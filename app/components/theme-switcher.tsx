@@ -42,12 +42,9 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
   const [mode, setMode] = useState<ThemeMode>("system");
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      const stored = readStoredTheme();
-      setMode(stored);
-      applyTheme(stored);
-    }, 0);
-    return () => window.clearTimeout(timeout);
+    const stored = readStoredTheme();
+    setMode(stored);
+    applyTheme(stored);
   }, []);
 
   useEffect(() => {

@@ -51,15 +51,13 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { CopyButton } from "../components/copy-button";
-import { AppNav } from "../components/app-nav";
-import { AuthContext, fetchSession } from "../components/session";
+import { fetchSession } from "../components/session";
 import {
   DetailRow,
   MetricStrip,
   MonoValue,
   PanelHeader,
   PanelMain,
-  PanelPage
 } from "../components/panel-shell";
 
 type Credential = {
@@ -136,7 +134,6 @@ function setupPreferenceValue(preference: RaycastSetupPreference, setup: Raycast
 
 export function KeysView() {
   const router = useRouter();
-  const [auth, setAuth] = useState<AuthContext | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [page, setPage] = useState<PageInfo | null>(null);
   const [newKeyName, setNewKeyName] = useState("");
@@ -162,7 +159,6 @@ export function KeysView() {
         router.replace("/login?next=/keys");
         return;
       }
-      setAuth(session);
       const query = new URLSearchParams({ limit: "25" });
       if (cursor) query.set("cursor", cursor);
       const response = await fetch(`/api/keys?${query.toString()}`, { cache: "no-store" });
@@ -301,11 +297,9 @@ export function KeysView() {
   }
 
   return (
-    <PanelPage>
-      <AppNav title="Credential management" auth={auth} />
+    <>
       <PanelMain>
         <PanelHeader
-          eyebrow="User credentials"
           title="Credentials and installations."
           description="Create an independent credential for every actor surface, inspect safe usage metadata, and retain revoked rows as audit history."
           aside={
@@ -539,7 +533,7 @@ export function KeysView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </PanelPage>
+    </>
   );
 }
 

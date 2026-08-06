@@ -34,12 +34,10 @@ import {
   TableHeader,
   TableRow
 } from "@/components/ui/table";
-import { AppNav } from "../components/app-nav";
 import { CopyButton } from "../components/copy-button";
 import {
   PanelHeader,
   PanelMain,
-  PanelPage,
   SectionIntro
 } from "../components/panel-shell";
 
@@ -85,11 +83,8 @@ const workflows = [
 
 export function RaycastView() {
   return (
-    <PanelPage>
-      <AppNav title="Raycast" />
       <PanelMain>
         <PanelHeader
-          eyebrow="Agentbox / macOS / Developer mode"
           title="The shared inbox, one keystroke away."
           description="Raycast is an ordinary user surface over the same private and team-shared threads used by the dashboard, MCP hosts, CLI agents, scripts, and CI."
           actions={
@@ -220,7 +215,6 @@ export function RaycastView() {
           </CardFooter>
         </Card>
       </PanelMain>
-    </PanelPage>
   );
 }
 

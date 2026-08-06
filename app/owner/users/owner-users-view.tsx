@@ -83,13 +83,11 @@ import {
   TableRow
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AppNav } from "../../components/app-nav";
 import {
   MetricStrip,
   MonoValue,
   PanelHeader,
   PanelMain,
-  PanelPage
 } from "../../components/panel-shell";
 
 type User = {
@@ -542,11 +540,9 @@ export function OwnerUsersView() {
   }
 
   return (
-    <PanelPage>
-      <AppNav title="Users & teams" />
+    <>
       <PanelMain>
         <PanelHeader
-          eyebrow="Deployment administration"
           title="Users, teams, and invitations."
           description="Manage deployment-wide identity without collapsing actor attribution. Teams overlap freely, while every thread remains private until it is explicitly shared."
           aside={
@@ -1126,7 +1122,7 @@ export function OwnerUsersView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </PanelPage>
+    </>
   );
 }
 

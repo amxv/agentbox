@@ -22,10 +22,10 @@ export function PanelMain({
   return (
     <main
       className={cn(
-        "mx-auto flex w-full flex-col gap-10 px-5 py-10 sm:px-8 sm:py-12 lg:gap-12 lg:px-10 lg:py-16",
+        "mx-auto flex w-full flex-col gap-8 px-5 py-8 sm:px-7 sm:py-10 lg:gap-10 lg:px-8 lg:py-12",
         width === "default" && "max-w-6xl",
         width === "wide" && "max-w-[1440px]",
-        width === "reading" && "max-w-5xl",
+        width === "reading" && "max-w-[1240px]",
         className
       )}
     >
@@ -42,7 +42,7 @@ export function PanelHeader({
   aside,
   className
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
@@ -52,23 +52,23 @@ export function PanelHeader({
   return (
     <header
       className={cn(
-        "grid gap-8 border-b pb-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:pb-12",
+        "grid gap-7 border-b pb-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:pb-9",
         className
       )}
     >
-      <div className="flex min-w-0 flex-col gap-5">
-        <div className="flex flex-col gap-3">
-          <PanelEyebrow>{eyebrow}</PanelEyebrow>
-          <h1 className="max-w-5xl font-heading text-4xl leading-[0.96] font-semibold tracking-[-0.045em] text-balance sm:text-5xl lg:text-6xl">
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          {eyebrow ? <PanelEyebrow>{eyebrow}</PanelEyebrow> : null}
+          <h1 className="max-w-5xl font-heading text-4xl leading-[1.02] font-medium tracking-[-0.035em] text-balance sm:text-5xl lg:text-[3.6rem]">
             {title}
           </h1>
         </div>
         {description ? (
-          <div className="max-w-3xl text-base/relaxed text-muted-foreground text-pretty sm:text-lg/relaxed">
+          <div className="max-w-3xl text-sm/relaxed text-muted-foreground text-pretty sm:text-base/relaxed">
             {description}
           </div>
         ) : null}
-        {actions ? <div className="flex flex-wrap items-center gap-3 pt-2">{actions}</div> : null}
+        {actions ? <div className="flex flex-wrap items-center gap-2.5 pt-1">{actions}</div> : null}
       </div>
       {aside ? <div className="min-w-0 lg:max-w-lg">{aside}</div> : null}
     </header>
@@ -95,7 +95,7 @@ export function MetricStrip({
       {items.map((item, index) => (
         <div
           className={cn(
-            "flex min-w-0 flex-col gap-3 p-5 sm:p-6",
+            "flex min-w-0 flex-col gap-2.5 p-4 sm:p-5",
             index > 0 && "border-t sm:border-t-0 sm:border-l",
             index > 1 && "sm:border-t"
           )}
@@ -104,7 +104,7 @@ export function MetricStrip({
           <dt className="font-mono text-[0.72rem] tracking-[0.12em] text-muted-foreground uppercase">
             {item.label}
           </dt>
-          <dd className="font-heading text-2xl leading-tight font-semibold tracking-[-0.035em] sm:text-3xl">{item.value}</dd>
+          <dd className="font-heading text-2xl leading-tight font-medium tracking-[-0.025em]">{item.value}</dd>
           {item.detail ? <span className="text-sm/relaxed text-muted-foreground">{item.detail}</span> : null}
         </div>
       ))}
@@ -126,11 +126,11 @@ export function SectionIntro({
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-col gap-5 border-b px-5 pb-5 sm:flex-row sm:items-end sm:justify-between sm:px-6 sm:pb-6", className)}>
-      <div className="flex min-w-0 flex-col gap-3">
+    <div className={cn("flex flex-col gap-4 border-b px-5 pb-5 sm:flex-row sm:items-end sm:justify-between", className)}>
+      <div className="flex min-w-0 flex-col gap-2">
         {eyebrow ? <PanelEyebrow>{eyebrow}</PanelEyebrow> : null}
-        <h2 className="font-heading text-2xl font-semibold tracking-[-0.04em] text-balance sm:text-3xl">{title}</h2>
-        {description ? <p className="max-w-3xl text-sm/relaxed text-muted-foreground text-pretty sm:text-base/relaxed">{description}</p> : null}
+        <h2 className="font-heading text-2xl font-medium tracking-[-0.025em] text-balance sm:text-[1.75rem]">{title}</h2>
+        {description ? <p className="max-w-3xl text-sm/relaxed text-muted-foreground text-pretty">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 flex-wrap items-center gap-3">{actions}</div> : null}
     </div>

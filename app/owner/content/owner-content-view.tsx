@@ -20,10 +20,9 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AppNav } from "../../components/app-nav";
 import { attributionLabel } from "../../components/attribution";
-import { MetricStrip, MonoValue, PanelHeader, PanelMain, PanelPage } from "../../components/panel-shell";
-import { fetchSession, type AuthContext } from "../../components/session";
+import { MetricStrip, MonoValue, PanelHeader, PanelMain } from "../../components/panel-shell";
+import { fetchSession } from "../../components/session";
 
 type User = {
   id: string;
@@ -89,7 +88,6 @@ function visibilityLabels(summary: VisibilitySummary) {
 
 export function OwnerContentView() {
   const router = useRouter();
-  const [auth, setAuth] = useState<AuthContext | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<TeamWithMembers[]>([]);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -111,7 +109,6 @@ export function OwnerContentView() {
         router.replace("/login?next=/owner/content");
         return;
       }
-      setAuth(session);
       const params = new URLSearchParams({ limit: "25" });
       if (cursor) params.set("cursor", cursor);
       if (userID) params.set("user_id", userID);
@@ -191,8 +188,6 @@ export function OwnerContentView() {
   }
 
   return (
-    <PanelPage>
-      <AppNav title="All content" auth={auth} />
       <PanelMain>
         <Alert>
           <ShieldAlertIcon />
@@ -203,7 +198,6 @@ export function OwnerContentView() {
         </Alert>
 
         <PanelHeader
-          eyebrow="Deployment-wide content"
           title="Inspect every thread without changing it."
           description="Search private and shared content, filter by owner or team, and review preserved attribution and attachment tombstones."
           aside={
@@ -348,7 +342,6 @@ export function OwnerContentView() {
           </div>
         ) : null}
       </PanelMain>
-    </PanelPage>
   );
 }
 

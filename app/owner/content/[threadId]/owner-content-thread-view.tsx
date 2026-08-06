@@ -6,15 +6,13 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
-import { AppNav } from "../../../components/app-nav";
 import { attributionLabel } from "../../../components/attribution";
-import { MetricStrip, MonoValue, PanelHeader, PanelMain, PanelPage } from "../../../components/panel-shell";
+import { MetricStrip, MonoValue, PanelHeader, PanelMain } from "../../../components/panel-shell";
 import { fetchSession } from "../../../components/session";
 import { MessageContent } from "../../../threads/[threadId]/message-content";
 
@@ -34,6 +32,7 @@ type AssetResolution = {
   available: boolean;
   download_url?: string;
   preview_url?: string;
+  preview_failed?: boolean;
   unavailable_reason?: string;
 };
 
@@ -73,6 +72,10 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isPreviewableImage(asset: Asset) {
+  return Boolean(asset.preview_path && asset.mime_type?.toLowerCase().startsWith("image/") && !asset.purged_at);
 }
 
 export function OwnerContentThreadView({ threadId }: { threadId: string }) {
@@ -117,6 +120,50 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  useEffect(() => {
+    const assets = thread?.messages.flatMap((message) => message.assets).filter(isPreviewableImage) ?? [];
+    if (assets.length === 0) return;
+
+    const controller = new AbortController();
+    for (const asset of assets) {
+      if (!asset.preview_path) continue;
+      void fetch(asset.preview_path, { cache: "no-store", signal: controller.signal })
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            setAssetResolutions((current) => ({
+              ...current,
+              [asset.id]: { ...current[asset.id], available: true, preview_failed: true }
+            }));
+            return;
+          }
+          if (data.available === false) {
+            setAssetResolutions((current) => ({
+              ...current,
+              [asset.id]: {
+                available: false,
+                unavailable_reason: data.unavailable_reason || "Attachment unavailable"
+              }
+            }));
+            return;
+          }
+          if (typeof data.preview_url !== "string" || data.preview_url === "") return;
+          setAssetResolutions((current) => ({
+            ...current,
+            [asset.id]: { ...current[asset.id], available: true, preview_url: data.preview_url }
+          }));
+        })
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setAssetResolutions((current) => ({
+            ...current,
+            [asset.id]: { ...current[asset.id], available: true, preview_failed: true }
+          }));
+        });
+    }
+    return () => controller.abort();
+  }, [thread]);
+
   async function resolveAsset(asset: Asset, kind: "download" | "preview") {
     const path = kind === "preview" ? asset.preview_path : asset.download_path;
     if (!path || asset.purged_at) return;
@@ -150,14 +197,12 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
   }
 
   return (
-    <PanelPage>
-      <AppNav title="Owner thread" />
       <PanelMain width="reading">
         <div>
-          <Link className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "-ml-2")} href="/owner/content">
+          <Button className="-ml-2" variant="ghost" size="sm" render={<Link href="/owner/content" />}>
             <ArrowLeftIcon data-icon="inline-start" />
             Deployment content
-          </Link>
+          </Button>
         </div>
 
         <Alert>
@@ -179,11 +224,10 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
         {thread ? (
           <>
             <PanelHeader
-              eyebrow={`Owned by ${thread.owner.display_name}${thread.owner.disabled_at ? " · disabled" : ""}`}
               title={thread.title}
               description={
                 <span className="flex flex-col gap-2">
-                  <span>{thread.owner.email} · Updated {formatDate(thread.updated_at)}</span>
+                  <span>Owned by {thread.owner.display_name}{thread.owner.disabled_at ? " · disabled" : ""} · {thread.owner.email} · Updated {formatDate(thread.updated_at)}</span>
                   <MonoValue>{thread.id}</MonoValue>
                   <span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span>
                 </span>
@@ -247,6 +291,9 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
                                 // eslint-disable-next-line @next/next/no-img-element
                                 <img className="max-h-[32rem] w-full object-contain" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
                               ) : null}
+                              {isPreviewableImage(asset) && !resolution?.preview_url && !resolution?.preview_failed && !unavailable ? (
+                                <Skeleton className="h-64 w-full rounded-none" />
+                              ) : null}
                               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                 <span className="min-w-0">
                                   <strong className="block truncate text-xs">{asset.file_name}</strong>
@@ -258,10 +305,10 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
                                   <Badge variant="destructive">{resolution?.unavailable_reason || asset.unavailable_reason || "Attachment unavailable"}</Badge>
                                 ) : (
                                   <span className="flex shrink-0 flex-wrap gap-2">
-                                    {asset.preview_path && !resolution?.preview_url ? (
+                                    {asset.preview_path && !resolution?.preview_url && (!isPreviewableImage(asset) || resolution?.preview_failed) ? (
                                       <Button variant="outline" type="button" disabled={assetBusy === `preview:${asset.id}`} onClick={() => void resolveAsset(asset, "preview")}>
                                         <EyeIcon data-icon="inline-start" />
-                                        {assetBusy === `preview:${asset.id}` ? "Loading" : "Preview"}
+                                        {assetBusy === `preview:${asset.id}` ? "Loading" : resolution?.preview_failed ? "Retry preview" : "Preview"}
                                       </Button>
                                     ) : null}
                                     {asset.download_path ? (
@@ -285,7 +332,6 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
           </>
         ) : null}
       </PanelMain>
-    </PanelPage>
   );
 }
 

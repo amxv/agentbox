@@ -15,10 +15,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { MessageComposer } from "../components/message-composer";
 import { AuthContext, fetchSession } from "../components/session";
-import { AppNav } from "../components/app-nav";
 import { createDashboardThread, postDashboardMessage } from "../components/agentbox-write";
 import { attributionLabel } from "../components/attribution";
-import { MetricStrip, MonoValue, PanelHeader, PanelMain, PanelPage, SectionIntro } from "../components/panel-shell";
+import { MetricStrip, MonoValue, PanelHeader, PanelMain, SectionIntro } from "../components/panel-shell";
 
 type Thread = {
   id: string;
@@ -210,11 +209,8 @@ export function InboxView() {
   }
 
   return (
-    <PanelPage>
-      <AppNav title="Inbox" auth={auth} />
       <PanelMain>
         <PanelHeader
-          eyebrow="Unified inbox"
           title="Threads that belong to you."
           description="Private work you own and every thread shared with one of your teams, in one quiet, searchable-by-context queue."
           actions={
@@ -385,7 +381,6 @@ export function InboxView() {
           ) : null}
         </section>
       </PanelMain>
-    </PanelPage>
   );
 }
 

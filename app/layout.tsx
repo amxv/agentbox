@@ -1,20 +1,28 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Manrope, IBM_Plex_Mono, Figtree } from "next/font/google";
+import {
+  IBM_Plex_Mono,
+  Instrument_Sans,
+  Manrope,
+  Newsreader,
+  Space_Grotesk
+} from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import { AppShell } from "./components/app-shell";
 
 /** shadcn design-system fonts: body text and headings for the signed-in panel. */
-const sansFont = Figtree({
-  variable: "--font-sans",
+const sansFont = Instrument_Sans({
+  variable: "--font-panel-sans",
   subsets: ["latin"],
   weight: "variable",
   display: "swap"
 });
 
-const headingFont = Space_Grotesk({
-  variable: "--font-heading",
+const headingFont = Newsreader({
+  variable: "--font-panel-heading",
   subsets: ["latin"],
   weight: "variable",
+  axes: ["opsz"],
   display: "swap"
 });
 
@@ -86,7 +94,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <ThemeInitScript />
       </head>
-      <body>{children}</body>
+      <body><AppShell>{children}</AppShell></body>
     </html>
   );
 }

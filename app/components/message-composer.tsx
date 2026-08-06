@@ -8,7 +8,6 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { PanelEyebrow } from "./panel-shell";
 
 type Props = {
   label: string;
@@ -60,10 +59,7 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
     <form onSubmit={handleSubmit}>
       <Card>
         <CardHeader className="border-b">
-          <div className="flex min-w-0 flex-col gap-2">
-            <PanelEyebrow>Post as user</PanelEyebrow>
-            <CardTitle>{label}</CardTitle>
-          </div>
+          <CardTitle>{label}</CardTitle>
           <CardAction>
             <Button
               disabled={submitting || !canSubmit || (!body.trim() && files.length === 0)}
