@@ -1,11 +1,12 @@
 "use client";
 
 import { LaptopIcon, MoonIcon, SunIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "agentbox_theme";
+const THEME_CHANGE_EVENT = "agentbox-theme-change";
 type ThemeMode = "system" | "light" | "dark";
 type ResolvedTheme = "light" | "dark";
 
@@ -15,12 +16,16 @@ function isThemeMode(value: string | null): value is ThemeMode {
 
 function readStoredTheme(): ThemeMode {
   if (typeof window === "undefined") return "system";
-  const stored = window.localStorage.getItem(STORAGE_KEY);
-  return isThemeMode(stored) ? stored : "system";
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return isThemeMode(stored) ? stored : "system";
+  } catch {
+    return "system";
+  }
 }
 
-function prefersDark() {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+function prefersDark(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
 /**
@@ -32,7 +37,7 @@ function resolveTheme(mode: ThemeMode): ResolvedTheme {
   return mode === "system" ? (prefersDark() ? "dark" : "light") : mode;
 }
 
-function applyTheme(mode: ThemeMode): ResolvedTheme {
+function applyTheme(mode: ThemeMode, resolved = resolveTheme(mode)): ResolvedTheme {
   const root = document.documentElement;
   root.dataset.themePreference = mode;
   if (mode === "system") {
@@ -40,34 +45,55 @@ function applyTheme(mode: ThemeMode): ResolvedTheme {
   } else {
     root.dataset.theme = mode;
   }
-  const resolved = resolveTheme(mode);
   root.classList.toggle("dark", resolved === "dark");
   return resolved;
 }
 
+function subscribeThemePreference(onStoreChange: () => void) {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) onStoreChange();
+  };
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(THEME_CHANGE_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(THEME_CHANGE_EVENT, onStoreChange);
+  };
+}
+
+function subscribeSystemTheme(onStoreChange: () => void) {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  media.addEventListener("change", onStoreChange);
+  return () => media.removeEventListener("change", onStoreChange);
+}
+
 export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
-  const [mode, setMode] = useState<ThemeMode>("system");
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light");
+  const mode = useSyncExternalStore<ThemeMode>(
+    subscribeThemePreference,
+    readStoredTheme,
+    (): ThemeMode => "system"
+  );
+  const systemPrefersDark = useSyncExternalStore<boolean>(
+    subscribeSystemTheme,
+    prefersDark,
+    () => false
+  );
+  const resolvedTheme: ResolvedTheme = mode === "system"
+    ? (systemPrefersDark ? "dark" : "light")
+    : mode;
 
   useEffect(() => {
-    const stored = readStoredTheme();
-    setMode(stored);
-    setResolvedTheme(applyTheme(stored));
-  }, []);
-
-  useEffect(() => {
-    if (mode !== "system") return;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setResolvedTheme(applyTheme("system"));
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, [mode]);
+    applyTheme(mode, resolvedTheme);
+  }, [mode, resolvedTheme]);
 
   function selectMode(nextMode: ThemeMode) {
-    setMode(nextMode);
-    window.localStorage.setItem(STORAGE_KEY, nextMode);
-    setResolvedTheme(applyTheme(nextMode));
-    window.dispatchEvent(new CustomEvent("agentbox-theme-change", { detail: { mode: nextMode } }));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, nextMode);
+    } catch {
+      // The theme still applies for this page even when storage is unavailable.
+    }
+    applyTheme(nextMode);
+    window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: { mode: nextMode } }));
   }
 
   return (
