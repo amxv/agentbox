@@ -60,7 +60,7 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
     <form onSubmit={handleSubmit}>
       <Card>
         <CardHeader className="border-b">
-          <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex min-w-0 flex-col gap-2">
             <PanelEyebrow>Post as user</PanelEyebrow>
             <CardTitle>{label}</CardTitle>
           </div>
@@ -89,7 +89,7 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
 
             <div
               className={cn(
-                "flex min-h-24 items-center justify-center border border-dashed p-4 text-center transition-colors",
+                "flex min-h-32 items-center justify-center border border-dashed p-6 text-center transition-colors",
                 dragging ? "border-foreground bg-muted" : "border-border bg-muted/30 hover:bg-muted/60"
               )}
               role="button"
@@ -126,20 +126,20 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
                   event.target.value = "";
                 }}
               />
-              <span className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+              <span className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
                 {dragging ? <UploadCloudIcon /> : <PaperclipIcon />}
                 <span>{dragging ? "Release to attach files" : "Drop files here or click to attach"}</span>
               </span>
             </div>
 
             {files.length > 0 ? (
-              <div className="grid gap-2" aria-label="Selected files">
+              <div className="grid gap-3" aria-label="Selected files">
                 {files.map((file, index) => (
-                  <div className="flex min-w-0 items-center gap-3 border bg-muted/20 p-2" key={`${file.name}-${file.size}-${index}`}>
+                  <div className="flex min-w-0 items-center gap-4 border bg-muted/20 p-3" key={`${file.name}-${file.size}-${index}`}>
                     <FileIcon className="shrink-0 text-muted-foreground" />
-                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="truncate text-xs font-medium">{file.name}</span>
-                      <span className="font-mono text-[0.65rem] text-muted-foreground">{formatBytes(file.size)}</span>
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="truncate text-sm font-medium">{file.name}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{formatBytes(file.size)}</span>
                     </span>
                     <Button
                       aria-label={`Remove ${file.name}`}

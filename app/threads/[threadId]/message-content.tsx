@@ -20,7 +20,7 @@ export function MessageContent({ body, contentType }: { body: string; contentTyp
 
   if (resolvedType === "text/plain" || showSource) {
     return (
-      <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-w-0 flex-col gap-5">
         <MessageToolbar
           label={messageFormatLabel(resolvedType, wasInferred)}
           body={body}
@@ -31,7 +31,7 @@ export function MessageContent({ body, contentType }: { body: string; contentTyp
             </Button>
           ) : null}
         />
-        <pre className="max-h-[60rem] min-w-0 overflow-auto whitespace-pre-wrap break-words border bg-muted/40 p-4 font-mono text-xs/relaxed text-foreground">
+        <pre className="max-h-[60rem] min-w-0 overflow-auto whitespace-pre-wrap break-words border bg-[var(--panel-code-bg)] p-6 font-mono text-sm/7 text-[var(--panel-code-foreground)]">
           {safeBody}
         </pre>
       </div>
@@ -39,7 +39,7 @@ export function MessageContent({ body, contentType }: { body: string; contentTyp
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className="flex min-w-0 flex-col gap-5">
       <MessageToolbar
         label={messageFormatLabel(resolvedType, wasInferred)}
         body={body}
@@ -65,9 +65,9 @@ function MessageToolbar({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
       <Badge variant="secondary">{label}</Badge>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-3">
         <CopyButton value={body} label="Copy message" />
         {action}
       </div>

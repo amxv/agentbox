@@ -110,32 +110,32 @@ export function AppNav({ title, auth: providedAuth }: AppNavProps) {
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
-      <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-4 px-4 sm:px-6 lg:px-8">
-        <Link className="flex min-w-0 shrink-0 items-center gap-3" href="/threads" aria-label="Agentbox inbox">
-          <AgentboxMark className="grid size-7 grid-cols-2 gap-0.5 border border-foreground bg-foreground p-1 [&>i]:block [&>i]:bg-background" />
+      <div className="mx-auto flex h-20 max-w-[1440px] items-center gap-5 px-5 sm:px-8 lg:px-10">
+        <Link className="flex min-w-0 shrink-0 items-center gap-4" href="/threads" aria-label="Agentbox inbox">
+          <AgentboxMark className="grid size-10 grid-cols-2 gap-1 border border-foreground bg-foreground p-1.5 [&>i]:block [&>i]:bg-background" />
           <span className="hidden min-w-0 flex-col sm:flex">
-            <span className="font-heading text-sm leading-none font-semibold tracking-[-0.025em]">Agentbox</span>
-            <span className="mt-1 max-w-44 truncate font-mono text-[0.62rem] leading-none tracking-[0.1em] text-muted-foreground uppercase">
+            <span className="font-heading text-base leading-none font-semibold tracking-[-0.025em]">Agentbox</span>
+            <span className="mt-1.5 max-w-44 truncate font-mono text-[0.7rem] leading-none tracking-[0.12em] text-muted-foreground uppercase">
               {title}
             </span>
           </span>
         </Link>
 
-        <div className="hidden min-w-0 flex-1 items-center gap-1 lg:flex">
-          <nav className="flex min-w-0 items-center gap-1" aria-label="Main navigation">
+        <div className="hidden min-w-0 flex-1 items-center gap-2 lg:flex">
+          <nav className="flex min-w-0 items-center gap-2" aria-label="Main navigation">
             {PRIMARY_LINKS.map((link) => <DesktopNavLink key={link.href} link={link} pathname={pathname} />)}
           </nav>
           {auth?.is_owner ? (
             <>
-              <span className="mx-2 h-6 w-px bg-border" aria-hidden="true" />
-              <nav className="flex min-w-0 items-center gap-1" aria-label="Owner navigation">
+              <span className="mx-3 h-8 w-px bg-border" aria-hidden="true" />
+              <nav className="flex min-w-0 items-center gap-2" aria-label="Owner navigation">
                 {OWNER_LINKS.map((link) => <DesktopNavLink key={link.href} link={link} pathname={pathname} owner />)}
               </nav>
             </>
           ) : null}
         </div>
 
-        <div className="ml-auto hidden items-center gap-2 lg:flex">
+        <div className="ml-auto hidden items-center gap-3 lg:flex">
           <ThemeSwitcher compact />
           {auth ? (
             <DropdownMenu>
@@ -155,7 +155,7 @@ export function AppNav({ title, auth: providedAuth }: AppNavProps) {
           ) : null}
         </div>
 
-        <div className="ml-auto flex items-center gap-2 lg:hidden">
+        <div className="ml-auto flex items-center gap-3 lg:hidden">
           <ThemeSwitcher compact />
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button variant="outline" size="icon" />}>
@@ -175,7 +175,11 @@ export function AppNav({ title, auth: providedAuth }: AppNavProps) {
                   const Icon = link.icon;
                   const active = isActive(pathname, link.href);
                   return (
-                    <DropdownMenuItem key={link.href} render={<Link href={link.href} />}>
+                    <DropdownMenuItem
+                      key={link.href}
+                      className={active ? "!bg-primary !text-primary-foreground focus:!bg-primary focus:!text-primary-foreground" : undefined}
+                      render={<Link href={link.href} />}
+                    >
                       <Icon />
                       {link.label}
                       {active ? <span className="ml-auto font-mono text-[0.58rem] tracking-[0.08em] uppercase">Current</span> : null}
@@ -216,9 +220,11 @@ function DesktopNavLink({
   const active = isActive(pathname, link.href);
   return (
     <Link
+      data-panel-nav-active={active ? "true" : "false"}
       className={cn(
         buttonVariants({ variant: active ? "default" : "ghost", size: "sm" }),
-        "gap-1.5",
+        "gap-2",
+        active && "!text-primary-foreground hover:!text-primary-foreground",
         owner && !active && "opacity-70"
       )}
       href={link.href}

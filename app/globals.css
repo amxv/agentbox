@@ -50,6 +50,9 @@
     --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
     --sidebar-border: oklch(0.92 0.004 286.32);
     --sidebar-ring: oklch(0.705 0.015 286.067);
+    --panel-code-bg: oklch(0.985 0.002 286);
+    --panel-code-foreground: oklch(0.205 0.006 286);
+    --panel-inline-code-bg: oklch(0.955 0.004 286);
 }
 /*
  ---break---
@@ -86,6 +89,9 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.552 0.016 285.938);
+    --panel-code-bg: oklch(0.16 0.006 286);
+    --panel-code-foreground: oklch(0.94 0.003 286);
+    --panel-inline-code-bg: oklch(0.29 0.008 286);
 }
 /*
  ---break---
@@ -148,4 +154,232 @@
   html {
     @apply font-sans;
     }
+}
+
+/*
+ * The legacy public site was authored against a 14px root. The signed-in
+ * panel intentionally runs at a slightly larger optical scale so its dense
+ * operational UI reads more like the browser at 110% zoom without changing
+ * any of the public pages.
+ */
+html:has([data-panel-root]) {
+  font-size: 15.5px;
+}
+
+[data-panel-root] {
+  line-height: 1.65;
+}
+
+/* The legacy global anchor rule otherwise wins over Tailwind's layered color. */
+[data-panel-root] a[data-panel-nav-active="true"] {
+  color: var(--primary-foreground);
+}
+
+[data-panel-root] a[data-panel-nav-active="true"]:hover {
+  color: var(--primary-foreground);
+}
+
+/* Reader typography: the spacious cadence of the original reader, using the
+ * new design tokens and shadcn controls around it. */
+.agentbox-markdown {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.78;
+  overflow-wrap: anywhere;
+}
+
+.agentbox-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agentbox-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agentbox-markdown :where(p, ul, ol, blockquote, table) {
+  margin-block: 1.25rem;
+}
+
+.agentbox-markdown :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--foreground);
+  font-family: var(--font-heading);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.18;
+  text-wrap: balance;
+}
+
+.agentbox-markdown h1 {
+  margin-block: 3rem 1.35rem;
+  font-size: 2.2rem;
+  letter-spacing: -0.05em;
+}
+
+.agentbox-markdown h2 {
+  margin-block: 2.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.65rem;
+  font-size: 1.8rem;
+  letter-spacing: -0.045em;
+}
+
+.agentbox-markdown h3 {
+  margin-block: 2.25rem 1rem;
+  font-size: 1.45rem;
+}
+
+.agentbox-markdown h4 {
+  margin-block: 1.9rem 0.85rem;
+  font-size: 1.18rem;
+  letter-spacing: -0.02em;
+}
+
+.agentbox-markdown h5,
+.agentbox-markdown h6 {
+  margin-block: 1.65rem 0.75rem;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.agentbox-markdown :where(ul, ol) {
+  padding-left: 1.65rem;
+}
+
+.agentbox-markdown ul {
+  list-style: disc;
+}
+
+.agentbox-markdown ol {
+  list-style: decimal;
+}
+
+.agentbox-markdown li {
+  padding-left: 0.25rem;
+}
+
+.agentbox-markdown li + li {
+  margin-top: 0.45rem;
+}
+
+.agentbox-markdown li > :where(ul, ol) {
+  margin-block: 0.55rem;
+}
+
+.agentbox-markdown blockquote {
+  border-left: 3px solid color-mix(in oklch, var(--foreground), transparent 70%);
+  padding: 0.15rem 0 0.15rem 1.35rem;
+  color: var(--muted-foreground);
+}
+
+.agentbox-markdown a {
+  color: var(--foreground);
+  font-weight: 550;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--foreground), transparent 55%);
+  text-underline-offset: 0.25rem;
+}
+
+.agentbox-markdown a:hover {
+  color: var(--foreground);
+  text-decoration-color: var(--foreground);
+}
+
+.agentbox-inline-code {
+  border: 1px solid color-mix(in oklch, var(--border), var(--foreground) 8%);
+  border-radius: 0.2rem;
+  background: var(--panel-inline-code-bg);
+  color: var(--foreground);
+  padding: 0.12em 0.38em;
+  font-family: var(--font-agentbox-mono), var(--font-mono), monospace;
+  font-size: 0.9em;
+  font-weight: 500;
+  white-space: break-spaces;
+}
+
+.agentbox-code-card {
+  min-width: 0;
+  margin-block: 1.75rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.agentbox-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0.8rem 1rem;
+}
+
+.agentbox-code-block {
+  min-width: 0;
+  margin: 0;
+  overflow-x: auto;
+  background: var(--panel-code-bg);
+  color: var(--panel-code-foreground);
+  padding: 1.35rem;
+  font-family: var(--font-agentbox-mono), var(--font-mono), monospace;
+  font-size: 0.88rem;
+  line-height: 1.72;
+  white-space: pre;
+}
+
+.agentbox-code-block code {
+  display: block;
+  min-width: max-content;
+  color: inherit;
+}
+
+.agentbox-table-wrap {
+  min-width: 0;
+  margin-block: 1.75rem;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+
+.agentbox-markdown table {
+  width: 100%;
+  min-width: 34rem;
+  border-collapse: collapse;
+  background: var(--card);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.agentbox-markdown th,
+.agentbox-markdown td {
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 0.8rem 0.95rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agentbox-markdown th {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.agentbox-markdown :where(th, td):last-child {
+  border-right: 0;
+}
+
+.agentbox-markdown tr:last-child td {
+  border-bottom: 0;
+}
+
+.agentbox-markdown hr {
+  margin-block: 2.75rem;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.agentbox-markdown img {
+  max-width: 100%;
+  margin-block: 1.75rem;
+  border: 1px solid var(--border);
 }

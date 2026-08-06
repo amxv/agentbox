@@ -219,8 +219,8 @@ export function ThreadView({ threadId }: { threadId: string }) {
           eyebrow="Accessible thread"
           title={thread?.title ?? "Thread"}
           description={
-            <span className="flex flex-col gap-2">
-              <span className="flex flex-wrap items-center gap-2">
+            <span className="flex flex-col gap-3">
+              <span className="flex flex-wrap items-center gap-3">
                 <MonoValue>{thread?.id ?? threadId}</MonoValue>
                 <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" />
               </span>
@@ -265,7 +265,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </Alert>
         ) : null}
 
-        <section className="flex flex-col gap-3" aria-label="Thread messages">
+        <section className="flex flex-col gap-5" aria-label="Thread messages">
           {loading ? <MessageSkeleton /> : null}
           {!loading && !error && thread?.messages.length === 0 ? (
             <Empty className="border py-16">
@@ -286,38 +286,38 @@ export function ThreadView({ threadId }: { threadId: string }) {
                       <Button
                         type="button"
                         variant="ghost"
-                        className="h-auto w-full items-start justify-between gap-4 p-4 text-left whitespace-normal hover:bg-muted/40"
+                        className="h-auto w-full items-start justify-between gap-6 p-6 text-left whitespace-normal hover:bg-muted/40"
                       />
                     }
                   >
-                    <span className="flex min-w-0 items-start gap-3">
+                    <span className="flex min-w-0 items-start gap-4">
                       <Badge variant="secondary">#{index + 1}</Badge>
-                      <span className="flex min-w-0 flex-col gap-2">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <strong className="font-heading text-sm font-semibold">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
+                      <span className="flex min-w-0 flex-col gap-3">
+                        <span className="flex flex-wrap items-center gap-3">
+                          <strong className="font-heading text-base font-semibold">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
                           <Badge variant="outline">{getMessageKind(message.body_content_type)}</Badge>
                           {message.assets.length > 0 ? <Badge variant="outline">{message.assets.length} attachment{message.assets.length === 1 ? "" : "s"}</Badge> : null}
                         </span>
-                        <span className="line-clamp-2 text-xs/relaxed text-muted-foreground">{getMessagePreview(message.body)}</span>
-                        <span className="flex flex-wrap items-center gap-2">
+                        <span className="line-clamp-2 text-sm/relaxed text-muted-foreground">{getMessagePreview(message.body)}</span>
+                        <span className="flex flex-wrap items-center gap-3">
                           <MonoValue>{message.id}</MonoValue>
                           <span onClick={(event) => event.stopPropagation()}><CopyButton value={message.id} label="Copy message ID" /></span>
                         </span>
                       </span>
                     </span>
-                    <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex shrink-0 items-center gap-3 text-sm text-muted-foreground">
                       <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
                       <ChevronDownIcon className={cn("transition-transform", isExpanded && "rotate-180")} />
                     </span>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <Separator />
-                    <CardContent className="flex flex-col gap-6 pt-4">
+                    <CardContent className="flex flex-col gap-8 pt-6">
                       <MessageContent body={message.body} contentType={message.body_content_type} />
                       {message.assets.length > 0 ? (
-                        <section className="flex flex-col gap-3" aria-label="Attachments">
-                          <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Attachments</span>
-                          <div className="grid gap-3">
+                        <section className="flex flex-col gap-4" aria-label="Attachments">
+                          <span className="font-mono text-xs tracking-[0.1em] text-muted-foreground uppercase">Attachments</span>
+                          <div className="grid gap-4">
                             {message.assets.map((asset) => {
                               const resolution = assetResolutions[asset.id];
                               const unavailable = asset.unavailable || resolution?.available === false;
@@ -331,21 +331,21 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                     <img className="max-h-[32rem] w-full border-b bg-muted object-contain" src={resolution.preview_url} alt={asset.file_name} loading="lazy" />
                                   ) : null}
                                   <CardHeader>
-                                    <div className="flex min-w-0 items-start gap-3">
-                                      <span className="flex size-8 shrink-0 items-center justify-center border bg-muted"><FileTextIcon /></span>
-                                      <div className="flex min-w-0 flex-col gap-1">
+                                    <div className="flex min-w-0 items-start gap-4">
+                                      <span className="flex size-10 shrink-0 items-center justify-center border bg-muted"><FileTextIcon /></span>
+                                      <div className="flex min-w-0 flex-col gap-2">
                                         <CardTitle>{asset.file_name}</CardTitle>
                                         <CardDescription>{asset.mime_type ?? "Unknown type"} · {formatBytes(asset.size_bytes)}</CardDescription>
                                       </div>
                                     </div>
                                   </CardHeader>
-                                  <CardContent className="flex flex-col gap-3">
+                                  <CardContent className="flex flex-col gap-4">
                                     {asset.purged_at ? (
                                       <Alert variant="destructive"><AlertTitle>Attachment deleted by deployment owner</AlertTitle></Alert>
                                     ) : unavailable ? (
                                       <Alert variant="destructive"><AlertTitle>Attachment unavailable</AlertTitle><AlertDescription>{unavailableReason}</AlertDescription></Alert>
                                     ) : (
-                                      <div className="flex flex-wrap gap-2">
+                                      <div className="flex flex-wrap gap-3">
                                         {asset.preview_path && !resolution?.preview_url ? (
                                           <Button variant="outline" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
                                             {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
@@ -381,13 +381,13 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
 function MessageSkeleton() {
   return (
-    <div className="flex flex-col gap-3" aria-label="Loading thread" aria-busy="true">
+    <div className="flex flex-col gap-5" aria-label="Loading thread" aria-busy="true">
       {Array.from({ length: 3 }).map((_, index) => (
         <Card key={index}>
-          <CardContent className="flex items-start justify-between gap-4">
-            <div className="flex flex-1 items-start gap-3">
+          <CardContent className="flex items-start justify-between gap-6">
+            <div className="flex flex-1 items-start gap-4">
               <Skeleton className="h-5 w-8" />
-              <div className="flex flex-1 flex-col gap-2">
+              <div className="flex flex-1 flex-col gap-3">
                 <Skeleton className="h-4 w-40" />
                 <Skeleton className="h-3 w-full" />
                 <Skeleton className="h-3 w-2/3" />

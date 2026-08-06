@@ -238,7 +238,7 @@ export function InboxView() {
         />
 
         {showCreateComposer ? (
-          <section className="grid gap-4" aria-label="Create thread">
+          <section className="grid gap-6" aria-label="Create thread">
             <Card>
               <CardHeader className="border-b">
                 <SectionIntro
@@ -252,7 +252,7 @@ export function InboxView() {
                 <FieldGroup>
                   <Field orientation="responsive">
                     <FieldLabel htmlFor="new-thread-title">Thread title</FieldLabel>
-                    <div className="flex min-w-0 flex-1 gap-2">
+                    <div className="flex min-w-0 flex-1 gap-3">
                       <Input
                         id="new-thread-title"
                         value={newThreadTitle}
@@ -303,8 +303,10 @@ export function InboxView() {
             <div className="overflow-x-auto pb-1">
               <ToggleGroup
                 aria-label="Inbox filters"
+                className="min-w-max"
                 value={[activeFilter]}
                 variant="outline"
+                size="lg"
                 spacing={0}
                 onValueChange={(value) => {
                   const next = value[0] as InboxFilter | undefined;
@@ -327,7 +329,7 @@ export function InboxView() {
           </CardContent>
         </Card>
 
-        <section className="grid gap-3" aria-label="Agentbox threads">
+        <section className="grid gap-5" aria-label="Agentbox threads">
           {loading ? <ThreadListSkeleton /> : null}
           {error ? (
             <Alert variant="destructive">
@@ -348,12 +350,12 @@ export function InboxView() {
             <Link className="group block outline-none" key={thread.id} href={`/threads/${thread.id}`}>
               <Card className="transition-transform group-hover:-translate-y-px group-focus-visible:ring-2 group-focus-visible:ring-ring">
                 <CardHeader className="border-b">
-                  <div className="flex min-w-0 flex-col gap-2">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <div className="flex min-w-0 flex-col gap-3">
+                    <div className="flex min-w-0 flex-wrap items-center gap-3">
                       <MonoValue>{thread.id}</MonoValue>
-                      <span className="text-xs text-muted-foreground">Updated {formatDate(thread.updated_at)}</span>
+                      <span className="text-sm text-muted-foreground">Updated {formatDate(thread.updated_at)}</span>
                     </div>
-                    <h2 className="font-heading text-lg font-semibold tracking-[-0.025em] text-balance sm:text-xl">
+                    <h2 className="font-heading text-xl font-semibold tracking-[-0.03em] text-balance sm:text-2xl">
                       {thread.title}
                     </h2>
                   </div>
@@ -361,11 +363,11 @@ export function InboxView() {
                     <ArrowUpRightIcon className="text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                   </CardAction>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-xs/relaxed text-muted-foreground">
+                <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-sm/relaxed text-muted-foreground">
                     Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}
                   </span>
-                  <span className="flex flex-wrap gap-1.5">
+                  <span className="flex flex-wrap gap-2">
                     {visibilityLabels(thread).map((label, index) => (
                       <Badge variant={label === "Public" ? "default" : "outline"} key={`${label}-${index}`}>{label}</Badge>
                     ))}
@@ -375,7 +377,7 @@ export function InboxView() {
             </Link>
           )) : null}
           {!loading && !error && threadPage.next_cursor ? (
-            <div className="flex justify-center pt-3">
+            <div className="flex justify-center pt-5">
               <Button variant="outline" disabled={loadingMore} type="button" onClick={() => void loadMoreThreads()}>
                 {loadingMore ? "Loading" : "Load more threads"}
               </Button>
@@ -389,7 +391,7 @@ export function InboxView() {
 
 function ThreadListSkeleton() {
   return (
-    <div className="grid gap-3" aria-label="Loading threads" aria-busy="true">
+    <div className="grid gap-5" aria-label="Loading threads" aria-busy="true">
       {Array.from({ length: 4 }).map((_, index) => (
         <Card key={index}>
           <CardHeader className="border-b">
