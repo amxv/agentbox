@@ -339,6 +339,26 @@ html:has([data-panel-root]) {
   stroke: currentColor;
 }
 
+/* Base UI can expose pressed state through `aria-pressed`, `data-state`, or
+ * `data-pressed` depending on the primitive and render path. Keep the
+ * external theme controls on the same semantic palette as the signed-in
+ * panel instead of falling back to the legacy dark-mode `--accent` token. */
+[data-slot="toggle"][aria-pressed="true"],
+[data-slot="toggle"][data-state="on"],
+[data-slot="toggle"][data-pressed] {
+  border-color: var(--panel-active-border);
+  background: var(--panel-active-bg);
+  color: var(--panel-active-foreground);
+}
+
+[data-slot="toggle"][aria-pressed="true"] svg,
+[data-slot="toggle"][data-state="on"] svg,
+[data-slot="toggle"][data-pressed] svg {
+  color: var(--panel-active-foreground);
+  stroke: var(--panel-active-foreground);
+  opacity: 1;
+}
+
 [data-panel-root] [data-slot="dropdown-menu-item"][data-current="true"] {
   background: var(--panel-active-bg);
   color: var(--panel-active-foreground);

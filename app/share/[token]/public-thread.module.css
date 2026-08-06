@@ -29,6 +29,8 @@
 .mark i { background: var(--background); }
 .headerMeta { display: flex; align-items: center; gap: 10px; }
 .headerMeta > span { padding: 5px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+.headerMeta :global([data-slot="toggle"]),
+.headerMeta :global([data-slot="toggle-group"]) { height: 36px; min-height: 36px; }
 .page :global([data-slot="toggle"][aria-pressed="true"]) { border-color: var(--panel-active-border); background: var(--panel-active-bg); color: var(--panel-active-foreground); }
 
 .main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 72px 0 92px; }
