@@ -193,7 +193,7 @@ func TestDownloadAttachmentDiagnosticWidgetContract(t *testing.T) {
 		t.Fatalf("diagnostic legacy CSP missing resource_domains: %#v", legacyCSP)
 	}
 	html := read.Contents[0].Text
-	for _, required := range []string{"toolResponseMetadata", "getFileDownloadUrl", "uploadFile", "fetch(resourceLink.uri", "library: false", "uploadProbe", "sendFollowUpMessage", "fileIdCandidates", "metadataShape"} {
+	for _, required := range []string{"toolResponseMetadata", "openai:set_globals", "getFileDownloadUrl", "uploadFile", "fetch(resourceLink.uri", "library: false", "uploadProbe", "sendFollowUpMessage", "fileIdCandidates", "metadataShape"} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("diagnostic widget is missing %q", required)
 		}

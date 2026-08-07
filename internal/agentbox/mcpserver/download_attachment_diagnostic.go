@@ -6,7 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v3.html"
+const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v4.html"
 const downloadAttachmentDiagnosticDomain = "https://agentbox.ashray.xyz"
 const downloadAttachmentR2CSPDomain = "https://*.r2.cloudflarestorage.com"
 
@@ -67,7 +67,32 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
     (() => {
       const statusEl = document.getElementById("status");
       const outEl = document.getElementById("out");
-      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const OPENAI_SET_GLOBALS_EVENT = "openai:set_globals";
+
+      function waitForOpenAIGlobal(key, timeoutMs = 10000) {
+        const current = window.openai?.[key];
+        if (current !== undefined && current !== null) return Promise.resolve(current);
+
+        return new Promise((resolve) => {
+          let settled = false;
+          const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            window.removeEventListener(OPENAI_SET_GLOBALS_EVENT, onGlobals);
+            clearTimeout(timeout);
+            resolve(value ?? null);
+          };
+          const onGlobals = (event) => {
+            const value = event?.detail?.globals?.[key];
+            if (value !== undefined && value !== null) finish(value);
+          };
+          const timeout = setTimeout(() => finish(window.openai?.[key] ?? null), timeoutMs);
+          window.addEventListener(OPENAI_SET_GLOBALS_EVENT, onGlobals, { passive: true });
+
+          const afterSubscribe = window.openai?.[key];
+          if (afterSubscribe !== undefined && afterSubscribe !== null) finish(afterSubscribe);
+        });
+      }
 
       function collectShape(value, path = "$", output = [], depth = 0) {
         if (output.length >= 120 || depth > 8) return output;
@@ -111,11 +136,7 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
 
       async function run() {
         const openai = window.openai;
-        let metadata = openai?.toolResponseMetadata;
-        for (let attempt = 0; attempt < 30 && !metadata; attempt++) {
-          await sleep(100);
-          metadata = openai?.toolResponseMetadata;
-        }
+        const metadata = await waitForOpenAIGlobal("toolResponseMetadata");
 
         const candidates = collectFileIds(metadata);
         const checks = [];
@@ -207,7 +228,7 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
         }
 
         const summary = {
-          diagnostic: "agentbox-download-attachment-v3",
+          diagnostic: "agentbox-download-attachment-v4",
           hasWindowOpenAI: Boolean(openai),
           hasToolResponseMetadata: Boolean(metadata),
           metadataTopLevelKeys: metadata && typeof metadata === "object" ? Object.keys(metadata) : [],
