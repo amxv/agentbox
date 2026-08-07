@@ -110,7 +110,7 @@ func TestPostMessageFileDescriptorMatchesOpenAIContract(t *testing.T) {
 	assertPostMessageFileDescriptor(t, post)
 }
 
-func TestDownloadAttachmentDiagnosticWidgetContract(t *testing.T) {
+func TestDownloadAttachmentBridgeWidgetContract(t *testing.T) {
 	ctx := t.Context()
 	repo := &db.MemoryRepository{}
 	svc := service.New(repo, &assets.FakeStore{})
@@ -143,11 +143,11 @@ func TestDownloadAttachmentDiagnosticWidgetContract(t *testing.T) {
 		t.Fatal("download_attachment tool is missing")
 	}
 	meta := download.Meta.GetMeta()
-	if got := meta["openai/outputTemplate"]; got != downloadAttachmentDiagnosticURI {
+	if got := meta["openai/outputTemplate"]; got != downloadAttachmentBridgeURI {
 		t.Fatalf("download_attachment output template = %#v", got)
 	}
 	ui, ok := meta["ui"].(map[string]any)
-	if !ok || ui["resourceUri"] != downloadAttachmentDiagnosticURI {
+	if !ok || ui["resourceUri"] != downloadAttachmentBridgeURI {
 		t.Fatalf("download_attachment ui meta = %#v", meta["ui"])
 	}
 
@@ -155,47 +155,52 @@ func TestDownloadAttachmentDiagnosticWidgetContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentDiagnosticURI || resources.Resources[0].MIMEType != "text/html;profile=mcp-app" {
-		t.Fatalf("diagnostic resources = %#v", resources.Resources)
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentBridgeURI || resources.Resources[0].MIMEType != "text/html;profile=mcp-app" {
+		t.Fatalf("attachment bridge resources = %#v", resources.Resources)
 	}
-	read, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{URI: downloadAttachmentDiagnosticURI})
+	read, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{URI: downloadAttachmentBridgeURI})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(read.Contents) != 1 || read.Contents[0].MIMEType != "text/html;profile=mcp-app" {
-		t.Fatalf("diagnostic resource contents = %#v", read.Contents)
+		t.Fatalf("attachment bridge resource contents = %#v", read.Contents)
 	}
 	resourceMeta := read.Contents[0].Meta.GetMeta()
 	resourceUI, ok := resourceMeta["ui"].(map[string]any)
-	if !ok || resourceUI["domain"] != downloadAttachmentDiagnosticDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentDiagnosticDomain {
-		t.Fatalf("diagnostic widget domain metadata = %#v", resourceMeta)
+	if !ok || resourceUI["domain"] != downloadAttachmentBridgeDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentBridgeDomain {
+		t.Fatalf("attachment bridge widget domain metadata = %#v", resourceMeta)
 	}
 	standardCSP, ok := resourceUI["csp"].(map[string]any)
 	if !ok {
-		t.Fatalf("diagnostic standard CSP metadata = %#v", resourceUI["csp"])
+		t.Fatalf("attachment bridge standard CSP metadata = %#v", resourceUI["csp"])
 	}
 	connectDomains, ok := standardCSP["connectDomains"].([]any)
 	if !ok || len(connectDomains) != 1 || connectDomains[0] != downloadAttachmentR2CSPDomain {
-		t.Fatalf("diagnostic standard CSP connectDomains = %#v", standardCSP["connectDomains"])
+		t.Fatalf("attachment bridge standard CSP connectDomains = %#v", standardCSP["connectDomains"])
 	}
 	if _, ok := standardCSP["resourceDomains"]; !ok {
-		t.Fatalf("diagnostic standard CSP missing resourceDomains: %#v", standardCSP)
+		t.Fatalf("attachment bridge standard CSP missing resourceDomains: %#v", standardCSP)
 	}
 	legacyCSP, ok := resourceMeta["openai/widgetCSP"].(map[string]any)
 	if !ok {
-		t.Fatalf("diagnostic legacy CSP metadata = %#v", resourceMeta["openai/widgetCSP"])
+		t.Fatalf("attachment bridge legacy CSP metadata = %#v", resourceMeta["openai/widgetCSP"])
 	}
 	legacyConnectDomains, ok := legacyCSP["connect_domains"].([]any)
 	if !ok || len(legacyConnectDomains) != 1 || legacyConnectDomains[0] != downloadAttachmentR2CSPDomain {
-		t.Fatalf("diagnostic legacy CSP connect_domains = %#v", legacyCSP["connect_domains"])
+		t.Fatalf("attachment bridge legacy CSP connect_domains = %#v", legacyCSP["connect_domains"])
 	}
 	if _, ok := legacyCSP["resource_domains"]; !ok {
-		t.Fatalf("diagnostic legacy CSP missing resource_domains: %#v", legacyCSP)
+		t.Fatalf("attachment bridge legacy CSP missing resource_domains: %#v", legacyCSP)
 	}
 	html := read.Contents[0].Text
-for _, required := range []string{"toolResponseMetadata", "openai:set_globals", "getFileDownloadUrl", "uploadFile", "fetch(resourceLink.uri", "library: true", "uploadProbe", "sendFollowUpMessage", "fileIdCandidates", "metadataShape"} {
+	for _, required := range []string{"toolResponseMetadata", "openai:set_globals", "getFileDownloadUrl", "uploadFile", "fetch(resourceLink.uri", "library: true", "sendFollowUpMessage", "attachment_saved_to_chatgpt_library", "materialize it as raw_file", "blob.size !== expectedSize"} {
 		if !strings.Contains(html, required) {
-			t.Fatalf("diagnostic widget is missing %q", required)
+			t.Fatalf("attachment bridge widget is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"diagnostic", "uploadProbe", "metadataShape", "no-cors"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("attachment bridge widget retained diagnostic-only marker %q", forbidden)
 		}
 	}
 }
@@ -415,13 +420,13 @@ func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
 	defer clientSession.Close()
 
 	if initialized := clientSession.InitializeResult(); initialized == nil || initialized.Capabilities == nil || initialized.Capabilities.Resources == nil {
-		t.Fatalf("diagnostic UI resource capability missing: %#v", initialized)
+		t.Fatalf("attachment bridge UI resource capability missing: %#v", initialized)
 	}
 	resources, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentDiagnosticURI || strings.Contains(resources.Resources[0].URI, assetID) {
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentBridgeURI || strings.Contains(resources.Resources[0].URI, assetID) {
 		t.Fatalf("attachment inventory leaked into MCP resources: %#v", resources.Resources)
 	}
 

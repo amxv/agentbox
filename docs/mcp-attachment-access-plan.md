@@ -1,6 +1,6 @@
 # MCP Attachment Read and Download Plan
 
-Status: implemented on `main`; live ChatGPT connector smoke pending deployment/rediscovery
+Status: implemented on `main`; live ChatGPT text reads and direct-R2-to-Library downloads verified
 Date: 2026-08-07
 Target: AgentBox Go MCP server and attachment storage path
 
@@ -242,13 +242,19 @@ OpenAI's current reference also says ChatGPT's file APIs can operate on files
 does not specify a separate server-side file-output schema analogous to
 `openai/fileParams`.
 
-Do not invent an undocumented `_meta` output field. Implement the portable MCP
-`ResourceLink` first, then verify ChatGPT's actual host behavior in a live
-connector smoke test. If ChatGPT recognizes the resource link as a tool file
-reference, confirm that the attachment becomes a native host file that can be
-materialized into the sandbox. If it does not, retain the standard MCP result
-and investigate a ChatGPT-specific compatibility layer only when an official or
-empirically stable contract is available.
+Do not invent an undocumented `_meta` output field. The portable MCP
+`ResourceLink` remains the canonical download result for every host. Live
+ChatGPT testing showed that ChatGPT renders that link as a file card but does
+not automatically expose a generic non-image file to the model/sandbox. The
+production ChatGPT compatibility layer therefore uses the documented widget
+file APIs: the widget fetches the signed ResourceLink directly from R2, calls
+`window.openai.uploadFile(file, { library: true })`, validates the resulting
+native file handle, and posts a concise follow-up instructing the model to find
+the exact filename in ChatGPT Library and materialize it as a raw file. This was
+verified end to end with the 33,434-byte Markdown acceptance-review fixture.
+
+The bridge does not put the signed R2 URL or attachment bytes into model-visible
+content, and the bytes never transit the AgentBox/Vercel response path.
 
 Source:
 
@@ -393,10 +399,11 @@ Go function.
 - Use the existing known Markdown attachment case as a live acceptance fixture.
 - Verify ChatGPT can call `get_thread`, then `read_attachment`, and receive the
   exact Markdown source without another connector or file-search surface.
-- Verify `download_attachment` produces a host-usable file/reference. If
-  ChatGPT materializes it as a native file, compare downloaded bytes/hashes to
-  the original. If it does not, record the exact host result and do not invent
-  a proprietary output schema without a supported contract.
+- Verify `download_attachment` produces a host-usable standard ResourceLink.
+- In ChatGPT, verify the bridge fetches directly from R2, saves the file into
+  ChatGPT Library, and that Files can locate and materialize the raw file into
+  the sandbox. Compare the resulting byte count/hash or exact contents to the
+  original fixture.
 - Repeat the resource-link download smoke with a generic MCP client/inspector.
 
 ## 7. Required regression and acceptance coverage

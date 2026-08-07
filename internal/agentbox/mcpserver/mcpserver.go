@@ -52,7 +52,7 @@ func (s *Server) build() *mcp.Server {
 		Capabilities: &mcp.ServerCapabilities{},
 		GetSessionID: func() string { return "" },
 	})
-	registerDownloadAttachmentDiagnosticResource(server)
+	registerDownloadAttachmentBridgeResource(server)
 	server.AddTool(&mcp.Tool{
 		Name:        "list_threads",
 		Title:       "List threads",
@@ -106,14 +106,14 @@ func (s *Server) build() *mcp.Server {
 	}, s.readAttachment)
 	server.AddTool(&mcp.Tool{
 		Meta: mcp.Meta{
-			"ui":                             map[string]any{"resourceUri": downloadAttachmentDiagnosticURI},
-			"openai/outputTemplate":          downloadAttachmentDiagnosticURI,
+			"ui":                             map[string]any{"resourceUri": downloadAttachmentBridgeURI},
+			"openai/outputTemplate":          downloadAttachmentBridgeURI,
 			"openai/toolInvocation/invoking": "Preparing attachment…",
 			"openai/toolInvocation/invoked":  "Attachment ready",
 		},
 		Name:        "download_attachment",
 		Title:       "Download attachment",
-		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct file link. File bytes transfer directly from R2 rather than through Agentbox.",
+		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct file link. File bytes transfer directly from R2 rather than through Agentbox. In ChatGPT, the companion UI saves the file to ChatGPT Library and posts a follow-up so the agent can locate and materialize it into the sandbox.",
 		InputSchema: objectSchema(map[string]any{
 			"asset_id": map[string]any{"type": "string", "minLength": 1},
 		}, []string{"asset_id"}),

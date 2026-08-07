@@ -9,9 +9,9 @@ if rg -n 'AddResourceTemplate\(|EmbeddedResource' internal/agentbox/mcpserver --
   exit 1
 fi
 resource_registrations="$(rg -n 'AddResource\(' internal/agentbox/mcpserver --glob '!**/*_test.go' || true)"
-unexpected_resource_registrations="$(printf '%s\n' "$resource_registrations" | grep -v 'download_attachment_diagnostic.go' || true)"
+unexpected_resource_registrations="$(printf '%s\n' "$resource_registrations" | grep -v 'download_attachment_bridge.go' || true)"
 if [[ -n "$unexpected_resource_registrations" ]]; then
-  echo 'Unexpected MCP resource registration exists outside the temporary download diagnostic UI.' >&2
+  echo 'Unexpected MCP resource registration exists outside the ChatGPT download bridge UI.' >&2
   printf '%s\n' "$unexpected_resource_registrations" >&2
   exit 1
 fi
@@ -34,7 +34,7 @@ go test ./internal/agentbox/service \
 
 echo 'Checking MCP descriptors and explicit read/download flow...'
 go test ./internal/agentbox/mcpserver \
-  -run '^(TestToolsExposeMetadataAndAnnotations|TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow|TestDownloadAttachmentDiagnosticWidgetContract)$' \
+  -run '^(TestToolsExposeMetadataAndAnnotations|TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow|TestDownloadAttachmentBridgeWidgetContract)$' \
   -count=1
 
 echo 'MCP attachment access readiness passed.'
