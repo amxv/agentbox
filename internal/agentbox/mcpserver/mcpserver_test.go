@@ -170,12 +170,15 @@ func TestDownloadAttachmentMessageBridgeContract(t *testing.T) {
 	if !ok || resourceUI["domain"] != downloadAttachmentMessageBridgeDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentMessageBridgeDomain {
 		t.Fatalf("attachment message widget domain metadata = %#v", resourceMeta)
 	}
-	html := read.Contents[0].Text
-	for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url", "sendFollowUpMessage", "Please download this exact URL into the sandbox now"} {
-		if !strings.Contains(html, required) {
-			t.Fatalf("attachment message widget is missing %q", required)
-		}
-	}
+html := read.Contents[0].Text
+for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url", "sendFollowUpMessage", "Please download this exact URL into the sandbox now"} {
+if !strings.Contains(html, required) {
+t.Fatalf("attachment message widget is missing %q", required)
+}
+}
+if strings.Index(html, "sendFollowUpMessage") > strings.Index(html, "if (messageCapabilities.text)") {
+t.Fatal("ChatGPT follow-up handoff must be preferred before the generic text ui/message fallback")
+}
 	for _, forbidden := range []string{"uploadFile", "getFileDownloadUrl", "fetch(resourceLink.uri", "library: true"} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("attachment message widget retained old file-upload path %q", forbidden)

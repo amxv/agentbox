@@ -259,10 +259,12 @@ standard `ui/initialize` handshake. If the MCP Apps host advertises
 `hostCapabilities.message.resourceLink`, the view sends a `ui/message` whose
 content contains that same `ResourceLink`. Current ChatGPT testing showed the
 host can render the app but does not advertise that message modality, so the
-view falls back to a text `ui/message` containing the expiring `download_url`;
-ChatGPT's `sendFollowUpMessage` is a final compatibility fallback. This keeps
-the resource capability in an actual conversation turn so a guarded local or
-sandbox downloader can consume it without proxying bytes through AgentBox. The
+view prefers ChatGPT's `sendFollowUpMessage` with the expiring `download_url`,
+because that API creates a real follow-up turn that guarded sandbox downloaders
+can treat as conversation provenance. Other MCP Apps hosts can fall back to a
+text `ui/message`. This keeps the resource capability in an actual conversation
+turn so a guarded local or sandbox downloader can consume it without proxying
+bytes through AgentBox. The
 capability expires after `expires_in` seconds, storage keys remain hidden, and
 the attachment bytes never transit the AgentBox/Vercel response path.
 
@@ -413,8 +415,9 @@ Go function.
   the same short-lived URL in structured `download_url`.
 - In ChatGPT, verify the companion MCP Apps view negotiates the host's
   `ui/message` modalities. Prefer ResourceLink content when available; otherwise
-  verify the text-message fallback places the short-lived `download_url` in a
-  user turn and that the next agent turn can fetch it into the sandbox. Compare
+  prefer `sendFollowUpMessage` so the short-lived `download_url` lands in a real
+  follow-up turn. Verify the next agent turn can fetch it into the sandbox. Other
+  hosts may use the text `ui/message` fallback. Compare
   byte count/hash or exact contents to the original fixture.
 - Repeat the resource-link download smoke with a generic MCP client/inspector.
 

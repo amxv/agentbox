@@ -6,7 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const downloadAttachmentMessageBridgeURI = "ui://agentbox/download-resource-message-v2.html"
+const downloadAttachmentMessageBridgeURI = "ui://agentbox/download-resource-message-v3.html"
 const downloadAttachmentMessageBridgeDomain = "https://agentbox.ashray.xyz"
 
 // registerDownloadAttachmentMessageBridgeResource adds a tiny MCP Apps view
@@ -15,7 +15,9 @@ const downloadAttachmentMessageBridgeDomain = "https://agentbox.ashray.xyz"
 // re-emit that ResourceLink as a user-message content block. Hosts that support
 // only text messages receive a short-lived download URL in the user message so
 // the agent can consume it with a guarded local/sandbox downloader on the next
-// turn. ChatGPT's sendFollowUpMessage is a final compatibility fallback.
+// turn. ChatGPT's sendFollowUpMessage is preferred when available because it
+// creates a real follow-up turn, which is required by guarded sandbox downloaders
+// that only accept URLs which have appeared in conversation text.
 func registerDownloadAttachmentMessageBridgeResource(server *mcp.Server) {
 	server.AddResource(&mcp.Resource{
 		URI:         downloadAttachmentMessageBridgeURI,
@@ -192,18 +194,18 @@ const downloadAttachmentMessageBridgeHTML = `<!doctype html>
           "download_url: " + downloadUrl + "\n" +
           "Please download this exact URL into the sandbox now. Do not call download_attachment again unless this capability expires.";
 
+        if (typeof window.openai?.sendFollowUpMessage === "function") {
+          await window.openai.sendFollowUpMessage({ prompt: handoffText, scrollToBottom: false });
+          statusEl.textContent = asset.file_name + " download capability was sent as a ChatGPT follow-up turn.";
+          return;
+        }
+
         if (messageCapabilities.text) {
           const result = await rpc("ui/message", {
             role: "user",
             content: [{ type: "text", text: handoffText }],
           });
           if (result?.isError) throw new Error("Host rejected the attachment text handoff.");
-          statusEl.textContent = asset.file_name + " download capability was sent to the conversation.";
-          return;
-        }
-
-        if (typeof window.openai?.sendFollowUpMessage === "function") {
-          await window.openai.sendFollowUpMessage({ prompt: handoffText, scrollToBottom: false });
           statusEl.textContent = asset.file_name + " download capability was sent to the conversation.";
           return;
         }
