@@ -8,6 +8,7 @@ import (
 
 const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v1.html"
 const downloadAttachmentDiagnosticDomain = "https://agentbox.ashray.xyz"
+const downloadAttachmentR2CSPDomain = "https://*.r2.cloudflarestorage.com"
 
 // This widget is intentionally temporary. It inspects ChatGPT's host-normalized
 // MCP result for download_attachment so we can determine whether a standard MCP
@@ -28,14 +29,14 @@ func registerDownloadAttachmentDiagnosticResource(server *mcp.Server) {
 			Meta: mcp.Meta{"ui": map[string]any{
 				"prefersBorder": true,
 				"csp": map[string]any{
-					"connectDomains":  []string{},
+					"connectDomains":  []string{downloadAttachmentR2CSPDomain},
 					"resourceDomains": []string{},
 				},
 				"domain": downloadAttachmentDiagnosticDomain,
 			},
 				"openai/widgetPrefersBorder": true,
 				"openai/widgetCSP": map[string]any{
-					"connect_domains":  []string{},
+					"connect_domains":  []string{downloadAttachmentR2CSPDomain},
 					"resource_domains": []string{},
 				},
 				"openai/widgetDomain": downloadAttachmentDiagnosticDomain,
@@ -140,8 +141,50 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
           }
         }
 
+        const callResult = metadata?.call_tool_result;
+        const resourceLink = Array.isArray(callResult?.content)
+          ? callResult.content.find((item) => item?.type === "resource_link" && typeof item?.uri === "string")
+          : null;
+        const uploadProbe = {
+          resourceLinkFound: Boolean(resourceLink),
+          fetch: "not_attempted",
+          fetchedBytes: 0,
+          uploadFile: "not_attempted",
+          uploadedFileId: null,
+          uploadedFileDownloadUrl: "not_attempted",
+        };
+
+        if (resourceLink && typeof openai?.uploadFile === "function") {
+          try {
+            const response = await fetch(resourceLink.uri, { cache: "no-store", credentials: "omit" });
+            if (!response.ok) throw new Error("R2 fetch returned HTTP " + response.status);
+            const blob = await response.blob();
+            uploadProbe.fetch = "success";
+            uploadProbe.fetchedBytes = blob.size;
+            const fileName = resourceLink.name || resourceLink.title || "agentbox-attachment.bin";
+            const mimeType = resourceLink.mimeType || blob.type || "application/octet-stream";
+            const file = new File([blob], fileName, { type: mimeType });
+            const uploaded = await openai.uploadFile(file, { library: false });
+            if (!uploaded?.fileId) throw new Error("uploadFile returned without fileId");
+            uploadProbe.uploadFile = "success";
+            uploadProbe.uploadedFileId = uploaded.fileId;
+            if (typeof openai?.getFileDownloadUrl === "function") {
+              const resolved = await openai.getFileDownloadUrl({ fileId: uploaded.fileId });
+              uploadProbe.uploadedFileDownloadUrl = resolved?.downloadUrl ? "success" : "returned_without_download_url";
+            } else {
+              uploadProbe.uploadedFileDownloadUrl = "unavailable";
+            }
+          } catch (error) {
+            if (uploadProbe.fetch === "not_attempted") uploadProbe.fetch = "error";
+            if (uploadProbe.fetch === "success" && uploadProbe.uploadFile === "not_attempted") uploadProbe.uploadFile = "error";
+            uploadProbe.error = String(error?.message ?? error).slice(0, 300);
+          }
+        } else if (resourceLink) {
+          uploadProbe.uploadFile = "unavailable";
+        }
+
         const summary = {
-          diagnostic: "agentbox-download-attachment-v1",
+          diagnostic: "agentbox-download-attachment-v2",
           hasWindowOpenAI: Boolean(openai),
           hasToolResponseMetadata: Boolean(metadata),
           metadataTopLevelKeys: metadata && typeof metadata === "object" ? Object.keys(metadata) : [],
@@ -151,10 +194,13 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
           uploadFileAvailable: typeof openai?.uploadFile === "function",
           fileIdCandidates: candidates,
           downloadUrlChecks: checks,
+          uploadProbe,
           metadataShape: collectShape(metadata),
         };
 
-        statusEl.textContent = candidates.length ? "Diagnostic complete — native file candidate found." : "Diagnostic complete — no native fileId found.";
+        statusEl.textContent = uploadProbe.uploadFile === "success"
+          ? "Diagnostic complete — R2 file uploaded to ChatGPT natively."
+          : (candidates.length ? "Diagnostic complete — native file candidate found." : "Diagnostic complete — no native fileId found.");
         outEl.textContent = JSON.stringify(summary, null, 2);
 
         // Send only the sanitized structural diagnostic to the conversation.

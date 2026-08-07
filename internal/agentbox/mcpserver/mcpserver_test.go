@@ -174,8 +174,9 @@ func TestDownloadAttachmentDiagnosticWidgetContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("diagnostic standard CSP metadata = %#v", resourceUI["csp"])
 	}
-	if _, ok := standardCSP["connectDomains"]; !ok {
-		t.Fatalf("diagnostic standard CSP missing connectDomains: %#v", standardCSP)
+	connectDomains, ok := standardCSP["connectDomains"].([]any)
+	if !ok || len(connectDomains) != 1 || connectDomains[0] != downloadAttachmentR2CSPDomain {
+		t.Fatalf("diagnostic standard CSP connectDomains = %#v", standardCSP["connectDomains"])
 	}
 	if _, ok := standardCSP["resourceDomains"]; !ok {
 		t.Fatalf("diagnostic standard CSP missing resourceDomains: %#v", standardCSP)
@@ -184,14 +185,15 @@ func TestDownloadAttachmentDiagnosticWidgetContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("diagnostic legacy CSP metadata = %#v", resourceMeta["openai/widgetCSP"])
 	}
-	if _, ok := legacyCSP["connect_domains"]; !ok {
-		t.Fatalf("diagnostic legacy CSP missing connect_domains: %#v", legacyCSP)
+	legacyConnectDomains, ok := legacyCSP["connect_domains"].([]any)
+	if !ok || len(legacyConnectDomains) != 1 || legacyConnectDomains[0] != downloadAttachmentR2CSPDomain {
+		t.Fatalf("diagnostic legacy CSP connect_domains = %#v", legacyCSP["connect_domains"])
 	}
 	if _, ok := legacyCSP["resource_domains"]; !ok {
 		t.Fatalf("diagnostic legacy CSP missing resource_domains: %#v", legacyCSP)
 	}
 	html := read.Contents[0].Text
-	for _, required := range []string{"toolResponseMetadata", "getFileDownloadUrl", "sendFollowUpMessage", "fileIdCandidates", "metadataShape"} {
+	for _, required := range []string{"toolResponseMetadata", "getFileDownloadUrl", "uploadFile", "fetch(resourceLink.uri", "library: false", "uploadProbe", "sendFollowUpMessage", "fileIdCandidates", "metadataShape"} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("diagnostic widget is missing %q", required)
 		}
