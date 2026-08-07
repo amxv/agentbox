@@ -110,101 +110,6 @@ func TestPostMessageFileDescriptorMatchesOpenAIContract(t *testing.T) {
 	assertPostMessageFileDescriptor(t, post)
 }
 
-func TestDownloadAttachmentBridgeWidgetContract(t *testing.T) {
-	ctx := t.Context()
-	repo := &db.MemoryRepository{}
-	svc := service.New(repo, &assets.FakeStore{})
-	server := New(testAuth(), svc)
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = serverSession.Close() })
-	clientSession, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = clientSession.Close() })
-
-	tools, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var download *mcp.Tool
-	for _, tool := range tools.Tools {
-		if tool.Name == "download_attachment" {
-			download = tool
-			break
-		}
-	}
-	if download == nil {
-		t.Fatal("download_attachment tool is missing")
-	}
-	meta := download.Meta.GetMeta()
-	if got := meta["openai/outputTemplate"]; got != downloadAttachmentBridgeURI {
-		t.Fatalf("download_attachment output template = %#v", got)
-	}
-	ui, ok := meta["ui"].(map[string]any)
-	if !ok || ui["resourceUri"] != downloadAttachmentBridgeURI {
-		t.Fatalf("download_attachment ui meta = %#v", meta["ui"])
-	}
-
-	resources, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentBridgeURI || resources.Resources[0].MIMEType != "text/html;profile=mcp-app" {
-		t.Fatalf("attachment bridge resources = %#v", resources.Resources)
-	}
-	read, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{URI: downloadAttachmentBridgeURI})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(read.Contents) != 1 || read.Contents[0].MIMEType != "text/html;profile=mcp-app" {
-		t.Fatalf("attachment bridge resource contents = %#v", read.Contents)
-	}
-	resourceMeta := read.Contents[0].Meta.GetMeta()
-	resourceUI, ok := resourceMeta["ui"].(map[string]any)
-	if !ok || resourceUI["domain"] != downloadAttachmentBridgeDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentBridgeDomain {
-		t.Fatalf("attachment bridge widget domain metadata = %#v", resourceMeta)
-	}
-	standardCSP, ok := resourceUI["csp"].(map[string]any)
-	if !ok {
-		t.Fatalf("attachment bridge standard CSP metadata = %#v", resourceUI["csp"])
-	}
-	connectDomains, ok := standardCSP["connectDomains"].([]any)
-	if !ok || len(connectDomains) != 1 || connectDomains[0] != downloadAttachmentR2CSPDomain {
-		t.Fatalf("attachment bridge standard CSP connectDomains = %#v", standardCSP["connectDomains"])
-	}
-	if _, ok := standardCSP["resourceDomains"]; !ok {
-		t.Fatalf("attachment bridge standard CSP missing resourceDomains: %#v", standardCSP)
-	}
-	legacyCSP, ok := resourceMeta["openai/widgetCSP"].(map[string]any)
-	if !ok {
-		t.Fatalf("attachment bridge legacy CSP metadata = %#v", resourceMeta["openai/widgetCSP"])
-	}
-	legacyConnectDomains, ok := legacyCSP["connect_domains"].([]any)
-	if !ok || len(legacyConnectDomains) != 1 || legacyConnectDomains[0] != downloadAttachmentR2CSPDomain {
-		t.Fatalf("attachment bridge legacy CSP connect_domains = %#v", legacyCSP["connect_domains"])
-	}
-	if _, ok := legacyCSP["resource_domains"]; !ok {
-		t.Fatalf("attachment bridge legacy CSP missing resource_domains: %#v", legacyCSP)
-	}
-	html := read.Contents[0].Text
-	for _, required := range []string{"toolResponseMetadata", "openai:set_globals", "getFileDownloadUrl", "uploadFile", "fetch(resourceLink.uri", "library: true", "sendFollowUpMessage", "attachment_saved_to_chatgpt_library", "materialize it as raw_file", "blob.size !== expectedSize"} {
-		if !strings.Contains(html, required) {
-			t.Fatalf("attachment bridge widget is missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{"diagnostic", "uploadProbe", "metadataShape", "no-cors"} {
-		if strings.Contains(html, forbidden) {
-			t.Fatalf("attachment bridge widget retained diagnostic-only marker %q", forbidden)
-		}
-	}
-}
-
 func listToolsByName(t *testing.T) map[string]*mcp.Tool {
 	t.Helper()
 	ctx := t.Context()
@@ -419,15 +324,8 @@ func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
 	}
 	defer clientSession.Close()
 
-	if initialized := clientSession.InitializeResult(); initialized == nil || initialized.Capabilities == nil || initialized.Capabilities.Resources == nil {
-		t.Fatalf("attachment bridge UI resource capability missing: %#v", initialized)
-	}
-	resources, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentBridgeURI || strings.Contains(resources.Resources[0].URI, assetID) {
-		t.Fatalf("attachment inventory leaked into MCP resources: %#v", resources.Resources)
+	if initialized := clientSession.InitializeResult(); initialized == nil || initialized.Capabilities == nil || initialized.Capabilities.Resources != nil {
+		t.Fatalf("attachment resources unexpectedly advertised: %#v", initialized)
 	}
 
 	gotThread, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "get_thread", Arguments: map[string]any{"thread_id": thread.ID}})
@@ -482,8 +380,8 @@ func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
 		t.Fatalf("resource link = %#v", link)
 	}
 	downloadJSON, _ := json.Marshal(download.StructuredContent)
-	if strings.Contains(string(downloadJSON), "r2.test") || strings.Contains(string(downloadJSON), "storage_key") || !strings.Contains(string(downloadJSON), `"expires_in":300`) {
-		t.Fatalf("download structured content leaked transport details: %s", downloadJSON)
+	if !strings.Contains(string(downloadJSON), `"download_url":"https://r2.test/`) || strings.Contains(string(downloadJSON), "storage_key") || !strings.Contains(string(downloadJSON), `"expires_in":300`) {
+		t.Fatalf("download structured content = %s", downloadJSON)
 	}
 }
 

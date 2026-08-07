@@ -1,6 +1,6 @@
 # MCP Attachment Read and Download Plan
 
-Status: implemented on `main`; live ChatGPT text reads and direct-R2-to-Library downloads verified
+Status: implemented on `main`; live ChatGPT text reads and direct-R2 sandbox handoff verified during compatibility work
 Date: 2026-08-07
 Target: AgentBox Go MCP server and attachment storage path
 
@@ -245,16 +245,19 @@ does not specify a separate server-side file-output schema analogous to
 Do not invent an undocumented `_meta` output field. The portable MCP
 `ResourceLink` remains the canonical download result for every host. Live
 ChatGPT testing showed that ChatGPT renders that link as a file card but does
-not automatically expose a generic non-image file to the model/sandbox. The
-production ChatGPT compatibility layer therefore uses the documented widget
-file APIs: the widget fetches the signed ResourceLink directly from R2, calls
-`window.openai.uploadFile(file, { library: true })`, validates the resulting
-native file handle, and posts a concise follow-up instructing the model to find
-the exact filename in ChatGPT Library and materialize it as a raw file. This was
-verified end to end with the 33,434-byte Markdown acceptance-review fixture.
+not automatically expose a generic non-image file to the model/sandbox. A
+follow-up experiment with `window.openai.uploadFile(file, { library: true })`
+returned a valid native file handle and rendered a successful Library-save
+status in the widget, but a fresh uploaded fixture still did not appear through
+the model's Files/Library surface. There is no documented generic `fileIds`
+widget-state field analogous to `imageIds` for arbitrary files.
 
-The bridge does not put the signed R2 URL or attachment bytes into model-visible
-content, and the bytes never transit the AgentBox/Vercel response path.
+The production contract therefore keeps the standard `ResourceLink` and also
+returns its short-lived signed R2 URL as model-visible `download_url` in the
+explicit `download_attachment` result. Agents with a local/sandbox downloader
+can consume that URL in the same turn. The capability expires after
+`expires_in` seconds, storage keys remain hidden, and the attachment bytes never
+transit the AgentBox/Vercel response path.
 
 Source:
 
@@ -399,11 +402,11 @@ Go function.
 - Use the existing known Markdown attachment case as a live acceptance fixture.
 - Verify ChatGPT can call `get_thread`, then `read_attachment`, and receive the
   exact Markdown source without another connector or file-search surface.
-- Verify `download_attachment` produces a host-usable standard ResourceLink.
-- In ChatGPT, verify the bridge fetches directly from R2, saves the file into
-  ChatGPT Library, and that Files can locate and materialize the raw file into
-  the sandbox. Compare the resulting byte count/hash or exact contents to the
-  original fixture.
+- Verify `download_attachment` produces a host-usable standard ResourceLink and
+  the same short-lived URL in structured `download_url`.
+- In ChatGPT, consume `download_url` with the available sandbox/local download
+  facility in the same turn and compare the resulting byte count/hash or exact
+  contents to the original fixture.
 - Repeat the resource-link download smoke with a generic MCP client/inspector.
 
 ## 7. Required regression and acceptance coverage
@@ -433,7 +436,9 @@ following.
 11. A simulated authorization loss while R2 is being read causes
     `read_attachment` to discard the fetched bytes and return no content.
 12. `download_attachment` returns exactly one standard `ResourceLink` with the
-    expected filename, MIME type, size, and short-lived authorized HTTPS URI.
+    expected filename, MIME type, size, and short-lived authorized HTTPS URI,
+    and structured `download_url` contains that same URI for agents that need
+    same-turn filesystem/sandbox access.
 13. `download_attachment` does not embed the file body into the MCP JSON result,
     keeping large files off the Vercel response path.
 14. Repeated download calls mint fresh short-lived capabilities and do not

@@ -4,21 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo 'Checking that MCP attachments remain explicit tool calls...'
-if rg -n 'AddResourceTemplate\(|EmbeddedResource' internal/agentbox/mcpserver --glob '!**/*_test.go'; then
-  echo 'Agentbox MCP must not globally register resource templates or eagerly embed attachment resources.' >&2
-  exit 1
-fi
-resource_registrations="$(rg -n 'AddResource\(' internal/agentbox/mcpserver --glob '!**/*_test.go' || true)"
-unexpected_resource_registrations="$(printf '%s\n' "$resource_registrations" | grep -v 'download_attachment_bridge.go' || true)"
-if [[ -n "$unexpected_resource_registrations" ]]; then
-  echo 'Unexpected MCP resource registration exists outside the ChatGPT download bridge UI.' >&2
-  printf '%s\n' "$unexpected_resource_registrations" >&2
-  exit 1
-fi
-
-echo 'Checking ChatGPT widget R2 CORS origin...'
-if ! grep -Fq 'https://agentbox-ashray-xyz.web-sandbox.oaiusercontent.com' deploy/cloudflare/agentbox-r2-cors.json; then
-  echo 'R2 CORS policy does not allow the measured ChatGPT widget sandbox origin.' >&2
+if rg -n 'AddResource\(|AddResourceTemplate\(|EmbeddedResource' internal/agentbox/mcpserver --glob '!**/*_test.go'; then
+  echo 'Agentbox MCP must not globally register or eagerly embed attachment resources.' >&2
   exit 1
 fi
 
@@ -34,7 +21,7 @@ go test ./internal/agentbox/service \
 
 echo 'Checking MCP descriptors and explicit read/download flow...'
 go test ./internal/agentbox/mcpserver \
-  -run '^(TestToolsExposeMetadataAndAnnotations|TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow|TestDownloadAttachmentBridgeWidgetContract)$' \
+  -run '^(TestToolsExposeMetadataAndAnnotations|TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow)$' \
   -count=1
 
 echo 'MCP attachment access readiness passed.'

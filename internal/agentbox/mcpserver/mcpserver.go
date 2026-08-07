@@ -52,7 +52,6 @@ func (s *Server) build() *mcp.Server {
 		Capabilities: &mcp.ServerCapabilities{},
 		GetSessionID: func() string { return "" },
 	})
-	registerDownloadAttachmentBridgeResource(server)
 	server.AddTool(&mcp.Tool{
 		Name:        "list_threads",
 		Title:       "List threads",
@@ -105,22 +104,17 @@ func (s *Server) build() *mcp.Server {
 		Annotations:  annotations(true, false, false),
 	}, s.readAttachment)
 	server.AddTool(&mcp.Tool{
-		Meta: mcp.Meta{
-			"ui":                             map[string]any{"resourceUri": downloadAttachmentBridgeURI},
-			"openai/outputTemplate":          downloadAttachmentBridgeURI,
-			"openai/toolInvocation/invoking": "Preparing attachment…",
-			"openai/toolInvocation/invoked":  "Attachment ready",
-		},
 		Name:        "download_attachment",
 		Title:       "Download attachment",
-		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct file link. File bytes transfer directly from R2 rather than through Agentbox. In ChatGPT, the companion UI saves the file to ChatGPT Library and posts a follow-up so the agent can locate and materialize it into the sandbox.",
+		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct R2 download. Use download_url immediately when the original file must be fetched into a local or sandbox filesystem; the URL expires after expires_in seconds. File bytes never proxy through Agentbox/Vercel.",
 		InputSchema: objectSchema(map[string]any{
 			"asset_id": map[string]any{"type": "string", "minLength": 1},
 		}, []string{"asset_id"}),
 		OutputSchema: objectSchema(map[string]any{
-			"asset":      attachmentSummarySchema(),
-			"expires_in": map[string]any{"type": "integer", "minimum": 60, "maximum": 3600},
-		}, []string{"asset", "expires_in"}),
+			"asset":        attachmentSummarySchema(),
+			"download_url": map[string]any{"type": "string", "format": "uri", "minLength": 1},
+			"expires_in":   map[string]any{"type": "integer", "minimum": 60, "maximum": 3600},
+		}, []string{"asset", "download_url", "expires_in"}),
 		Annotations: annotations(true, false, false),
 	}, s.downloadAttachment)
 	server.AddTool(&mcp.Tool{
@@ -309,8 +303,9 @@ func (s *Server) downloadAttachment(ctx context.Context, req *mcp.CallToolReques
 			Size:     &size,
 		}},
 		StructuredContent: map[string]any{
-			"asset":      download.Asset,
-			"expires_in": download.ExpiresIn,
+			"asset":        download.Asset,
+			"download_url": download.URL,
+			"expires_in":   download.ExpiresIn,
 		},
 	}, nil
 }
