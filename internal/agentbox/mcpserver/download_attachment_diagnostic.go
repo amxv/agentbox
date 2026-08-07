@@ -7,6 +7,7 @@ import (
 )
 
 const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v1.html"
+const downloadAttachmentDiagnosticDomain = "https://agentbox.ashray.xyz"
 
 // This widget is intentionally temporary. It inspects ChatGPT's host-normalized
 // MCP result for download_attachment so we can determine whether a standard MCP
@@ -26,7 +27,19 @@ func registerDownloadAttachmentDiagnosticResource(server *mcp.Server) {
 			Text:     downloadAttachmentDiagnosticHTML,
 			Meta: mcp.Meta{"ui": map[string]any{
 				"prefersBorder": true,
-			}},
+				"csp": map[string]any{
+					"connectDomains":  []string{},
+					"resourceDomains": []string{},
+				},
+				"domain": downloadAttachmentDiagnosticDomain,
+			},
+				"openai/widgetPrefersBorder": true,
+				"openai/widgetCSP": map[string]any{
+					"connect_domains":  []string{},
+					"resource_domains": []string{},
+				},
+				"openai/widgetDomain": downloadAttachmentDiagnosticDomain,
+			},
 		}}}, nil
 	})
 }
