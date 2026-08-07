@@ -170,15 +170,15 @@ func TestDownloadAttachmentMessageBridgeContract(t *testing.T) {
 	if !ok || resourceUI["domain"] != downloadAttachmentMessageBridgeDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentMessageBridgeDomain {
 		t.Fatalf("attachment message widget domain metadata = %#v", resourceMeta)
 	}
-html := read.Contents[0].Text
-for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url", "sendFollowUpMessage", "Please download this exact URL into the sandbox now"} {
-if !strings.Contains(html, required) {
-t.Fatalf("attachment message widget is missing %q", required)
-}
-}
-if strings.Index(html, "sendFollowUpMessage") > strings.Index(html, "if (messageCapabilities.text)") {
-t.Fatal("ChatGPT follow-up handoff must be preferred before the generic text ui/message fallback")
-}
+	html := read.Contents[0].Text
+	for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url", "sendFollowUpMessage", "Please download this exact URL into the sandbox now"} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("attachment message widget is missing %q", required)
+		}
+	}
+	if strings.Index(html, "sendFollowUpMessage") > strings.Index(html, "if (messageCapabilities.text)") {
+		t.Fatal("ChatGPT follow-up handoff must be preferred before the generic text ui/message fallback")
+	}
 	for _, forbidden := range []string{"uploadFile", "getFileDownloadUrl", "fetch(resourceLink.uri", "library: true"} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("attachment message widget retained old file-upload path %q", forbidden)
@@ -452,7 +452,7 @@ func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
 	if err != nil || download.IsError {
 		t.Fatalf("download_attachment result=%#v err=%v", download, err)
 	}
-	if len(download.Content) != 1 {
+	if len(download.Content) != 2 {
 		t.Fatalf("download content = %#v", download.Content)
 	}
 	link, ok := download.Content[0].(*mcp.ResourceLink)
@@ -461,6 +461,10 @@ func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
 	}
 	if link.Name != "handoff.md" || link.Title != "handoff.md" || link.Size == nil || *link.Size != int64(len(markdown)) || !strings.HasPrefix(link.URI, "https://r2.test/") {
 		t.Fatalf("resource link = %#v", link)
+	}
+	downloadText, ok := download.Content[1].(*mcp.TextContent)
+	if !ok || !strings.Contains(downloadText.Text, "Direct attachment download URL") || !strings.Contains(downloadText.Text, link.URI) || !strings.Contains(downloadText.Text, "300 seconds") {
+		t.Fatalf("download text content = %#v", download.Content[1])
 	}
 	downloadJSON, _ := json.Marshal(download.StructuredContent)
 	if !strings.Contains(string(downloadJSON), `"download_url":"https://r2.test/`) || strings.Contains(string(downloadJSON), "storage_key") || !strings.Contains(string(downloadJSON), `"expires_in":300`) {

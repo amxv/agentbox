@@ -302,13 +302,20 @@ func (s *Server) downloadAttachment(ctx context.Context, req *mcp.CallToolReques
 	size := download.Asset.SizeBytes
 	return &mcp.CallToolResult{
 		Meta: mcp.Meta{"agentbox/status": "Prepared Agentbox attachment download."},
-		Content: []mcp.Content{&mcp.ResourceLink{
-			URI:      download.URL,
-			Name:     download.Asset.FileName,
-			Title:    download.Asset.FileName,
-			MIMEType: download.Asset.MimeType,
-			Size:     &size,
-		}},
+		Content: []mcp.Content{
+			&mcp.ResourceLink{
+				URI:      download.URL,
+				Name:     download.Asset.FileName,
+				Title:    download.Asset.FileName,
+				MIMEType: download.Asset.MimeType,
+				Size:     &size,
+			},
+			&mcp.TextContent{Text: fmt.Sprintf(
+				"Direct attachment download URL (expires in %d seconds): %s",
+				download.ExpiresIn,
+				download.URL,
+			)},
+		},
 		StructuredContent: map[string]any{
 			"asset":        download.Asset,
 			"download_url": download.URL,
