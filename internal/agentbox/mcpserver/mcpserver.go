@@ -82,7 +82,7 @@ func (s *Server) build() *mcp.Server {
 	server.AddTool(&mcp.Tool{
 		Name:        "get_thread",
 		Title:       "Get thread",
-		Description: "Read an Agentbox thread and its messages.",
+		Description: "Read an Agentbox thread and its messages. Attachments are returned as metadata with asset IDs; use read_attachment for raw text/code contents or download_attachment for the original file.",
 		InputSchema: objectSchema(map[string]any{
 			"thread_id": map[string]any{"type": "string", "minLength": 1},
 		}, []string{"thread_id"}),
@@ -91,6 +91,31 @@ func (s *Server) build() *mcp.Server {
 		}, []string{"thread"}),
 		Annotations: annotations(true, false, false),
 	}, s.getThread)
+	server.AddTool(&mcp.Tool{
+		Name:        "read_attachment",
+		Title:       "Read attachment",
+		Description: "Read a bounded chunk of an Agentbox text, Markdown, source-code, script, log, or other UTF-8 attachment by asset ID. Use next_offset to continue large files. Binary files should be retrieved with download_attachment instead.",
+		InputSchema: objectSchema(map[string]any{
+			"asset_id":     map[string]any{"type": "string", "minLength": 1},
+			"offset_bytes": map[string]any{"type": "integer", "minimum": 0},
+			"max_bytes":    map[string]any{"type": "integer", "minimum": service.MinAttachmentReadBytes, "maximum": service.MaxAttachmentReadBytes},
+		}, []string{"asset_id"}),
+		OutputSchema: attachmentReadOutputSchema(),
+		Annotations:  annotations(true, false, false),
+	}, s.readAttachment)
+	server.AddTool(&mcp.Tool{
+		Name:        "download_attachment",
+		Title:       "Download attachment",
+		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct file link. File bytes transfer directly from R2 rather than through Agentbox.",
+		InputSchema: objectSchema(map[string]any{
+			"asset_id": map[string]any{"type": "string", "minLength": 1},
+		}, []string{"asset_id"}),
+		OutputSchema: objectSchema(map[string]any{
+			"asset":      attachmentSummarySchema(),
+			"expires_in": map[string]any{"type": "integer", "minimum": 60, "maximum": 3600},
+		}, []string{"asset", "expires_in"}),
+		Annotations: annotations(true, false, false),
+	}, s.downloadAttachment)
 	server.AddTool(&mcp.Tool{
 		Name:        "create_thread",
 		Title:       "Create thread",
@@ -219,6 +244,68 @@ func (s *Server) getThread(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		return errorResult(err), nil
 	}
 	return result("Fetched Agentbox thread.", map[string]any{"thread": thread}), nil
+}
+
+func (s *Server) readAttachment(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		AssetID     string `json:"asset_id"`
+		OffsetBytes *int64 `json:"offset_bytes"`
+		MaxBytes    *int64 `json:"max_bytes"`
+	}
+	if err := decodeArgs(req, &input); err != nil {
+		return errorResult(err), nil
+	}
+	offsetBytes := int64(0)
+	if input.OffsetBytes != nil {
+		offsetBytes = *input.OffsetBytes
+	}
+	maxBytes := int64(0)
+	if input.MaxBytes != nil {
+		maxBytes = *input.MaxBytes
+	}
+	read, err := s.svc.ReadAttachment(ctx, s.auth, input.AssetID, offsetBytes, maxBytes)
+	if err != nil {
+		return errorResult(err), nil
+	}
+	structured := map[string]any{
+		"asset":    read.Asset,
+		"encoding": read.Encoding,
+		"text":     read.Text,
+		"range":    read.Range,
+	}
+	return &mcp.CallToolResult{
+		Meta:              mcp.Meta{"agentbox/status": "Read Agentbox attachment."},
+		Content:           []mcp.Content{&mcp.TextContent{Text: read.Text}},
+		StructuredContent: structured,
+	}, nil
+}
+
+func (s *Server) downloadAttachment(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input struct {
+		AssetID string `json:"asset_id"`
+	}
+	if err := decodeArgs(req, &input); err != nil {
+		return errorResult(err), nil
+	}
+	download, err := s.svc.PrepareAttachmentDownload(ctx, s.auth, input.AssetID, 300)
+	if err != nil {
+		return errorResult(err), nil
+	}
+	size := download.Asset.SizeBytes
+	return &mcp.CallToolResult{
+		Meta: mcp.Meta{"agentbox/status": "Prepared Agentbox attachment download."},
+		Content: []mcp.Content{&mcp.ResourceLink{
+			URI:      download.URL,
+			Name:     download.Asset.FileName,
+			Title:    download.Asset.FileName,
+			MIMEType: download.Asset.MimeType,
+			Size:     &size,
+		}},
+		StructuredContent: map[string]any{
+			"asset":      download.Asset,
+			"expires_in": download.ExpiresIn,
+		},
+	}, nil
 }
 
 func (s *Server) createThread(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -412,6 +499,30 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 		schema["required"] = required
 	}
 	return schema
+}
+
+func attachmentSummarySchema() map[string]any {
+	return objectSchema(map[string]any{
+		"id":         map[string]any{"type": "string"},
+		"file_name":  map[string]any{"type": "string"},
+		"mime_type":  map[string]any{"type": "string"},
+		"size_bytes": map[string]any{"type": "integer", "minimum": 0},
+	}, []string{"id", "file_name", "mime_type", "size_bytes"})
+}
+
+func attachmentReadOutputSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"asset":    attachmentSummarySchema(),
+		"encoding": map[string]any{"type": "string", "enum": []string{"utf-8"}},
+		"text":     map[string]any{"type": "string"},
+		"range": objectSchema(map[string]any{
+			"start_byte":  map[string]any{"type": "integer", "minimum": 0},
+			"end_byte":    map[string]any{"type": "integer", "minimum": 0},
+			"total_bytes": map[string]any{"type": "integer", "minimum": 0},
+			"has_more":    map[string]any{"type": "boolean"},
+			"next_offset": map[string]any{"type": "integer", "minimum": 0},
+		}, []string{"start_byte", "end_byte", "total_bytes", "has_more"}),
+	}, []string{"asset", "encoding", "text", "range"})
 }
 
 func annotations(readOnly bool, destructive bool, openWorld bool) *mcp.ToolAnnotations {

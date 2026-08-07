@@ -54,6 +54,9 @@ jobs:
       - name: Verify ChatGPT file attachment contract
         run: bun run verify:chatgpt-files
 
+      - name: Verify MCP attachment access
+        run: bun run verify:mcp-attachments
+
       - name: Run final user/team cutover verification
         run: bun run verify:cutover
 

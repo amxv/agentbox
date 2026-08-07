@@ -48,7 +48,7 @@ func setThreadVisibilityForTest(ctx context.Context, repository interface {
 
 func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	byName := listToolsByName(t)
-	for _, name := range []string{"list_threads", "search_threads", "get_thread", "create_thread", "post_message", "manage_thread_visibility"} {
+	for _, name := range []string{"list_threads", "search_threads", "get_thread", "read_attachment", "download_attachment", "create_thread", "post_message", "manage_thread_visibility"} {
 		if byName[name] == nil {
 			t.Fatalf("missing tool %s in %#v", name, byName)
 		}
@@ -58,6 +58,15 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	}
 	if !byName["search_threads"].Annotations.ReadOnlyHint {
 		t.Fatalf("search_threads annotations = %#v", byName["search_threads"].Annotations)
+	}
+	for _, name := range []string{"get_thread", "read_attachment", "download_attachment"} {
+		tool := byName[name]
+		if !tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
+			t.Fatalf("%s annotations = %#v", name, tool.Annotations)
+		}
+	}
+	if description := byName["get_thread"].Description; !strings.Contains(description, "read_attachment") || !strings.Contains(description, "download_attachment") {
+		t.Fatalf("get_thread attachment guidance = %q", description)
 	}
 	post := byName["post_message"]
 	if post.Annotations.ReadOnlyHint || post.Annotations.OpenWorldHint == nil || !*post.Annotations.OpenWorldHint {
@@ -276,6 +285,103 @@ func TestPostMessageAcceptsStructuredChatGPTArtifact(t *testing.T) {
 	}
 	if len(store.Uploads) != 1 || store.Uploads[0].FileName != "handoff.md" || store.Uploads[0].SizeBytes != int64(len("fake-chatgpt-file")) {
 		t.Fatalf("uploads = %#v message assets = %#v", store.Uploads, payload.Message.Assets)
+	}
+}
+
+func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
+	ctx := context.Background()
+	repo := &db.MemoryRepository{}
+	store := &assets.FakeStore{}
+	svc := service.New(repo, store)
+	auth := testAuth()
+	thread, err := svc.CreateThread(ctx, auth, "Attachment MCP flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown := []byte("# MCP attachment\n\nRead me explicitly.\n")
+	message, err := svc.PostMessageWithAsset(ctx, auth, service.PostMessageWithAssetParams{
+		ThreadID: thread.ID,
+		Body:     "See attachment",
+		Bytes:    markdown,
+		FileName: "handoff.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetID := message.Assets[0].ID
+
+	server := New(auth, svc)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	if initialized := clientSession.InitializeResult(); initialized == nil || initialized.Capabilities == nil || initialized.Capabilities.Resources != nil {
+		t.Fatalf("attachment resources unexpectedly advertised: %#v", initialized)
+	}
+
+	gotThread, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "get_thread", Arguments: map[string]any{"thread_id": thread.ID}})
+	if err != nil || gotThread.IsError {
+		t.Fatalf("get_thread result=%#v err=%v", gotThread, err)
+	}
+	if len(store.ReadCalls) != 0 {
+		t.Fatalf("get_thread eagerly read attachment bytes: %#v", store.ReadCalls)
+	}
+	threadJSON, _ := json.Marshal(gotThread.StructuredContent)
+	if !strings.Contains(string(threadJSON), assetID) || strings.Contains(string(threadJSON), string(markdown)) {
+		t.Fatalf("get_thread did not remain metadata-only: %s", threadJSON)
+	}
+
+	read, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_attachment",
+		Arguments: map[string]any{"asset_id": assetID},
+	})
+	if err != nil || read.IsError {
+		t.Fatalf("read_attachment result=%#v err=%v", read, err)
+	}
+	if len(read.Content) != 1 {
+		t.Fatalf("read content = %#v", read.Content)
+	}
+	text, ok := read.Content[0].(*mcp.TextContent)
+	if !ok || text.Text != string(markdown) {
+		t.Fatalf("read text content = %#v", read.Content)
+	}
+	readJSON, _ := json.Marshal(read.StructuredContent)
+	if !strings.Contains(string(readJSON), `"file_name":"handoff.md"`) || !strings.Contains(string(readJSON), `"encoding":"utf-8"`) || !strings.Contains(string(readJSON), `"has_more":false`) {
+		t.Fatalf("read structured content = %s", readJSON)
+	}
+	if len(store.ReadCalls) == 0 {
+		t.Fatal("read_attachment did not fetch attachment bytes")
+	}
+
+	download, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "download_attachment",
+		Arguments: map[string]any{"asset_id": assetID},
+	})
+	if err != nil || download.IsError {
+		t.Fatalf("download_attachment result=%#v err=%v", download, err)
+	}
+	if len(download.Content) != 1 {
+		t.Fatalf("download content = %#v", download.Content)
+	}
+	link, ok := download.Content[0].(*mcp.ResourceLink)
+	if !ok {
+		t.Fatalf("download content type = %T", download.Content[0])
+	}
+	if link.Name != "handoff.md" || link.Title != "handoff.md" || link.Size == nil || *link.Size != int64(len(markdown)) || !strings.HasPrefix(link.URI, "https://r2.test/") {
+		t.Fatalf("resource link = %#v", link)
+	}
+	downloadJSON, _ := json.Marshal(download.StructuredContent)
+	if strings.Contains(string(downloadJSON), "r2.test") || strings.Contains(string(downloadJSON), "storage_key") || !strings.Contains(string(downloadJSON), `"expires_in":300`) {
+		t.Fatalf("download structured content leaked transport details: %s", downloadJSON)
 	}
 }
 

@@ -902,29 +902,34 @@ func (s *Service) signedAssetURL(ctx context.Context, auth types.AuthContext, as
 }
 
 func (s *Service) inspectAvailableAsset(ctx context.Context, asset types.Asset) error {
+	_, err := s.inspectAvailableAssetMetadata(ctx, asset)
+	return err
+}
+
+func (s *Service) inspectAvailableAssetMetadata(ctx context.Context, asset types.Asset) (backup.ObjectMetadata, error) {
 	metadata, err := s.assets.HeadAssetObject(ctx, asset.StorageKey)
 	if errors.Is(err, backup.ErrObjectNotFound) {
-		return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object is missing.", Err: err}
+		return backup.ObjectMetadata{}, CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object is missing.", Err: err}
 	}
 	if err != nil {
-		return fmt.Errorf("inspect attachment object: %w", err)
+		return backup.ObjectMetadata{}, fmt.Errorf("inspect attachment object: %w", err)
 	}
 	if metadata.SizeBytes != asset.SizeBytes {
-		return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object does not match the recorded metadata."}
+		return backup.ObjectMetadata{}, CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object does not match the recorded metadata."}
 	}
 	if expectedSHA256 := assets.SHA256FromFinalStorageKey(asset.StorageKey); expectedSHA256 != "" {
 		actualSHA256 := strings.ToLower(strings.TrimSpace(metadata.Metadata["agentbox-sha256"]))
 		if actualSHA256 != expectedSHA256 {
-			return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object failed SHA-256 identity verification."}
+			return backup.ObjectMetadata{}, CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object failed SHA-256 identity verification."}
 		}
 		if metadata.ChecksumSHA256 != "" {
 			expectedBytes, _ := hex.DecodeString(expectedSHA256)
 			if strings.TrimSpace(metadata.ChecksumSHA256) != base64.StdEncoding.EncodeToString(expectedBytes) {
-				return CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its storage checksum failed identity verification."}
+				return backup.ObjectMetadata{}, CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its storage checksum failed identity verification."}
 			}
 		}
 	}
-	return nil
+	return metadata, nil
 }
 
 func (s *Service) createSignedAssetURL(ctx context.Context, asset types.Asset, expiresInSeconds int, inline bool) (string, error) {

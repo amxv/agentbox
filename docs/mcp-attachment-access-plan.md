@@ -1,6 +1,6 @@
 # MCP Attachment Read and Download Plan
 
-Status: proposed implementation plan
+Status: implemented on `main`; live ChatGPT connector smoke pending deployment/rediscovery
 Date: 2026-08-07
 Target: AgentBox Go MCP server and attachment storage path
 

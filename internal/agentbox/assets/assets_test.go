@@ -3,6 +3,9 @@ package assets
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -86,6 +89,55 @@ func TestFakeStoreUploadAndSignedURL(t *testing.T) {
 	}
 	if !strings.Contains(url, "X-Amz-Expires=60") {
 		t.Fatalf("signed URL = %q", url)
+	}
+
+	read, err := store.ReadAssetObjectRange(context.Background(), ReadAssetRangeParams{
+		StorageKey:   asset.StorageKey,
+		OffsetBytes:  1,
+		MaxBytes:     3,
+		ExpectedETag: asset.ContentSHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(read) != "ell" {
+		t.Fatalf("range read = %q", read)
+	}
+	if len(store.ReadCalls) != 1 || store.ReadCalls[0].OffsetBytes != 1 || store.ReadCalls[0].MaxBytes != 3 {
+		t.Fatalf("range calls = %#v", store.ReadCalls)
+	}
+}
+
+func TestR2RangeReadUsesDirectBoundedGetAndIfMatch(t *testing.T) {
+	var gotRange string
+	var gotIfMatch string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		gotRange = request.Header.Get("Range")
+		gotIfMatch = request.Header.Get("If-Match")
+		if request.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", request.Method)
+		}
+		w.Header().Set("Content-Range", "bytes 6-10/12")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "world")
+	}))
+	defer server.Close()
+
+	store := &R2Store{
+		cfg:    config.Config{R2Bucket: "agentbox-assets"},
+		client: testS3Client(server),
+	}
+	contents, err := store.ReadAssetObjectRange(t.Context(), ReadAssetRangeParams{
+		StorageKey:   "agentbox/final/test.txt",
+		OffsetBytes:  6,
+		MaxBytes:     5,
+		ExpectedETag: `"etag-original"`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "world" || gotRange != "bytes=6-10" || gotIfMatch != `"etag-original"` {
+		t.Fatalf("contents=%q range=%q if-match=%q", contents, gotRange, gotIfMatch)
 	}
 }
 

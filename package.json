@@ -24,6 +24,7 @@
     "db:migrate": "go run ./cmd/migrate",
     "backup:preflight": "go run ./cmd/preflight",
     "verify:chatgpt-files": "bash scripts/verify-chatgpt-file-attachments.sh",
+    "verify:mcp-attachments": "bash scripts/verify-mcp-attachment-access.sh",
     "verify:cutover": "bash scripts/verify-user-team-cutover.sh",
     "test:parity": "bun test scripts/visibility-proxy.test.mjs && bun test scripts/attachment-proxy.test.mjs",
     "build:all": "bun run build && bun run build:cli",

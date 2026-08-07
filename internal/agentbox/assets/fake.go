@@ -23,14 +23,20 @@ type FakeStore struct {
 	ChatGPTInputs    []ChatGPTFileInput
 	ChatGPTFailure   error
 	Buckets          map[string]map[string]backup.ObjectMetadata
+	ObjectBytes      map[string]map[string][]byte
 	CopyCalls        []backup.CopyObjectRequest
 	DeleteCalls      []string
+	ReadCalls        []ReadAssetRangeParams
+	SignedURLCalls   []SignedURLParams
 	HeadFailures     map[string]error
 	ListFailures     map[string]error
 	CopyFailures     map[string]error
 	DeleteFailures   map[string]error
+	ReadFailures     map[string]error
 	AfterUpload      func(types.NewAsset)
 	BeforeDelete     func(string)
+	BeforeRead       func(ReadAssetRangeParams)
+	AfterRead        func(ReadAssetRangeParams, []byte)
 	mutex            sync.Mutex
 }
 
@@ -56,8 +62,10 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 		bucket = "assets"
 	}
 	f.ensureBucket(bucket)
+	f.ensureByteBucket(bucket)
 	now := time.Now().UTC()
 	f.Buckets[bucket][storageKey] = backup.ObjectMetadata{Bucket: bucket, Key: storageKey, SizeBytes: asset.SizeBytes, ETag: digestHex, ContentType: asset.MimeType, Metadata: map[string]string{"agentbox-sha256": digestHex}, LastModified: &now}
+	f.ObjectBytes[bucket][storageKey] = append([]byte(nil), params.Bytes...)
 	hook := f.AfterUpload
 	f.mutex.Unlock()
 	if hook != nil {
@@ -108,6 +116,30 @@ func (f *FakeStore) PutAssetObjectWithSHA(key string, sizeBytes int64, contentTy
 	}
 }
 
+func (f *FakeStore) PutAssetBytes(key string, contents []byte, contentType *string) {
+	digest := sha256.Sum256(contents)
+	digestHex := hex.EncodeToString(digest[:])
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	bucket := f.AssetBucket
+	if bucket == "" {
+		bucket = "assets"
+	}
+	f.ensureBucket(bucket)
+	f.ensureByteBucket(bucket)
+	now := time.Now().UTC()
+	f.Buckets[bucket][key] = backup.ObjectMetadata{
+		Bucket:       bucket,
+		Key:          key,
+		SizeBytes:    int64(len(contents)),
+		ETag:         digestHex,
+		ContentType:  contentType,
+		Metadata:     map[string]string{"agentbox-sha256": digestHex},
+		LastModified: &now,
+	}
+	f.ObjectBytes[bucket][key] = append([]byte(nil), contents...)
+}
+
 func (f *FakeStore) HeadObject(_ context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
@@ -154,12 +186,16 @@ func (f *FakeStore) CopyObject(_ context.Context, request backup.CopyObjectReque
 		return backup.ObjectMetadata{}, errors.New("source ETag changed before copy")
 	}
 	f.ensureBucket(request.DestinationBucket)
+	f.ensureByteBucket(request.DestinationBucket)
 	now := time.Now().UTC()
 	copied := source
 	copied.Bucket = request.DestinationBucket
 	copied.Key = request.DestinationKey
 	copied.LastModified = &now
 	f.Buckets[request.DestinationBucket][request.DestinationKey] = copied
+	if sourceBytes, ok := f.ObjectBytes[request.SourceBucket][request.SourceKey]; ok {
+		f.ObjectBytes[request.DestinationBucket][request.DestinationKey] = append([]byte(nil), sourceBytes...)
+	}
 	f.CopyCalls = append(f.CopyCalls, request)
 	return copied, nil
 }
@@ -200,6 +236,9 @@ func (f *FakeStore) CreatePresignedAssetUploadURL(_ context.Context, params Pres
 }
 
 func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params SignedURLParams) (string, error) {
+	f.mutex.Lock()
+	f.SignedURLCalls = append(f.SignedURLCalls, params)
+	f.mutex.Unlock()
 	u := url.URL{Scheme: "https", Host: "r2.test", Path: "/" + params.StorageKey}
 	q := u.Query()
 	expires := params.ExpiresInSeconds
@@ -225,6 +264,60 @@ func (f *FakeStore) HeadAssetObject(ctx context.Context, storageKey string) (bac
 		bucket = "assets"
 	}
 	return f.HeadObject(ctx, bucket, storageKey)
+}
+
+func (f *FakeStore) ReadAssetObjectRange(_ context.Context, params ReadAssetRangeParams) ([]byte, error) {
+	storageKey := strings.TrimSpace(params.StorageKey)
+	if storageKey == "" {
+		return nil, errors.New("asset storage key is required")
+	}
+	if params.OffsetBytes < 0 {
+		return nil, errors.New("asset read offset must be >= 0")
+	}
+	if params.MaxBytes <= 0 {
+		return nil, errors.New("asset read size must be > 0")
+	}
+
+	f.mutex.Lock()
+	bucket := f.AssetBucket
+	if bucket == "" {
+		bucket = "assets"
+	}
+	f.ReadCalls = append(f.ReadCalls, params)
+	failure := f.ReadFailures[storageKey]
+	metadata, exists := f.Buckets[bucket][storageKey]
+	contents, hasBytes := f.ObjectBytes[bucket][storageKey]
+	beforeRead := f.BeforeRead
+	afterRead := f.AfterRead
+	f.mutex.Unlock()
+
+	if beforeRead != nil {
+		beforeRead(params)
+	}
+	if failure != nil {
+		return nil, failure
+	}
+	if !exists {
+		return nil, fmtObjectNotFound(bucket, storageKey)
+	}
+	if expectedETag := normalizeETag(params.ExpectedETag); expectedETag != "" && expectedETag != normalizeETag(metadata.ETag) {
+		return nil, errors.Join(ErrObjectChanged, errors.New("asset object ETag changed before read"))
+	}
+	if !hasBytes {
+		return nil, errors.New("fake asset object has metadata but no readable bytes")
+	}
+	if params.OffsetBytes > int64(len(contents)) {
+		return nil, errors.Join(ErrObjectChanged, errors.New("asset read range is no longer satisfiable"))
+	}
+	end := params.OffsetBytes + params.MaxBytes
+	if end < params.OffsetBytes || end > int64(len(contents)) {
+		end = int64(len(contents))
+	}
+	result := append([]byte(nil), contents[params.OffsetBytes:end]...)
+	if afterRead != nil {
+		afterRead(params, append([]byte(nil), result...))
+	}
+	return result, nil
 }
 
 func (f *FakeStore) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
@@ -262,6 +355,9 @@ func (f *FakeStore) DeleteAssetObject(_ context.Context, storageKey string) erro
 	for bucket, objects := range f.Buckets {
 		delete(objects, storageKey)
 		f.Buckets[bucket] = objects
+		if f.ObjectBytes != nil && f.ObjectBytes[bucket] != nil {
+			delete(f.ObjectBytes[bucket], storageKey)
+		}
 	}
 	return nil
 }
@@ -310,6 +406,15 @@ func (f *FakeStore) ensureBucket(bucket string) {
 	}
 	if f.Buckets[bucket] == nil {
 		f.Buckets[bucket] = make(map[string]backup.ObjectMetadata)
+	}
+}
+
+func (f *FakeStore) ensureByteBucket(bucket string) {
+	if f.ObjectBytes == nil {
+		f.ObjectBytes = make(map[string]map[string][]byte)
+	}
+	if f.ObjectBytes[bucket] == nil {
+		f.ObjectBytes[bucket] = make(map[string][]byte)
 	}
 }
 

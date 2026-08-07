@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/url"
 	"path"
@@ -45,6 +46,13 @@ type SignedURLParams struct {
 	Inline           bool
 }
 
+type ReadAssetRangeParams struct {
+	StorageKey   string
+	OffsetBytes  int64
+	MaxBytes     int64
+	ExpectedETag string
+}
+
 type PresignedUploadParams struct {
 	UserID           string
 	ThreadID         string
@@ -62,10 +70,13 @@ type AssetStore interface {
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
 	HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error)
+	ReadAssetObjectRange(ctx context.Context, params ReadAssetRangeParams) ([]byte, error)
 	CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error)
 	DeleteAssetObject(ctx context.Context, storageKey string) error
 	UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
+
+var ErrObjectChanged = errors.New("asset object changed")
 
 func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
 	if strings.TrimSpace(bucket) == "" {
@@ -331,6 +342,53 @@ func (s *R2Store) HeadAssetObject(ctx context.Context, storageKey string) (backu
 	return s.HeadObject(ctx, s.cfg.R2Bucket, strings.TrimSpace(storageKey))
 }
 
+func (s *R2Store) ReadAssetObjectRange(ctx context.Context, params ReadAssetRangeParams) ([]byte, error) {
+	if strings.TrimSpace(s.cfg.R2Bucket) == "" {
+		return nil, errors.New("R2_BUCKET is required for asset reads.")
+	}
+	storageKey := strings.TrimSpace(params.StorageKey)
+	if storageKey == "" {
+		return nil, errors.New("asset storage key is required")
+	}
+	if params.OffsetBytes < 0 {
+		return nil, errors.New("asset read offset must be >= 0")
+	}
+	if params.MaxBytes <= 0 {
+		return nil, errors.New("asset read size must be > 0")
+	}
+	end := params.OffsetBytes + params.MaxBytes - 1
+	if end < params.OffsetBytes {
+		return nil, errors.New("asset read range overflow")
+	}
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(s.cfg.R2Bucket),
+		Key:    aws.String(storageKey),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-%d", params.OffsetBytes, end)),
+	}
+	if expectedETag := normalizeETag(params.ExpectedETag); expectedETag != "" {
+		input.IfMatch = aws.String(`"` + expectedETag + `"`)
+	}
+	output, err := s.client.GetObject(ctx, input)
+	if err != nil {
+		if isObjectNotFound(err) {
+			return nil, fmt.Errorf("%w: r2://%s/%s", backup.ErrObjectNotFound, s.cfg.R2Bucket, storageKey)
+		}
+		if isObjectChanged(err) {
+			return nil, fmt.Errorf("%w: r2://%s/%s", ErrObjectChanged, s.cfg.R2Bucket, storageKey)
+		}
+		return nil, err
+	}
+	defer output.Body.Close()
+	contents, err := io.ReadAll(io.LimitReader(output.Body, params.MaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(contents)) > params.MaxBytes {
+		return nil, errors.New("asset range response exceeded requested size")
+	}
+	return contents, nil
+}
+
 func (s *R2Store) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
 	if strings.TrimSpace(s.cfg.R2Bucket) == "" {
 		return backup.ObjectMetadata{}, errors.New("R2_BUCKET is required for asset copies.")
@@ -523,6 +581,19 @@ func isObjectNotFound(err error) bool {
 	}
 	switch apiError.ErrorCode() {
 	case "NoSuchKey", "NotFound", "404":
+		return true
+	default:
+		return false
+	}
+}
+
+func isObjectChanged(err error) bool {
+	var apiError smithy.APIError
+	if !errors.As(err, &apiError) {
+		return false
+	}
+	switch apiError.ErrorCode() {
+	case "PreconditionFailed", "412", "InvalidRange", "RequestedRangeNotSatisfiable", "416":
 		return true
 	default:
 		return false

@@ -56,6 +56,9 @@ NODE
 echo 'Checking ChatGPT file-attachment readiness...'
 bash scripts/verify-chatgpt-file-attachments.sh
 
+echo 'Checking MCP attachment read/download readiness...'
+bash scripts/verify-mcp-attachment-access.sh
+
 echo 'Running Go tests and static analysis...'
 if [[ -z "${TEST_DATABASE_URL:-}" ]]; then
   echo 'TEST_DATABASE_URL is required for the user/team cutover verification.' >&2
