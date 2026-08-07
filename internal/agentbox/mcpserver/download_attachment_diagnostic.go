@@ -6,7 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v2.html"
+const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v3.html"
 const downloadAttachmentDiagnosticDomain = "https://agentbox.ashray.xyz"
 const downloadAttachmentR2CSPDomain = "https://*.r2.cloudflarestorage.com"
 
@@ -147,6 +147,10 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
           : null;
         const uploadProbe = {
           resourceLinkFound: Boolean(resourceLink),
+          widgetOrigin: window.location.origin,
+          resourceIsR2: false,
+          corsFetch: "not_attempted",
+          noCorsFetch: "not_attempted",
           fetch: "not_attempted",
           fetchedBytes: 0,
           uploadFile: "not_attempted",
@@ -156,8 +160,26 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
 
         if (resourceLink && typeof openai?.uploadFile === "function") {
           try {
+            const target = new URL(resourceLink.uri);
+            uploadProbe.resourceIsR2 = target.hostname.endsWith(".r2.cloudflarestorage.com");
+          } catch (_) {}
+
+          try {
+            const response = await fetch(resourceLink.uri, {
+              cache: "no-store",
+              credentials: "omit",
+              mode: "no-cors",
+            });
+            uploadProbe.noCorsFetch = "success:" + response.type;
+          } catch (error) {
+            uploadProbe.noCorsFetch = "error";
+            uploadProbe.noCorsError = String(error?.message ?? error).slice(0, 240);
+          }
+
+          try {
             const response = await fetch(resourceLink.uri, { cache: "no-store", credentials: "omit" });
             if (!response.ok) throw new Error("R2 fetch returned HTTP " + response.status);
+            uploadProbe.corsFetch = "success";
             const blob = await response.blob();
             uploadProbe.fetch = "success";
             uploadProbe.fetchedBytes = blob.size;
@@ -175,6 +197,7 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
               uploadProbe.uploadedFileDownloadUrl = "unavailable";
             }
           } catch (error) {
+            if (uploadProbe.corsFetch === "not_attempted") uploadProbe.corsFetch = "error";
             if (uploadProbe.fetch === "not_attempted") uploadProbe.fetch = "error";
             if (uploadProbe.fetch === "success" && uploadProbe.uploadFile === "not_attempted") uploadProbe.uploadFile = "error";
             uploadProbe.error = String(error?.message ?? error).slice(0, 300);
@@ -184,7 +207,7 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
         }
 
         const summary = {
-          diagnostic: "agentbox-download-attachment-v2",
+          diagnostic: "agentbox-download-attachment-v3",
           hasWindowOpenAI: Boolean(openai),
           hasToolResponseMetadata: Boolean(metadata),
           metadataTopLevelKeys: metadata && typeof metadata === "object" ? Object.keys(metadata) : [],
