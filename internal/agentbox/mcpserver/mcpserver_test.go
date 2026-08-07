@@ -170,16 +170,24 @@ func TestDownloadAttachmentMessageBridgeContract(t *testing.T) {
 	if !ok || resourceUI["domain"] != downloadAttachmentMessageBridgeDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentMessageBridgeDomain {
 		t.Fatalf("attachment message widget domain metadata = %#v", resourceMeta)
 	}
+	standardCSP, ok := resourceUI["csp"].(map[string]any)
+	if !ok {
+		t.Fatalf("attachment message standard CSP metadata = %#v", resourceUI["csp"])
+	}
+	connectDomains, ok := standardCSP["connectDomains"].([]any)
+	if !ok || len(connectDomains) != 1 || connectDomains[0] != downloadAttachmentR2CSPDomain {
+		t.Fatalf("attachment message standard CSP connectDomains = %#v", standardCSP["connectDomains"])
+	}
 	html := read.Contents[0].Text
-	for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url", "sendFollowUpMessage", "Please download this exact URL into the sandbox now"} {
+	for _, required := range []string{"toolOutput", "uploadFile", "getFileDownloadUrl", "fetch(downloadUrl", "library: false", "sendFollowUpMessage", "ChatGPT-native temporary file download", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url"} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("attachment message widget is missing %q", required)
 		}
 	}
-	if strings.Index(html, "sendFollowUpMessage") > strings.Index(html, "if (messageCapabilities.text)") {
-		t.Fatal("ChatGPT follow-up handoff must be preferred before the generic text ui/message fallback")
+	if strings.Index(html, "nativeFileHandoffAvailable") > strings.Index(html, "const initialized = await initializeBridge()") {
+		t.Fatal("ChatGPT native file handoff must be preferred before generic MCP Apps initialization")
 	}
-	for _, forbidden := range []string{"uploadFile", "getFileDownloadUrl", "fetch(resourceLink.uri", "library: true"} {
+	for _, forbidden := range []string{"library: true", "fetch(resourceLink.uri"} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("attachment message widget retained old file-upload path %q", forbidden)
 		}

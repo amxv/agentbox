@@ -16,6 +16,12 @@ if [[ -n "$unexpected_resource_registrations" ]]; then
   exit 1
 fi
 
+echo 'Checking ChatGPT widget R2 CORS origin...'
+if ! grep -Fq 'https://agentbox-ashray-xyz.web-sandbox.oaiusercontent.com' deploy/cloudflare/agentbox-r2-cors.json; then
+  echo 'R2 CORS policy does not allow the measured ChatGPT widget sandbox origin.' >&2
+  exit 1
+fi
+
 echo 'Checking bounded direct-R2 attachment reads...'
 go test ./internal/agentbox/assets \
   -run '^(TestFakeStoreUploadAndSignedURL|TestR2RangeReadUsesDirectBoundedGetAndIfMatch)$' \
