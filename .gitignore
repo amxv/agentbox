@@ -8,6 +8,7 @@ npm/agentbox/bin/agentbox.exe
 .env
 .env.*
 .vercel
+.wrangler/
 *.tsbuildinfo
 .DS_Store
 tmp/
