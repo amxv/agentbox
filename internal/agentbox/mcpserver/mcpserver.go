@@ -52,6 +52,7 @@ func (s *Server) build() *mcp.Server {
 		Capabilities: &mcp.ServerCapabilities{},
 		GetSessionID: func() string { return "" },
 	})
+	registerDownloadAttachmentDiagnosticResource(server)
 	server.AddTool(&mcp.Tool{
 		Name:        "list_threads",
 		Title:       "List threads",
@@ -104,6 +105,12 @@ func (s *Server) build() *mcp.Server {
 		Annotations:  annotations(true, false, false),
 	}, s.readAttachment)
 	server.AddTool(&mcp.Tool{
+		Meta: mcp.Meta{
+			"ui":                             map[string]any{"resourceUri": downloadAttachmentDiagnosticURI},
+			"openai/outputTemplate":          downloadAttachmentDiagnosticURI,
+			"openai/toolInvocation/invoking": "Preparing attachment…",
+			"openai/toolInvocation/invoked":  "Attachment ready",
+		},
 		Name:        "download_attachment",
 		Title:       "Download attachment",
 		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct file link. File bytes transfer directly from R2 rather than through Agentbox.",

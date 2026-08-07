@@ -1,0 +1,169 @@
+package mcpserver
+
+import (
+	"context"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v1.html"
+
+// This widget is intentionally temporary. It inspects ChatGPT's host-normalized
+// MCP result for download_attachment so we can determine whether a standard MCP
+// ResourceLink receives a native ChatGPT fileId. It never sends signed R2 URLs
+// or attachment bytes back to the model.
+func registerDownloadAttachmentDiagnosticResource(server *mcp.Server) {
+	server.AddResource(&mcp.Resource{
+		URI:         downloadAttachmentDiagnosticURI,
+		Name:        "agentbox-download-attachment-diagnostic",
+		Title:       "AgentBox attachment diagnostic",
+		Description: "Temporary diagnostic for ChatGPT tool-returned file references.",
+		MIMEType:    "text/html;profile=mcp-app",
+	}, func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
+			URI:      downloadAttachmentDiagnosticURI,
+			MIMEType: "text/html;profile=mcp-app",
+			Text:     downloadAttachmentDiagnosticHTML,
+			Meta: mcp.Meta{"ui": map[string]any{
+				"prefersBorder": true,
+			}},
+		}}}, nil
+	})
+}
+
+const downloadAttachmentDiagnosticHTML = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AgentBox attachment diagnostic</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    body { margin: 0; padding: 12px; }
+    .title { font-family: system-ui, sans-serif; font-weight: 650; margin-bottom: 8px; }
+    .status { font-family: system-ui, sans-serif; font-size: 13px; opacity: .75; margin-bottom: 8px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.4; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="title">AgentBox download diagnostic</div>
+  <div class="status" id="status">Inspecting ChatGPT file reference…</div>
+  <pre id="out"></pre>
+  <script>
+    (() => {
+      const statusEl = document.getElementById("status");
+      const outEl = document.getElementById("out");
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      function collectShape(value, path = "$", output = [], depth = 0) {
+        if (output.length >= 120 || depth > 8) return output;
+        if (Array.isArray(value)) {
+          output.push(path + ":array[" + value.length + "]");
+          for (let i = 0; i < Math.min(value.length, 8); i++) collectShape(value[i], path + "[" + i + "]", output, depth + 1);
+          return output;
+        }
+        if (value && typeof value === "object") {
+          const keys = Object.keys(value);
+          output.push(path + ":object{" + keys.join(",") + "}");
+          for (const key of keys.slice(0, 20)) collectShape(value[key], path + "." + key, output, depth + 1);
+          return output;
+        }
+        output.push(path + ":" + (value === null ? "null" : typeof value));
+        return output;
+      }
+
+      function collectFileIds(value, path = "$", found = [], seen = new Set(), depth = 0) {
+        if (depth > 10 || found.length >= 20) return found;
+        if (Array.isArray(value)) {
+          value.forEach((item, index) => collectFileIds(item, path + "[" + index + "]", found, seen, depth + 1));
+          return found;
+        }
+        if (!value || typeof value !== "object") return found;
+        for (const [key, item] of Object.entries(value)) {
+          const itemPath = path + "." + key;
+          if (typeof item === "string") {
+            const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+            const looksLikeFileId = /^file_[A-Za-z0-9_-]+$/.test(item) || normalized === "fileid";
+            if (looksLikeFileId && !seen.has(item)) {
+              seen.add(item);
+              found.push({ path: itemPath, fileId: item });
+            }
+          } else {
+            collectFileIds(item, itemPath, found, seen, depth + 1);
+          }
+        }
+        return found;
+      }
+
+      async function run() {
+        const openai = window.openai;
+        let metadata = openai?.toolResponseMetadata;
+        for (let attempt = 0; attempt < 30 && !metadata; attempt++) {
+          await sleep(100);
+          metadata = openai?.toolResponseMetadata;
+        }
+
+        const candidates = collectFileIds(metadata);
+        const checks = [];
+        for (const candidate of candidates.slice(0, 8)) {
+          if (!openai?.getFileDownloadUrl) {
+            checks.push({ fileId: candidate.fileId, path: candidate.path, getFileDownloadUrl: "unavailable" });
+            continue;
+          }
+          try {
+            const resolved = await openai.getFileDownloadUrl({ fileId: candidate.fileId });
+            checks.push({
+              fileId: candidate.fileId,
+              path: candidate.path,
+              getFileDownloadUrl: resolved?.downloadUrl ? "success" : "returned_without_download_url",
+            });
+          } catch (error) {
+            checks.push({
+              fileId: candidate.fileId,
+              path: candidate.path,
+              getFileDownloadUrl: "error",
+              error: String(error?.message ?? error).slice(0, 240),
+            });
+          }
+        }
+
+        const summary = {
+          diagnostic: "agentbox-download-attachment-v1",
+          hasWindowOpenAI: Boolean(openai),
+          hasToolResponseMetadata: Boolean(metadata),
+          metadataTopLevelKeys: metadata && typeof metadata === "object" ? Object.keys(metadata) : [],
+          hasCallToolResult: Boolean(metadata?.call_tool_result),
+          hasMcpToolResult: Boolean(metadata?.mcp_tool_result),
+          getFileDownloadUrlAvailable: typeof openai?.getFileDownloadUrl === "function",
+          uploadFileAvailable: typeof openai?.uploadFile === "function",
+          fileIdCandidates: candidates,
+          downloadUrlChecks: checks,
+          metadataShape: collectShape(metadata),
+        };
+
+        statusEl.textContent = candidates.length ? "Diagnostic complete — native file candidate found." : "Diagnostic complete — no native fileId found.";
+        outEl.textContent = JSON.stringify(summary, null, 2);
+
+        // Send only the sanitized structural diagnostic to the conversation.
+        // No signed R2 URI or file bytes are included.
+        if (openai?.sendFollowUpMessage && !window.__agentboxDownloadDiagnosticSent) {
+          window.__agentboxDownloadDiagnosticSent = true;
+          try {
+            await openai.sendFollowUpMessage({
+              prompt: "AgentBox download diagnostic result (sanitized; no signed URLs or file bytes):\n" + JSON.stringify(summary, null, 2),
+              scrollToBottom: false,
+            });
+          } catch (error) {
+            statusEl.textContent += " Could not post the diagnostic follow-up: " + String(error?.message ?? error).slice(0, 160);
+          }
+        }
+      }
+
+      run().catch((error) => {
+        statusEl.textContent = "Diagnostic failed.";
+        outEl.textContent = String(error?.stack ?? error);
+      });
+    })();
+  </script>
+</body>
+</html>`
