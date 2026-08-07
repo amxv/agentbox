@@ -6,7 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v1.html"
+const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v2.html"
 const downloadAttachmentDiagnosticDomain = "https://agentbox.ashray.xyz"
 const downloadAttachmentR2CSPDomain = "https://*.r2.cloudflarestorage.com"
 
