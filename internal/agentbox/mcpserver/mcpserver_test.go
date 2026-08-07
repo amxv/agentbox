@@ -110,6 +110,79 @@ func TestPostMessageFileDescriptorMatchesOpenAIContract(t *testing.T) {
 	assertPostMessageFileDescriptor(t, post)
 }
 
+func TestDownloadAttachmentMessageBridgeContract(t *testing.T) {
+	ctx := t.Context()
+	repo := &db.MemoryRepository{}
+	svc := service.New(repo, &assets.FakeStore{})
+	server := New(testAuth(), svc)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0.0.0"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	clientSession, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+
+	tools, err := clientSession.ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var download *mcp.Tool
+	for _, tool := range tools.Tools {
+		if tool.Name == "download_attachment" {
+			download = tool
+			break
+		}
+	}
+	if download == nil {
+		t.Fatal("download_attachment tool is missing")
+	}
+	meta := download.Meta.GetMeta()
+	if got := meta["openai/outputTemplate"]; got != downloadAttachmentMessageBridgeURI {
+		t.Fatalf("download_attachment output template = %#v", got)
+	}
+	ui, ok := meta["ui"].(map[string]any)
+	if !ok || ui["resourceUri"] != downloadAttachmentMessageBridgeURI {
+		t.Fatalf("download_attachment ui meta = %#v", meta["ui"])
+	}
+
+	resources, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentMessageBridgeURI || resources.Resources[0].MIMEType != "text/html;profile=mcp-app" {
+		t.Fatalf("attachment message resources = %#v", resources.Resources)
+	}
+	read, err := clientSession.ReadResource(ctx, &mcp.ReadResourceParams{URI: downloadAttachmentMessageBridgeURI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read.Contents) != 1 || read.Contents[0].MIMEType != "text/html;profile=mcp-app" {
+		t.Fatalf("attachment message resource contents = %#v", read.Contents)
+	}
+	resourceMeta := read.Contents[0].Meta.GetMeta()
+	resourceUI, ok := resourceMeta["ui"].(map[string]any)
+	if !ok || resourceUI["domain"] != downloadAttachmentMessageBridgeDomain || resourceMeta["openai/widgetDomain"] != downloadAttachmentMessageBridgeDomain {
+		t.Fatalf("attachment message widget domain metadata = %#v", resourceMeta)
+	}
+	html := read.Contents[0].Text
+	for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "download_url"} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("attachment message widget is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"uploadFile", "getFileDownloadUrl", "fetch(resourceLink.uri", "library: true"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("attachment message widget retained old file-upload path %q", forbidden)
+		}
+	}
+}
+
 func listToolsByName(t *testing.T) map[string]*mcp.Tool {
 	t.Helper()
 	ctx := t.Context()
@@ -324,8 +397,15 @@ func TestAttachmentToolsUseExplicitReadThenDirectDownloadFlow(t *testing.T) {
 	}
 	defer clientSession.Close()
 
-	if initialized := clientSession.InitializeResult(); initialized == nil || initialized.Capabilities == nil || initialized.Capabilities.Resources != nil {
-		t.Fatalf("attachment resources unexpectedly advertised: %#v", initialized)
+	if initialized := clientSession.InitializeResult(); initialized == nil || initialized.Capabilities == nil || initialized.Capabilities.Resources == nil {
+		t.Fatalf("attachment message UI resource capability missing: %#v", initialized)
+	}
+	resources, err := clientSession.ListResources(ctx, &mcp.ListResourcesParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Resources) != 1 || resources.Resources[0].URI != downloadAttachmentMessageBridgeURI || strings.Contains(resources.Resources[0].URI, assetID) {
+		t.Fatalf("attachment inventory leaked into MCP resources: %#v", resources.Resources)
 	}
 
 	gotThread, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "get_thread", Arguments: map[string]any{"thread_id": thread.ID}})

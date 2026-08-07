@@ -1,6 +1,6 @@
 # MCP Attachment Read and Download Plan
 
-Status: implemented on `main`; live ChatGPT text reads and direct-R2 sandbox handoff verified during compatibility work
+Status: implemented on `main`; live ChatGPT text reads verified; ResourceLink conversation handoff under compatibility validation
 Date: 2026-08-07
 Target: AgentBox Go MCP server and attachment storage path
 
@@ -254,8 +254,13 @@ widget-state field analogous to `imageIds` for arbitrary files.
 
 The production contract therefore keeps the standard `ResourceLink` and also
 returns its short-lived signed R2 URL as model-visible `download_url` in the
-explicit `download_attachment` result. Agents with a local/sandbox downloader
-can consume that URL in the same turn. The capability expires after
+explicit `download_attachment` result. In MCP Apps hosts that advertise
+`hostCapabilities.message.resourceLink`, a tiny companion view performs the
+standard `ui/initialize` handshake and sends a `ui/message` whose content
+contains that same `ResourceLink`. This is intentionally a conversation-level
+handoff rather than another file upload: the host decides how to represent and
+authorize the resource in chat, while `download_url` remains the direct fallback
+for agents with a local/sandbox downloader. The capability expires after
 `expires_in` seconds, storage keys remain hidden, and the attachment bytes never
 transit the AgentBox/Vercel response path.
 
@@ -404,9 +409,12 @@ Go function.
   exact Markdown source without another connector or file-search surface.
 - Verify `download_attachment` produces a host-usable standard ResourceLink and
   the same short-lived URL in structured `download_url`.
-- In ChatGPT, consume `download_url` with the available sandbox/local download
-  facility in the same turn and compare the resulting byte count/hash or exact
-  contents to the original fixture.
+- In ChatGPT, verify the companion MCP Apps view can negotiate `ui/message`
+  ResourceLink support and add the returned attachment resource to the
+  conversation. If the host exposes that conversation resource through Files,
+  materialize it and compare byte count/hash or exact contents to the original
+  fixture. `download_url` remains the direct fallback for a sandbox/local
+  downloader.
 - Repeat the resource-link download smoke with a generic MCP client/inspector.
 
 ## 7. Required regression and acceptance coverage

@@ -52,6 +52,7 @@ func (s *Server) build() *mcp.Server {
 		Capabilities: &mcp.ServerCapabilities{},
 		GetSessionID: func() string { return "" },
 	})
+	registerDownloadAttachmentMessageBridgeResource(server)
 	server.AddTool(&mcp.Tool{
 		Name:        "list_threads",
 		Title:       "List threads",
@@ -104,9 +105,15 @@ func (s *Server) build() *mcp.Server {
 		Annotations:  annotations(true, false, false),
 	}, s.readAttachment)
 	server.AddTool(&mcp.Tool{
+		Meta: mcp.Meta{
+			"ui":                             map[string]any{"resourceUri": downloadAttachmentMessageBridgeURI},
+			"openai/outputTemplate":          downloadAttachmentMessageBridgeURI,
+			"openai/toolInvocation/invoking": "Preparing attachment…",
+			"openai/toolInvocation/invoked":  "Attachment ready",
+		},
 		Name:        "download_attachment",
 		Title:       "Download attachment",
-		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct R2 download. Use download_url immediately when the original file must be fetched into a local or sandbox filesystem; the URL expires after expires_in seconds. File bytes never proxy through Agentbox/Vercel.",
+		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct R2 download. The result includes a standard ResourceLink and download_url; MCP Apps hosts that support ui/message ResourceLink content can also add the resource to the conversation. File bytes never proxy through Agentbox/Vercel.",
 		InputSchema: objectSchema(map[string]any{
 			"asset_id": map[string]any{"type": "string", "minLength": 1},
 		}, []string{"asset_id"}),
