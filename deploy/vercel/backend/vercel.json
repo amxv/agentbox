@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "go",
-  "regions": ["iad1"]
+  "regions": ["iad1"],
+  "ignoreCommand": "node scripts/should-build-backend.mjs"
 }
