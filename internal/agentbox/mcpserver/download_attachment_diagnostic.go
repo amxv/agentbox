@@ -6,7 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v4.html"
+const downloadAttachmentDiagnosticURI = "ui://agentbox/download-attachment-diagnostic-v5.html"
 const downloadAttachmentDiagnosticDomain = "https://agentbox.ashray.xyz"
 const downloadAttachmentR2CSPDomain = "https://*.r2.cloudflarestorage.com"
 
@@ -207,7 +207,7 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
             const fileName = resourceLink.name || resourceLink.title || "agentbox-attachment.bin";
             const mimeType = resourceLink.mimeType || blob.type || "application/octet-stream";
             const file = new File([blob], fileName, { type: mimeType });
-            const uploaded = await openai.uploadFile(file, { library: false });
+            const uploaded = await openai.uploadFile(file, { library: true });
             if (!uploaded?.fileId) throw new Error("uploadFile returned without fileId");
             uploadProbe.uploadFile = "success";
             uploadProbe.uploadedFileId = uploaded.fileId;
@@ -228,7 +228,7 @@ const downloadAttachmentDiagnosticHTML = `<!doctype html>
         }
 
         const summary = {
-          diagnostic: "agentbox-download-attachment-v4",
+          diagnostic: "agentbox-download-attachment-v5",
           hasWindowOpenAI: Boolean(openai),
           hasToolResponseMetadata: Boolean(metadata),
           metadataTopLevelKeys: metadata && typeof metadata === "object" ? Object.keys(metadata) : [],
