@@ -52,7 +52,6 @@ func (s *Server) build() *mcp.Server {
 		Capabilities: &mcp.ServerCapabilities{},
 		GetSessionID: func() string { return "" },
 	})
-	registerDownloadAttachmentMessageBridgeResource(server)
 	server.AddTool(&mcp.Tool{
 		Name:        "list_threads",
 		Title:       "List threads",
@@ -105,23 +104,16 @@ func (s *Server) build() *mcp.Server {
 		Annotations:  annotations(true, false, false),
 	}, s.readAttachment)
 	server.AddTool(&mcp.Tool{
-		Meta: mcp.Meta{
-			"ui":                             map[string]any{"resourceUri": downloadAttachmentMessageBridgeURI},
-			"openai/outputTemplate":          downloadAttachmentMessageBridgeURI,
-			"openai/toolInvocation/invoking": "Preparing attachment…",
-			"openai/toolInvocation/invoked":  "Attachment ready",
-		},
 		Name:        "download_attachment",
 		Title:       "Download attachment",
-		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct R2 download. The result includes a standard ResourceLink and download_url. In ChatGPT, the companion view can transfer the bytes from R2 into ChatGPT's native file store and hand a temporary ChatGPT download URL to the next agent turn for sandbox access. File bytes never proxy through Agentbox/Vercel.",
+		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct file link. File bytes transfer directly from R2 rather than through Agentbox.",
 		InputSchema: objectSchema(map[string]any{
 			"asset_id": map[string]any{"type": "string", "minLength": 1},
 		}, []string{"asset_id"}),
 		OutputSchema: objectSchema(map[string]any{
-			"asset":        attachmentSummarySchema(),
-			"download_url": map[string]any{"type": "string", "format": "uri", "minLength": 1},
-			"expires_in":   map[string]any{"type": "integer", "minimum": 60, "maximum": 3600},
-		}, []string{"asset", "download_url", "expires_in"}),
+			"asset":      attachmentSummarySchema(),
+			"expires_in": map[string]any{"type": "integer", "minimum": 60, "maximum": 3600},
+		}, []string{"asset", "expires_in"}),
 		Annotations: annotations(true, false, false),
 	}, s.downloadAttachment)
 	server.AddTool(&mcp.Tool{
@@ -302,24 +294,16 @@ func (s *Server) downloadAttachment(ctx context.Context, req *mcp.CallToolReques
 	size := download.Asset.SizeBytes
 	return &mcp.CallToolResult{
 		Meta: mcp.Meta{"agentbox/status": "Prepared Agentbox attachment download."},
-		Content: []mcp.Content{
-			&mcp.ResourceLink{
-				URI:      download.URL,
-				Name:     download.Asset.FileName,
-				Title:    download.Asset.FileName,
-				MIMEType: download.Asset.MimeType,
-				Size:     &size,
-			},
-			&mcp.TextContent{Text: fmt.Sprintf(
-				"Direct attachment download URL (expires in %d seconds): %s",
-				download.ExpiresIn,
-				download.URL,
-			)},
-		},
+		Content: []mcp.Content{&mcp.ResourceLink{
+			URI:      download.URL,
+			Name:     download.Asset.FileName,
+			Title:    download.Asset.FileName,
+			MIMEType: download.Asset.MimeType,
+			Size:     &size,
+		}},
 		StructuredContent: map[string]any{
-			"asset":        download.Asset,
-			"download_url": download.URL,
-			"expires_in":   download.ExpiresIn,
+			"asset":      download.Asset,
+			"expires_in": download.ExpiresIn,
 		},
 	}, nil
 }

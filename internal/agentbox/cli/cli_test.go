@@ -644,6 +644,58 @@ func TestCLIDoctorChecksSignedDownloadURL(t *testing.T) {
 	}
 }
 
+func TestCLIDownloadStreamsSignedR2BytesDirectlyToDisk(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	t.Setenv("AGENTBOX_PROFILE", "")
+	t.Setenv("AGENTBOX_PROFILES", "")
+	t.Setenv("AGENTBOX_URL", "")
+
+	const payload = "direct r2 attachment bytes"
+	var server *httptest.Server
+	r2Hits := 0
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/threads/thr_download":
+			w.Header().Set("content-type", "application/json")
+			_, _ = w.Write([]byte(`{"thread":{"id":"thr_download","messages":[{"id":"msg_download","assets":[{"id":"asset_download","file_name":"fixture.bin","size_bytes":26}]}]}}`))
+		case "/api/assets/asset_download/download-url":
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"download_url": server.URL + "/r2/signed-object"})
+		case "/r2/signed-object":
+			r2Hits++
+			_, _ = w.Write([]byte(payload))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("AGENTBOX_BASE_URL", server.URL)
+	t.Setenv("AGENTBOX_API_KEY", "dev-key")
+
+	outputDir := filepath.Join(t.TempDir(), "downloads")
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"download", "thr_download", "--output", outputDir}); code != 0 {
+		t.Fatalf("download failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
+	}
+
+	contents, err := os.ReadFile(filepath.Join(outputDir, "asset_download-fixture.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != payload {
+		t.Fatalf("downloaded bytes = %q, want %q", contents, payload)
+	}
+	if r2Hits != 1 {
+		t.Fatalf("direct R2 GET count = %d, want 1", r2Hits)
+	}
+	if !strings.Contains(out.String(), "Saved 1 attachment") {
+		t.Fatalf("download output = %s", out.String())
+	}
+}
+
 func TestCLIConnectChatGPTPrintsMCPInstructions(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	server := newTestServer(t)

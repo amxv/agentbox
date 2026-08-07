@@ -1,6 +1,6 @@
 # MCP Attachment Read and Download Plan
 
-Status: implemented on `main`; live ChatGPT text reads verified; download conversation handoff under compatibility validation
+Status: implemented on `main`; ChatGPT text reads verified; arbitrary MCP-resource-to-sandbox materialization is host-dependent
 Date: 2026-08-07
 Target: AgentBox Go MCP server and attachment storage path
 
@@ -243,32 +243,17 @@ does not specify a separate server-side file-output schema analogous to
 `openai/fileParams`.
 
 Do not invent an undocumented `_meta` output field. The portable MCP
-`ResourceLink` remains the canonical download result for every host. Live
-ChatGPT testing showed that ChatGPT renders that link as a file card but does
-not automatically expose a generic non-image file to the model/sandbox. A
-follow-up experiment with `window.openai.uploadFile(file, { library: true })`
-returned a valid native file handle and rendered a successful Library-save
-status in the widget, but a fresh uploaded fixture still did not appear through
-the model's Files/Library surface. There is no documented generic `fileIds`
-widget-state field analogous to `imageIds` for arbitrary files.
+`ResourceLink` is the production contract for original-file access. Live
+ChatGPT testing verified `read_attachment` for Markdown/text/code, but did not
+produce a reproducible, supported path that materializes an arbitrary non-image
+MCP file into the ChatGPT sandbox. Experiments with MCP Apps resources,
+`window.openai.uploadFile`, ChatGPT Library persistence, `ui/message`, and
+follow-up-message handoffs were therefore removed from production. Retain the
+standard MCP result and let each host decide whether/how to consume it.
 
-The production contract therefore keeps the standard `ResourceLink` and also
-returns its short-lived signed R2 URL as model-visible `download_url` in the
-explicit `download_attachment` result. Current ChatGPT sandbox testing showed
-that the model-side container has no general outbound DNS and the guarded
-download helper does not accept a connector-only R2 capability. The companion
-view therefore performs the network hop in the browser: it fetches the signed
-R2 URL, verifies the byte count, calls `window.openai.uploadFile(file,
-{ library: false })`, resolves the resulting ChatGPT-owned temporary URL with
-`window.openai.getFileDownloadUrl`, then places that native URL in a real
-`sendFollowUpMessage` turn. The next agent turn can hand the
-conversation-visible ChatGPT URL to the guarded sandbox downloader. Generic MCP
-Apps ResourceLink and text-message handoffs remain fallbacks.
-
-The attachment bytes still never transit the AgentBox/Vercel response path;
-the only data-plane hops are R2 -> browser and browser -> ChatGPT's native file
-store. The original R2 capability expires after `expires_in` seconds and
-storage keys remain hidden.
+Local Agentbox clients are unaffected by this limitation: the CLI continues to
+request short-lived signed R2 URLs and downloads attachment bytes directly to
+the local filesystem.
 
 Source:
 
@@ -413,14 +398,12 @@ Go function.
 - Use the existing known Markdown attachment case as a live acceptance fixture.
 - Verify ChatGPT can call `get_thread`, then `read_attachment`, and receive the
   exact Markdown source without another connector or file-search surface.
-- Verify `download_attachment` produces a host-usable standard ResourceLink and
-  the same short-lived URL in structured `download_url`.
-- In ChatGPT, verify the companion MCP Apps view fetches the direct R2
-  capability, uploads the exact bytes into ChatGPT with `library: false`,
-  resolves a ChatGPT-native temporary download URL, and puts that URL in a real
-  follow-up turn. Verify the next agent turn can feed that URL to the guarded
-  sandbox downloader and compare byte count/hash or exact contents to the
-  original fixture. Generic hosts may use ResourceLink/text fallbacks.
+- Verify `download_attachment` produces the standard MCP `ResourceLink` shape
+  without embedding arbitrary file bytes into the MCP response.
+- Record host-specific materialization behavior as compatibility information,
+  not as part of the Agentbox MCP contract. Current ChatGPT testing does not
+  provide a reproducible supported path from an arbitrary non-image MCP
+  resource into the ChatGPT sandbox.
 - Repeat the resource-link download smoke with a generic MCP client/inspector.
 
 ## 7. Required regression and acceptance coverage
@@ -450,9 +433,7 @@ following.
 11. A simulated authorization loss while R2 is being read causes
     `read_attachment` to discard the fetched bytes and return no content.
 12. `download_attachment` returns exactly one standard `ResourceLink` with the
-    expected filename, MIME type, size, and short-lived authorized HTTPS URI,
-    and structured `download_url` contains that same URI for agents that need
-    same-turn filesystem/sandbox access.
+    expected filename, MIME type, size, and short-lived authorized HTTPS URI.
 13. `download_attachment` does not embed the file body into the MCP JSON result,
     keeping large files off the Vercel response path.
 14. Repeated download calls mint fresh short-lived capabilities and do not

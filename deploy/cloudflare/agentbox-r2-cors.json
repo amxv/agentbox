@@ -2,10 +2,7 @@
   "rules": [
     {
       "allowed": {
-        "origins": [
-          "https://agentbox.ashray.xyz",
-          "https://agentbox-ashray-xyz.web-sandbox.oaiusercontent.com"
-        ],
+        "origins": ["https://agentbox.ashray.xyz"],
         "methods": ["GET", "HEAD", "PUT"],
         "headers": ["Content-Type", "x-amz-meta-agentbox-sha256"]
       },
