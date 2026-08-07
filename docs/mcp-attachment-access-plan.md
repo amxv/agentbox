@@ -1,6 +1,6 @@
 # MCP Attachment Read and Download Plan
 
-Status: implemented on `main`; live ChatGPT text reads verified; ResourceLink conversation handoff under compatibility validation
+Status: implemented on `main`; live ChatGPT text reads verified; download conversation handoff under compatibility validation
 Date: 2026-08-07
 Target: AgentBox Go MCP server and attachment storage path
 
@@ -254,15 +254,17 @@ widget-state field analogous to `imageIds` for arbitrary files.
 
 The production contract therefore keeps the standard `ResourceLink` and also
 returns its short-lived signed R2 URL as model-visible `download_url` in the
-explicit `download_attachment` result. In MCP Apps hosts that advertise
-`hostCapabilities.message.resourceLink`, a tiny companion view performs the
-standard `ui/initialize` handshake and sends a `ui/message` whose content
-contains that same `ResourceLink`. This is intentionally a conversation-level
-handoff rather than another file upload: the host decides how to represent and
-authorize the resource in chat, while `download_url` remains the direct fallback
-for agents with a local/sandbox downloader. The capability expires after
-`expires_in` seconds, storage keys remain hidden, and the attachment bytes never
-transit the AgentBox/Vercel response path.
+explicit `download_attachment` result. A tiny companion view performs the
+standard `ui/initialize` handshake. If the MCP Apps host advertises
+`hostCapabilities.message.resourceLink`, the view sends a `ui/message` whose
+content contains that same `ResourceLink`. Current ChatGPT testing showed the
+host can render the app but does not advertise that message modality, so the
+view falls back to a text `ui/message` containing the expiring `download_url`;
+ChatGPT's `sendFollowUpMessage` is a final compatibility fallback. This keeps
+the resource capability in an actual conversation turn so a guarded local or
+sandbox downloader can consume it without proxying bytes through AgentBox. The
+capability expires after `expires_in` seconds, storage keys remain hidden, and
+the attachment bytes never transit the AgentBox/Vercel response path.
 
 Source:
 
@@ -409,12 +411,11 @@ Go function.
   exact Markdown source without another connector or file-search surface.
 - Verify `download_attachment` produces a host-usable standard ResourceLink and
   the same short-lived URL in structured `download_url`.
-- In ChatGPT, verify the companion MCP Apps view can negotiate `ui/message`
-  ResourceLink support and add the returned attachment resource to the
-  conversation. If the host exposes that conversation resource through Files,
-  materialize it and compare byte count/hash or exact contents to the original
-  fixture. `download_url` remains the direct fallback for a sandbox/local
-  downloader.
+- In ChatGPT, verify the companion MCP Apps view negotiates the host's
+  `ui/message` modalities. Prefer ResourceLink content when available; otherwise
+  verify the text-message fallback places the short-lived `download_url` in a
+  user turn and that the next agent turn can fetch it into the sandbox. Compare
+  byte count/hash or exact contents to the original fixture.
 - Repeat the resource-link download smoke with a generic MCP client/inspector.
 
 ## 7. Required regression and acceptance coverage

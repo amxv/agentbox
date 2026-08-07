@@ -6,14 +6,16 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const downloadAttachmentMessageBridgeURI = "ui://agentbox/download-resource-message-v1.html"
+const downloadAttachmentMessageBridgeURI = "ui://agentbox/download-resource-message-v2.html"
 const downloadAttachmentMessageBridgeDomain = "https://agentbox.ashray.xyz"
 
 // registerDownloadAttachmentMessageBridgeResource adds a tiny MCP Apps view
 // for hosts that support ui/message. The canonical tool result remains the
-// standard ResourceLink plus structured download_url. The view simply re-emits
-// that ResourceLink as a user-message content block so the host can make the
-// file part of the conversation instead of leaving it trapped in a tool result.
+// standard ResourceLink plus structured download_url. The view prefers to
+// re-emit that ResourceLink as a user-message content block. Hosts that support
+// only text messages receive a short-lived download URL in the user message so
+// the agent can consume it with a guarded local/sandbox downloader on the next
+// turn. ChatGPT's sendFollowUpMessage is a final compatibility fallback.
 func registerDownloadAttachmentMessageBridgeResource(server *mcp.Server) {
 	server.AddResource(&mcp.Resource{
 		URI:         downloadAttachmentMessageBridgeURI,
@@ -61,7 +63,7 @@ const downloadAttachmentMessageBridgeHTML = `<!doctype html>
 </head>
 <body>
   <div class="title">AgentBox attachment</div>
-  <div class="status" id="status">Adding attachment to the conversation…</div>
+  <div class="status" id="status">Preparing attachment handoff…</div>
   <script>
     (() => {
       const statusEl = document.getElementById("status");
@@ -153,9 +155,7 @@ const downloadAttachmentMessageBridgeHTML = `<!doctype html>
         }
 
         const initialized = await initializeBridge();
-        if (!initialized?.hostCapabilities?.message?.resourceLink) {
-          throw new Error("This host does not advertise ui/message ResourceLink support.");
-        }
+        const messageCapabilities = initialized?.hostCapabilities?.message ?? {};
 
         const resourceLink = {
           type: "resource_link",
@@ -166,19 +166,49 @@ const downloadAttachmentMessageBridgeHTML = `<!doctype html>
           size: asset.size_bytes,
         };
 
-        const result = await rpc("ui/message", {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "AgentBox attachment " + JSON.stringify(asset.file_name) + " is ready. Use the attached ResourceLink directly; do not call download_attachment again unless this resource expires.",
-            },
-            resourceLink,
-          ],
-        });
-        if (result?.isError) throw new Error("Host rejected the attachment message.");
+        if (messageCapabilities.resourceLink) {
+          const result = await rpc("ui/message", {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "AgentBox attachment " + JSON.stringify(asset.file_name) + " is ready. Use the attached ResourceLink directly; do not call download_attachment again unless this resource expires.",
+              },
+              resourceLink,
+            ],
+          });
+          if (result?.isError) throw new Error("Host rejected the attachment ResourceLink message.");
+          statusEl.textContent = asset.file_name + " was added to the conversation as a resource.";
+          return;
+        }
 
-        statusEl.textContent = asset.file_name + " was added to the conversation.";
+        const expiry = Number(output?.expires_in) || 300;
+        const handoffText =
+          "AgentBox attachment ready for sandbox download.\n" +
+          "file_name: " + asset.file_name + "\n" +
+          "mime_type: " + (asset.mime_type || "application/octet-stream") + "\n" +
+          "size_bytes: " + String(asset.size_bytes ?? "") + "\n" +
+          "expires_in_seconds: " + String(expiry) + "\n" +
+          "download_url: " + downloadUrl + "\n" +
+          "Please download this exact URL into the sandbox now. Do not call download_attachment again unless this capability expires.";
+
+        if (messageCapabilities.text) {
+          const result = await rpc("ui/message", {
+            role: "user",
+            content: [{ type: "text", text: handoffText }],
+          });
+          if (result?.isError) throw new Error("Host rejected the attachment text handoff.");
+          statusEl.textContent = asset.file_name + " download capability was sent to the conversation.";
+          return;
+        }
+
+        if (typeof window.openai?.sendFollowUpMessage === "function") {
+          await window.openai.sendFollowUpMessage({ prompt: handoffText, scrollToBottom: false });
+          statusEl.textContent = asset.file_name + " download capability was sent to the conversation.";
+          return;
+        }
+
+        throw new Error("This host cannot send the attachment resource or its short-lived download capability into the conversation.");
       }
 
       run().catch((error) => {

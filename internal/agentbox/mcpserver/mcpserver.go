@@ -113,7 +113,7 @@ func (s *Server) build() *mcp.Server {
 		},
 		Name:        "download_attachment",
 		Title:       "Download attachment",
-		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct R2 download. The result includes a standard ResourceLink and download_url; MCP Apps hosts that support ui/message ResourceLink content can also add the resource to the conversation. File bytes never proxy through Agentbox/Vercel.",
+		Description: "Retrieve one Agentbox attachment by asset ID as a short-lived direct R2 download. The result includes a standard ResourceLink and download_url; the companion MCP Apps view prefers a ResourceLink conversation handoff and falls back to a short-lived text download capability for guarded local/sandbox downloaders. File bytes never proxy through Agentbox/Vercel.",
 		InputSchema: objectSchema(map[string]any{
 			"asset_id": map[string]any{"type": "string", "minLength": 1},
 		}, []string{"asset_id"}),

@@ -171,7 +171,7 @@ func TestDownloadAttachmentMessageBridgeContract(t *testing.T) {
 		t.Fatalf("attachment message widget domain metadata = %#v", resourceMeta)
 	}
 	html := read.Contents[0].Text
-	for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "download_url"} {
+	for _, required := range []string{"toolOutput", "ui/initialize", "ui/notifications/initialized", "ui/message", "resource_link", "hostCapabilities", "resourceLink", "messageCapabilities.text", "download_url", "sendFollowUpMessage", "Please download this exact URL into the sandbox now"} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("attachment message widget is missing %q", required)
 		}
