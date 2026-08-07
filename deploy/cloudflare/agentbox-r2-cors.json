@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["https://agentbox.ashray.xyz"],
+        "methods": ["GET", "HEAD", "PUT"],
+        "headers": ["Content-Type", "x-amz-meta-agentbox-sha256"]
+      },
+      "exposeHeaders": ["ETag"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
