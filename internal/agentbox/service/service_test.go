@@ -787,6 +787,31 @@ func TestUnifiedThreadFiltersAndVisibilitySummaries(t *testing.T) {
 		seen[result.ID] = true
 	}
 
+	assertSearchIDs := func(t *testing.T, filter string, teamRef string, want ...string) {
+		t.Helper()
+		results, err := svc.SearchThreads(context.Background(), member, types.SearchThreadParams{
+			Query: "filter marker", Limit: 50, Filter: filter, TeamRef: teamRef,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, 0, len(results))
+		for _, result := range results {
+			got = append(got, result.ID)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("search filter=%q team=%q IDs = %v, want %v", filter, teamRef, got, want)
+		}
+	}
+	assertSearchIDs(t, types.ThreadFilterAll, "", privateThread.ID, teamThread.ID, multiThread.ID, memberPublicThread.ID)
+	assertSearchIDs(t, types.ThreadFilterPrivate, "", privateThread.ID)
+	assertSearchIDs(t, types.ThreadFilterShared, "", teamThread.ID, multiThread.ID)
+	assertSearchIDs(t, types.ThreadFilterTeam, engineering.ID, teamThread.ID, multiThread.ID)
+	assertSearchIDs(t, types.ThreadFilterTeam, research.Slug, multiThread.ID)
+	assertSearchIDs(t, types.ThreadFilterPublic, "", multiThread.ID, memberPublicThread.ID)
+
 	for _, params := range []types.ThreadListParams{
 		{Filter: "missing"},
 		{Filter: types.ThreadFilterTeam},

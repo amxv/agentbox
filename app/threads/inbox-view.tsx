@@ -1,9 +1,9 @@
 "use client";
 
-import { ArrowUpRightIcon, InboxIcon, PlusIcon, XIcon } from "lucide-react";
+import { ArrowUpRightIcon, InboxIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ type ThreadPageInfo = {
 
 const initialThreadPage: ThreadPageInfo = { limit: 50, has_more: false };
 
-function threadQuery(filter: InboxFilter, cursor?: string) {
+function threadQuery(filter: InboxFilter, searchQuery: string, cursor?: string) {
   const query = new URLSearchParams({ limit: "50" });
   if (filter.startsWith("team:")) {
     query.set("filter", "team");
@@ -60,6 +60,7 @@ function threadQuery(filter: InboxFilter, cursor?: string) {
   } else if (filter !== "all") {
     query.set("filter", filter);
   }
+  if (searchQuery) query.set("query", searchQuery);
   if (cursor) query.set("cursor", cursor);
   return query;
 }
@@ -91,6 +92,8 @@ export function InboxView() {
   const [threadPage, setThreadPage] = useState<ThreadPageInfo>(initialThreadPage);
   const [teams, setTeams] = useState<Team[]>([]);
   const [activeFilter, setActiveFilter] = useState<InboxFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
   const [newThreadTitle, setNewThreadTitle] = useState("");
   const [showCreateComposer, setShowCreateComposer] = useState(false);
   const [creatingEmpty, setCreatingEmpty] = useState(false);
@@ -110,7 +113,7 @@ export function InboxView() {
         return;
       }
       setAuth(session);
-      const query = threadQuery(activeFilter);
+      const query = threadQuery(activeFilter, submittedQuery);
       const [response, teamsResponse] = await Promise.all([
         fetch(`/api/threads?${query.toString()}`, { cache: "no-store", signal }),
         fetch("/api/me/teams", { cache: "no-store", signal })
@@ -128,7 +131,7 @@ export function InboxView() {
     } finally {
       if (!signal.aborted && generation === requestGeneration.current) setLoading(false);
     }
-  }, [activeFilter, router]);
+  }, [activeFilter, router, submittedQuery]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -150,7 +153,7 @@ export function InboxView() {
     setLoadingMore(true);
     setError(null);
     try {
-      const query = threadQuery(activeFilter, cursor);
+      const query = threadQuery(activeFilter, submittedQuery, cursor);
       const response = await fetch(`/api/threads?${query.toString()}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
@@ -171,6 +174,21 @@ export function InboxView() {
     setThreads([]);
     setThreadPage(initialThreadPage);
     setActiveFilter(filter);
+  }
+
+  function setSearch(nextQuery: string) {
+    const next = nextQuery.trim();
+    if (next === submittedQuery) return;
+    requestGeneration.current += 1;
+    setLoadingMore(false);
+    setThreads([]);
+    setThreadPage(initialThreadPage);
+    setSubmittedQuery(next);
+  }
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearch(searchQuery);
   }
 
   const latestUpdatedAt = useMemo(() => {
@@ -222,7 +240,7 @@ export function InboxView() {
           aside={
             <MetricStrip
               items={[
-                { label: "Loaded", value: threads.length, detail: "threads in this filter" },
+                { label: "Loaded", value: threads.length, detail: submittedQuery ? `matching “${submittedQuery}”` : "threads in this filter" },
                 {
                   label: "Latest activity",
                   value: latestUpdatedAt ? formatDate(new Date(latestUpdatedAt).toISOString()) : "None",
@@ -290,12 +308,43 @@ export function InboxView() {
           <CardHeader className="border-b">
             <SectionIntro
               className="border-0 px-0 pb-0"
-              eyebrow="Visibility"
-              title="Filter accessible threads"
-              description="Filtering happens on the server, including team membership and public-link state."
+              eyebrow="Browse"
+              title="Search and filter accessible threads"
+              description="Search titles and message bodies inside the selected visibility filter. Authorization and filtering stay server-side."
             />
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-5">
+            <Field>
+              <FieldLabel htmlFor="thread-search">Search threads</FieldLabel>
+              <form className="flex min-w-0 gap-2" onSubmit={submitSearch}>
+                <Input
+                  id="thread-search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Titles and message bodies"
+                  type="search"
+                />
+                <Button type="submit">
+                  <SearchIcon data-icon="inline-start" />
+                  Search
+                </Button>
+                {submittedQuery ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label="Clear search"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSearch("");
+                    }}
+                  >
+                    <XIcon />
+                  </Button>
+                ) : null}
+              </form>
+              <FieldDescription>Search stays active when you switch between All, Private, Shared with me, Public, and team filters.</FieldDescription>
+            </Field>
             <div className="overflow-x-auto pb-1">
               <ToggleGroup
                 aria-label="Inbox filters"
@@ -337,8 +386,10 @@ export function InboxView() {
             <Empty className="border py-16">
               <EmptyHeader>
                 <EmptyMedia variant="icon"><InboxIcon /></EmptyMedia>
-                <EmptyTitle>No threads match this filter</EmptyTitle>
-                <EmptyDescription>Choose another visibility filter or create a private thread.</EmptyDescription>
+                <EmptyTitle>{submittedQuery ? "No threads match this search" : "No threads match this filter"}</EmptyTitle>
+                <EmptyDescription>
+                  {submittedQuery ? "Try another search or visibility filter." : "Choose another visibility filter or create a private thread."}
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : null}

@@ -452,6 +452,8 @@ The dashboard should expose lightweight filters:
 
 The default MCP, CLI, and Raycast list/search behavior uses the unified accessible set without requiring a workspace or team selector. Raycast exposes the same lightweight filters as the dashboard and must not broaden or narrow the backend result in client memory.
 
+Dashboard search composes with every lightweight visibility filter. A search query is evaluated only within the currently selected All, Private, Shared with me, Public, or team-scoped accessible set, and matching remains server-side across thread titles and message bodies.
+
 Search must never reveal titles, message snippets, counts, attachments, or existence of inaccessible threads.
 
 ## 11. Owner-Only Web Administration
