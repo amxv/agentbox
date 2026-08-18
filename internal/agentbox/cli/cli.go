@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"agentbox/internal/agentbox/messageformat"
 	"agentbox/internal/agentbox/profiles"
@@ -38,6 +39,8 @@ type RuntimeConfig struct {
 	Source      string
 	Profile     profiles.Profile
 }
+
+const defaultGetBodyBudget = 5000
 
 type asset struct {
 	ID          string  `json:"id"`
@@ -243,9 +246,9 @@ Commands:
   list                    list recent threads
   search <query>          search threads by title and message body
   create <title>          create a thread
-  get <thread-id>         read a thread
+  get <thr_...|msg_...>   peek at a thread or message without dumping large bodies
   visibility <thread-id>  inspect or change thread visibility
-  download <thread-id>    download all attachments from a thread
+  download <thread-id>    download all or one numbered attachment from a thread
   post <thread-id>        post a message to a thread
 
 Run "agentbox <command> --help" for command-specific usage.`)
@@ -305,15 +308,29 @@ Search Agentbox threads by title and message body. Results include message count
 		"create": `Usage: agentbox create <title> [--message <body> | --file <path>] [--format auto|markdown|plain] [--json]
 
 Create a new Agentbox thread. Use --message or --file to create the first message in the same request. The default format is auto; use --plain or --markdown to force body_content_type.`,
-		"get": `Usage: agentbox get <thread-id> [--json]
+		"get": `Usage: agentbox get <thr_...|msg_...> [--full] [-o <path>] [--force] [--json]
 
-Read an Agentbox thread and its messages.`,
+Inspect a thread or message. Human-readable output is bounded to about 5,000 body characters by default so large remote content is not dumped into the terminal or an agent context accidentally.
+
+Use --full to deliberately print complete bodies. Use -o/--output to write complete content directly to a file; message output is the exact body, while thread output is readable Markdown. Existing files are not overwritten unless --force is provided. --json keeps the complete structured API response for automation.
+
+Examples:
+  agentbox get thr_...
+  agentbox get msg_...
+  agentbox get msg_... --full
+  agentbox get msg_... -o report.md
+  agentbox get thr_... -o thread.md`,
 		"visibility": `Usage: agentbox visibility <thread-id> [--share-team <slug-or-id>] [--unshare-team <slug-or-id>] [--publish | --unpublish] [--regenerate-public-link] [--json]
 
 Read or atomically change a thread's team shares and public read-only link. Team flags may be repeated. Without mutation flags, prints the current visibility and teams available to the acting user.`,
 		"download": `Usage: agentbox download <thread-id> [-o <dir>] [--json]
+       agentbox download <thread-id> --attachment <number> [-o <file>] [--force] [--json]
 
-Download all attachments from a thread to a local directory.`,
+Download attachments from a thread. Without --attachment, -o is the destination directory and every attachment is downloaded. With --attachment, choose the 1-based number shown by "agentbox get <thread-id>" and -o names the destination file. If -o is omitted for one attachment, the original filename is used. Existing selected-output files are not overwritten unless --force is provided.
+
+Examples:
+  agentbox download thr_... -o ./attachments
+  agentbox download thr_... --attachment 1 -o ./renamed-file.pdf`,
 		"post": `Usage: agentbox post <thread-id> [message] [-f <path>] [-a <path>] [--format auto|markdown|plain] [--json]
 
 Post a message to a thread. If message is omitted and stdin is piped, the CLI reads the message body from stdin. The default format is auto; .md/.markdown files, Markdown tables, fenced code blocks, and Mermaid blocks are marked as Markdown. Use --plain for raw logs or --markdown to force Markdown rendering.`,
@@ -716,24 +733,95 @@ func (r *Runner) runCreate(args []string, profileName string) error {
 
 func (r *Runner) runGet(args []string, profileName string) error {
 	fs := newFlagSet("get")
+	full := fs.Bool("full", false, "print complete message bodies")
+	output := fs.String("output", "", "write complete content to a file")
+	fs.StringVar(output, "o", "", "write complete content to a file")
+	force := fs.Bool("force", false, "overwrite an existing output file")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox get <thread-id> [--json]")
+		return errors.New("Usage: agentbox get <thr_...|msg_...> [--full] [-o <path>] [--force] [--json]")
 	}
-	var data struct {
-		Thread thread `json:"thread"`
+	if *force && strings.TrimSpace(*output) == "" {
+		return errors.New("--force requires -o/--output.")
 	}
-	if err := r.request("/api/threads/"+url.PathEscape(fs.Arg(0)), http.MethodGet, nil, nil, profileName, &data); err != nil {
-		return err
+
+	resourceID := strings.TrimSpace(fs.Arg(0))
+	switch {
+	case strings.HasPrefix(resourceID, "thr_"):
+		var data struct {
+			Thread thread `json:"thread"`
+		}
+		if err := r.request("/api/threads/"+url.PathEscape(resourceID), http.MethodGet, nil, nil, profileName, &data); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*output) != "" {
+			contents := renderThreadMarkdown(data.Thread)
+			if err := writeOutputFile(*output, []byte(contents), *force); err != nil {
+				return err
+			}
+			if *jsonOut {
+				return printJSON(r.Stdout, map[string]any{
+					"thread_id":     data.Thread.ID,
+					"output_path":   *output,
+					"message_count": len(data.Thread.Messages),
+					"bytes_written": len([]byte(contents)),
+				})
+			}
+			fmt.Fprintf(r.Stdout, "Saved %d message%s (%d bytes) to %s\n", len(data.Thread.Messages), plural(len(data.Thread.Messages)), len([]byte(contents)), *output)
+			return nil
+		}
+		if *jsonOut {
+			return printJSON(r.Stdout, data)
+		}
+		budget := defaultGetBodyBudget
+		if *full {
+			budget = -1
+		}
+		printThread(r.Stdout, data.Thread, budget)
+		return nil
+
+	case strings.HasPrefix(resourceID, "msg_"):
+		var data struct {
+			Message message `json:"message"`
+		}
+		if err := r.request("/api/messages/"+url.PathEscape(resourceID), http.MethodGet, nil, nil, profileName, &data); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*output) != "" {
+			if err := writeOutputFile(*output, []byte(data.Message.Body), *force); err != nil {
+				return err
+			}
+			characterCount := utf8.RuneCountInString(data.Message.Body)
+			byteCount := len([]byte(data.Message.Body))
+			if *jsonOut {
+				return printJSON(r.Stdout, map[string]any{
+					"message_id":         data.Message.ID,
+					"thread_id":          data.Message.ThreadID,
+					"output_path":        *output,
+					"message_count":      1,
+					"characters_written": characterCount,
+					"bytes_written":      byteCount,
+				})
+			}
+			fmt.Fprintf(r.Stdout, "Saved 1 message (%d characters, %d bytes) to %s\n", characterCount, byteCount, *output)
+			return nil
+		}
+		if *jsonOut {
+			return printJSON(r.Stdout, data)
+		}
+		budget := defaultGetBodyBudget
+		if *full {
+			budget = -1
+		}
+		printMessage(r.Stdout, data.Message, budget, true)
+		return nil
+
+	default:
+		return errors.New("get expects a typed Agentbox resource ID beginning with thr_ or msg_.")
 	}
-	if *jsonOut {
-		return printJSON(r.Stdout, data)
-	}
-	printThread(r.Stdout, data.Thread)
-	return nil
 }
 
 func (r *Runner) runVisibility(args []string, profileName string) error {
@@ -828,41 +916,92 @@ func printVisibility(w io.Writer, visibility types.ManagedThreadVisibility) {
 
 func (r *Runner) runDownload(args []string, profileName string) error {
 	fs := newFlagSet("download")
-	output := fs.String("output", "", "directory to save files into")
-	fs.StringVar(output, "o", "", "directory to save files into")
+	output := fs.String("output", "", "destination directory, or destination file with --attachment")
+	fs.StringVar(output, "o", "", "destination directory, or destination file with --attachment")
+	attachmentNumber := fs.Int("attachment", 0, "1-based attachment number shown by agentbox get")
+	force := fs.Bool("force", false, "overwrite an existing selected output file")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("Usage: agentbox download <thread-id> [-o <dir>] [--json]")
+		return errors.New("Usage: agentbox download <thread-id> [-o <dir>] [--json] | agentbox download <thread-id> --attachment <number> [-o <file>] [--force] [--json]")
 	}
-	threadID := fs.Arg(0)
-	outputDir := *output
-	if outputDir == "" {
-		outputDir = filepath.Join("agentbox-downloads", threadID)
+	if *attachmentNumber < 0 {
+		return errors.New("--attachment must be a positive 1-based number.")
 	}
+	if *force && *attachmentNumber == 0 {
+		return errors.New("--force is only used with --attachment.")
+	}
+	threadID := strings.TrimSpace(fs.Arg(0))
 	var data struct {
 		Thread thread `json:"thread"`
 	}
 	if err := r.request("/api/threads/"+url.PathEscape(threadID), http.MethodGet, nil, nil, profileName, &data); err != nil {
 		return err
 	}
-	downloads := []map[string]string{}
+
+	type indexedAttachment struct {
+		Number    int
+		MessageID string
+		Asset     asset
+	}
+	attachments := []indexedAttachment{}
 	for _, message := range data.Thread.Messages {
 		for _, asset := range message.Assets {
-			outputPath := filepath.Join(outputDir, asset.ID+"-"+asset.FileName)
-			if err := r.downloadAsset(asset, outputPath, profileName); err != nil {
-				return err
-			}
-			downloads = append(downloads, map[string]string{
-				"message_id":  message.ID,
-				"asset_id":    asset.ID,
-				"file_name":   asset.FileName,
-				"storage_key": asset.StorageKey,
-				"output_path": outputPath,
-			})
+			attachments = append(attachments, indexedAttachment{Number: len(attachments) + 1, MessageID: message.ID, Asset: asset})
 		}
+	}
+
+	if *attachmentNumber > 0 {
+		if *attachmentNumber > len(attachments) {
+			if len(attachments) == 0 {
+				return fmt.Errorf("No attachments found for %s.", threadID)
+			}
+			return fmt.Errorf("Attachment %d does not exist; %s has %d attachment%s. Run \"agentbox get %s\" to see the numbered list.", *attachmentNumber, threadID, len(attachments), plural(len(attachments)), threadID)
+		}
+		selected := attachments[*attachmentNumber-1]
+		outputPath := strings.TrimSpace(*output)
+		if outputPath == "" {
+			outputPath = assetFileName(selected.Asset)
+		}
+		if err := r.downloadAsset(selected.Asset, outputPath, profileName, *force); err != nil {
+			return err
+		}
+		result := map[string]any{
+			"thread_id":   threadID,
+			"attachment":  selected.Number,
+			"message_id":  selected.MessageID,
+			"asset_id":    selected.Asset.ID,
+			"file_name":   assetFileName(selected.Asset),
+			"mime_type":   assetContentType(selected.Asset),
+			"size_bytes":  selected.Asset.SizeBytes,
+			"output_path": outputPath,
+		}
+		if *jsonOut {
+			return printJSON(r.Stdout, result)
+		}
+		fmt.Fprintf(r.Stdout, "Saved attachment %d (%s, %s, %d bytes) to %s\n", selected.Number, assetFileName(selected.Asset), assetContentType(selected.Asset), selected.Asset.SizeBytes, outputPath)
+		return nil
+	}
+
+	outputDir := strings.TrimSpace(*output)
+	if outputDir == "" {
+		outputDir = filepath.Join("agentbox-downloads", threadID)
+	}
+	downloads := []map[string]string{}
+	for _, attachment := range attachments {
+		outputPath := filepath.Join(outputDir, attachment.Asset.ID+"-"+assetFileName(attachment.Asset))
+		if err := r.downloadAsset(attachment.Asset, outputPath, profileName, true); err != nil {
+			return err
+		}
+		downloads = append(downloads, map[string]string{
+			"message_id":  attachment.MessageID,
+			"asset_id":    attachment.Asset.ID,
+			"file_name":   assetFileName(attachment.Asset),
+			"storage_key": attachment.Asset.StorageKey,
+			"output_path": outputPath,
+		})
 	}
 	result := map[string]any{"thread_id": threadID, "output_dir": outputDir, "downloads": downloads}
 	if *jsonOut {
@@ -879,7 +1018,11 @@ func (r *Runner) runDownload(args []string, profileName string) error {
 	return nil
 }
 
-func (r *Runner) downloadAsset(asset asset, outputPath string, profileName string) error {
+func (r *Runner) downloadAsset(asset asset, outputPath string, profileName string, force bool) error {
+	if err := ensureOutputAvailable(outputPath, force); err != nil {
+		return err
+	}
+
 	var signed struct {
 		DownloadURL string `json:"download_url"`
 	}
@@ -894,16 +1037,25 @@ func (r *Runner) downloadAsset(asset asset, outputPath string, profileName strin
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("Direct R2 download failed with HTTP %d", res.StatusCode)
 	}
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return err
-	}
-	file, err := os.Create(outputPath)
+	file, err := openOutputFile(outputPath, force)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	_, err = io.Copy(file, res.Body)
-	return err
+	cleanup := true
+	defer func() {
+		_ = file.Close()
+		if cleanup {
+			_ = os.Remove(outputPath)
+		}
+	}()
+	if _, err := io.Copy(file, res.Body); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func (r *Runner) runPost(args []string, profileName string) error {
@@ -1050,24 +1202,280 @@ func multipartBody(body string, bodyContentType string, assetPath string) (*byte
 	return bytes.NewReader(buf.Bytes()), writer.FormDataContentType(), nil
 }
 
-func printThread(w io.Writer, thread thread) {
+func printThread(w io.Writer, thread thread, bodyBudget int) {
 	fmt.Fprintf(w, "# %s\n", thread.Title)
-	fmt.Fprintf(w, "id: %s\n", thread.ID)
-	fmt.Fprintf(w, "updated: %s\n", thread.UpdatedAt)
-	fmt.Fprintf(w, "created by: %s\n", attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
-	fmt.Fprintf(w, "visibility: %s\n\n", visibilitySummaryLabel(thread.VisibilitySummary))
-	for _, message := range thread.Messages {
-		fmt.Fprintf(w, "--- %s · %s · %s\n", attributionLabel(message.CreatedByUserDisplayName, message.CreatedByActorName, message.Author), message.CreatedAt, message.ID)
-		fmt.Fprintln(w, message.Body)
+	fmt.Fprintf(w, "Thread: %s\n", thread.ID)
+	fmt.Fprintf(w, "Updated: %s\n", thread.UpdatedAt)
+	fmt.Fprintf(w, "Created by: %s\n", attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
+	fmt.Fprintf(w, "Visibility: %s\n", visibilitySummaryLabel(thread.VisibilitySummary))
+	fmt.Fprintf(w, "Messages: %d\n", len(thread.Messages))
+
+	allocations, totalCharacters := bodyPreviewAllocations(thread.Messages, bodyBudget)
+	shownCharacters := 0
+	for _, allocation := range allocations {
+		shownCharacters += allocation
+	}
+	if shownCharacters < totalCharacters {
+		fmt.Fprintf(w, "Body preview: showing %d of %d characters across the thread.\n", shownCharacters, totalCharacters)
+	}
+	fmt.Fprintln(w)
+
+	attachmentNumber := 1
+	for index, message := range thread.Messages {
+		fmt.Fprintf(w, "## Message %s\n", message.ID)
+		printMessageMetadata(w, message)
+		printMessageBody(w, message, allocations[index], true)
 		if len(message.Assets) > 0 {
-			fmt.Fprintln(w)
-			fmt.Fprintln(w, "Assets:")
-			for _, asset := range message.Assets {
-				fmt.Fprintf(w, "- %s %s %s\n", asset.ID, asset.FileName, asset.StorageKey)
+			fmt.Fprintln(w, "Attachments:")
+			for _, attached := range message.Assets {
+				fmt.Fprintf(w, "[%d] %s · %s · %d bytes · %s\n", attachmentNumber, assetFileName(attached), assetContentType(attached), attached.SizeBytes, attached.ID)
+				attachmentNumber++
 			}
+			fmt.Fprintf(w, "Download one: agentbox download %s --attachment <number> -o <file>\n", thread.ID)
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+func printMessage(w io.Writer, message message, bodyBudget int, includeThread bool) {
+	fmt.Fprintf(w, "# Message %s\n", message.ID)
+	if includeThread {
+		fmt.Fprintf(w, "Thread: %s\n", message.ThreadID)
+	}
+	printMessageMetadata(w, message)
+	allocation := utf8.RuneCountInString(message.Body)
+	if bodyBudget >= 0 && allocation > bodyBudget {
+		allocation = bodyBudget
+	}
+	printMessageBody(w, message, allocation, true)
+	if len(message.Assets) > 0 {
+		fmt.Fprintln(w, "Attachments:")
+		for _, attached := range message.Assets {
+			fmt.Fprintf(w, "- %s · %s · %d bytes · %s\n", assetFileName(attached), assetContentType(attached), attached.SizeBytes, attached.ID)
+		}
+	}
+}
+
+func printMessageMetadata(w io.Writer, message message) {
+	fmt.Fprintf(w, "Author: %s\n", attributionLabel(message.CreatedByUserDisplayName, message.CreatedByActorName, message.Author))
+	fmt.Fprintf(w, "Created: %s\n", message.CreatedAt)
+	fmt.Fprintf(w, "Content type: %s\n", messageContentType(message))
+	fmt.Fprintf(w, "Characters: %d\n", utf8.RuneCountInString(message.Body))
+	fmt.Fprintf(w, "Attachments: %d\n\n", len(message.Assets))
+}
+
+func printMessageBody(w io.Writer, message message, allocation int, includeHints bool) {
+	total := utf8.RuneCountInString(message.Body)
+	if total == 0 {
+		fmt.Fprintln(w, "(empty message)")
+		fmt.Fprintln(w)
+		return
+	}
+	if allocation < 0 || allocation > total {
+		allocation = total
+	}
+	preview := firstRunes(message.Body, allocation)
+	fmt.Fprintln(w, preview)
+	if allocation < total {
+		fmt.Fprintf(w, "\nShowing %d of %d characters.\n", allocation, total)
+		if includeHints {
+			fmt.Fprintf(w, "View complete message: agentbox get %s --full\n", message.ID)
+			fmt.Fprintf(w, "Save complete message: agentbox get %s -o message.md\n", message.ID)
+		}
+	}
+	fmt.Fprintln(w)
+}
+
+func bodyPreviewAllocations(messages []message, bodyBudget int) ([]int, int) {
+	allocations := make([]int, len(messages))
+	lengths := make([]int, len(messages))
+	total := 0
+	active := []int{}
+	for index, message := range messages {
+		lengths[index] = utf8.RuneCountInString(message.Body)
+		total += lengths[index]
+		if lengths[index] > 0 {
+			active = append(active, index)
+		}
+	}
+	if bodyBudget < 0 || total <= bodyBudget {
+		copy(allocations, lengths)
+		return allocations, total
+	}
+	if bodyBudget <= 0 || len(active) == 0 {
+		return allocations, total
+	}
+
+	remainingBudget := bodyBudget
+	remaining := append([]int(nil), active...)
+	for len(remaining) > 0 && remainingBudget > 0 {
+		share := remainingBudget / len(remaining)
+		if share == 0 {
+			for _, index := range remaining {
+				if remainingBudget == 0 {
+					break
+				}
+				allocations[index]++
+				remainingBudget--
+			}
+			break
+		}
+
+		next := []int{}
+		allocatedSmall := false
+		for _, index := range remaining {
+			if lengths[index] <= share {
+				allocations[index] = lengths[index]
+				remainingBudget -= lengths[index]
+				allocatedSmall = true
+				continue
+			}
+			next = append(next, index)
+		}
+		if allocatedSmall {
+			remaining = next
+			continue
+		}
+
+		for _, index := range remaining {
+			allocations[index] = share
+			remainingBudget -= share
+		}
+		for _, index := range remaining {
+			if remainingBudget == 0 {
+				break
+			}
+			allocations[index]++
+			remainingBudget--
+		}
+		break
+	}
+	return allocations, total
+}
+
+func firstRunes(value string, count int) string {
+	if count <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= count {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:count])
+}
+
+func messageContentType(message message) string {
+	contentType := strings.TrimSpace(defaultStringValue(message.BodyContentType))
+	if contentType == "" {
+		return "unspecified"
+	}
+	return contentType
+}
+
+func assetFileName(attached asset) string {
+	if value := strings.TrimSpace(attached.FileName); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(attached.Filename); value != "" {
+		return value
+	}
+	return attached.ID
+}
+
+func assetContentType(attached asset) string {
+	if value := strings.TrimSpace(defaultStringValue(attached.MimeType)); value != "" {
+		return value
+	}
+	return "application/octet-stream"
+}
+
+func renderThreadMarkdown(thread thread) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "# %s\n\n", thread.Title)
+	fmt.Fprintf(&builder, "- Thread: `%s`\n", thread.ID)
+	fmt.Fprintf(&builder, "- Updated: %s\n", thread.UpdatedAt)
+	fmt.Fprintf(&builder, "- Created by: %s\n", attributionLabel(thread.CreatedByUserDisplayName, thread.CreatedByActorName, thread.CreatedBy))
+	fmt.Fprintf(&builder, "- Visibility: %s\n", visibilitySummaryLabel(thread.VisibilitySummary))
+	fmt.Fprintf(&builder, "- Messages: %d\n", len(thread.Messages))
+	for _, message := range thread.Messages {
+		fmt.Fprintf(&builder, "\n---\n\n## Message `%s`\n\n", message.ID)
+		fmt.Fprintf(&builder, "- Author: %s\n", attributionLabel(message.CreatedByUserDisplayName, message.CreatedByActorName, message.Author))
+		fmt.Fprintf(&builder, "- Created: %s\n", message.CreatedAt)
+		fmt.Fprintf(&builder, "- Content type: %s\n", messageContentType(message))
+		fmt.Fprintf(&builder, "- Characters: %d\n", utf8.RuneCountInString(message.Body))
+		fmt.Fprintf(&builder, "- Attachments: %d\n\n", len(message.Assets))
+		builder.WriteString(message.Body)
+		if !strings.HasSuffix(message.Body, "\n") {
+			builder.WriteString("\n")
+		}
+		if len(message.Assets) > 0 {
+			builder.WriteString("\n### Attachments\n\n")
+			for _, attached := range message.Assets {
+				fmt.Fprintf(&builder, "- `%s` (%s, %d bytes, `%s`)\n", assetFileName(attached), assetContentType(attached), attached.SizeBytes, attached.ID)
+			}
+		}
+	}
+	return builder.String()
+}
+
+func writeOutputFile(outputPath string, contents []byte, force bool) error {
+	file, err := openOutputFile(outputPath, force)
+	if err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		_ = file.Close()
+		if cleanup {
+			_ = os.Remove(outputPath)
+		}
+	}()
+	if _, err := file.Write(contents); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func openOutputFile(outputPath string, force bool) (*os.File, error) {
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return nil, errors.New("output path must not be empty")
+	}
+	parent := filepath.Dir(outputPath)
+	if parent != "." && parent != "" {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	flags := os.O_WRONLY | os.O_CREATE
+	if force {
+		flags |= os.O_TRUNC
+	} else {
+		flags |= os.O_EXCL
+	}
+	file, err := os.OpenFile(outputPath, flags, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("output file already exists: %s (use --force to overwrite)", outputPath)
+	}
+	return file, err
+}
+
+func ensureOutputAvailable(outputPath string, force bool) error {
+	if force {
+		return nil
+	}
+	_, err := os.Stat(outputPath)
+	if err == nil {
+		return fmt.Errorf("output file already exists: %s (use --force to overwrite)", outputPath)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func attributionLabel(userDisplayName *string, actorName *string, fallback string) string {

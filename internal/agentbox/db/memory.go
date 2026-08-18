@@ -768,6 +768,33 @@ func (m *MemoryRepository) GetThread(_ context.Context, userID string, threadID 
 	return nil, nil
 }
 
+func (m *MemoryRepository) GetMessage(_ context.Context, userID string, messageID string) (*types.Message, error) {
+	for _, message := range m.Messages {
+		if message.ID != messageID {
+			continue
+		}
+		for _, thread := range m.Threads {
+			if thread.ID != message.ThreadID || m.normalThreadAccess(thread, userID) == nil {
+				continue
+			}
+			copy := message
+			copy.Assets = []types.Asset{}
+			for _, asset := range m.Assets {
+				if asset.MessageID != message.ID {
+					continue
+				}
+				assetCopy := asset
+				assetCopy.DownloadURL = nil
+				copy.Assets = append(copy.Assets, assetCopy)
+			}
+			sortMessageAssets(&copy)
+			return &copy, nil
+		}
+		return nil, nil
+	}
+	return nil, nil
+}
+
 func (m *MemoryRepository) threadVisibilitySummary(thread types.Thread, userID string) types.ThreadVisibilitySummary {
 	visibility := m.threadVisibility(thread)
 	sharedTeams := make([]types.ThreadTeamSummary, 0, len(visibility.SharedTeams))

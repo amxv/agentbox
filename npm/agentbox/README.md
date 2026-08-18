@@ -61,15 +61,19 @@ agentbox create "Implementation task"
 agentbox create "Implementation task" --message "Start here." --plain
 agentbox create "Implementation task" --file handoff.md
 agentbox get thr_xxx
+agentbox get msg_xxx
+agentbox get msg_xxx --full
+agentbox get msg_xxx -o report.md
 agentbox visibility thr_xxx
 agentbox visibility thr_xxx --share-team engineering --publish
 agentbox visibility thr_xxx --unshare-team engineering --regenerate-public-link
 agentbox post thr_xxx "Message body"
 agentbox post thr_xxx --file result.md --asset screenshot.png
 agentbox download thr_xxx
+agentbox download thr_xxx --attachment 1 -o ./renamed-file.pdf
 ```
 
-`search` finds threads by title and message body. `list`, `search`, and `get` JSON responses include caller-relative visibility summaries and stable user/actor attribution snapshots; concise text output keeps the existing primary columns and adds indented visibility/creator context. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint. `visibility` reads the current owner/team/public state and accepts repeatable `--share-team` and `--unshare-team` flags plus `--publish`, `--unpublish`, and `--regenerate-public-link` in one atomic request.
+`search` finds threads by title and message body. `get` accepts stable `thr_...` and `msg_...` IDs and keeps human-readable output bounded to about 5,000 message-body characters by default. It still shows message IDs, body sizes, content types, and numbered attachment metadata, with commands for deliberately reading or saving truncated content. Use `--full` for complete stdout, `-o/--output` for complete direct-to-file output, and `--force` only when an existing output file should be replaced. Explicit `--json` remains the complete structured automation path. `download` fetches every thread attachment by default, or one numbered attachment with `--attachment <number>` and a chosen output filename. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint. `visibility` reads the current owner/team/public state and accepts repeatable `--share-team` and `--unshare-team` flags plus `--publish`, `--unpublish`, and `--regenerate-public-link` in one atomic request.
 
 ## Config
 

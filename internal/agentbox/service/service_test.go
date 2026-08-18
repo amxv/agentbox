@@ -644,6 +644,20 @@ func TestServiceThreadAndMessageFlow(t *testing.T) {
 		t.Fatalf("unexpected thread: %#v", got)
 	}
 
+	gotMessage, err := svc.GetMessage(context.Background(), auth, message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMessage.ID != message.ID || gotMessage.ThreadID != thread.ID || gotMessage.Body != "hello" {
+		t.Fatalf("unexpected message: %#v", gotMessage)
+	}
+
+	_, err = svc.GetMessage(context.Background(), auth, "msg_missing")
+	var missingMessage CodedError
+	if !errors.As(err, &missingMessage) || missingMessage.Code != "MESSAGE_NOT_FOUND" {
+		t.Fatalf("expected MESSAGE_NOT_FOUND, got %#v", err)
+	}
+
 	results, err := svc.SearchThreads(context.Background(), auth, types.SearchThreadParams{Query: "hello"})
 	if err != nil {
 		t.Fatal(err)

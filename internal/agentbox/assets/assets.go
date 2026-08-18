@@ -461,7 +461,13 @@ func InferMimeType(fileName string, fallback *string) *string {
 	if fallback != nil {
 		return fallback
 	}
-	value := mime.TypeByExtension(path.Ext(fileName))
+	extension := strings.ToLower(path.Ext(fileName))
+	switch extension {
+	case ".md", ".markdown", ".mdown", ".mkd":
+		value := "text/markdown; charset=utf-8"
+		return &value
+	}
+	value := mime.TypeByExtension(extension)
 	if value == "" {
 		return nil
 	}

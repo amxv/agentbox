@@ -1406,6 +1406,72 @@ where `+normalThreadAccessPredicate+` and t.id = $2
 	return &types.ThreadWithMessages{Thread: thread, Messages: messages, Visibility: *visibility}, nil
 }
 
+func (r *Repository) GetMessage(ctx context.Context, userID string, messageID string) (*types.Message, error) {
+	message, err := scanMessage(r.pool.QueryRow(ctx, `
+select
+  m.id,
+  m.thread_id,
+  m.author,
+  m.body,
+  m.body_content_type,
+  m.created_at,
+  m.created_by_user_id,
+  m.created_by_key_id,
+  m.created_by_user_display_name,
+  m.created_by_actor_name
+from messages m
+join threads t on t.id = m.thread_id
+where `+normalThreadAccessPredicate+` and m.id = $2
+`, userID, messageID), nil)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	assetRows, err := r.pool.Query(ctx, `
+select
+  a.id,
+  a.message_id,
+  a.storage_key,
+  a.file_name,
+  a.mime_type,
+  a.size_bytes,
+  a.created_at,
+  a.created_by,
+  a.created_by_user_id,
+  a.created_by_key_id,
+  a.created_by_user_display_name,
+  a.created_by_actor_name,
+  a.purged_at,
+  a.purged_by_user_id,
+  a.purge_last_attempt_at,
+  a.purge_error
+from assets a
+join messages m on m.id = a.message_id
+join threads t on t.id = m.thread_id
+where `+normalThreadAccessPredicate+` and m.id = $2
+order by a.position
+`, userID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer assetRows.Close()
+	for assetRows.Next() {
+		asset, err := scanAsset(assetRows)
+		if err != nil {
+			return nil, err
+		}
+		asset.Position = int64(len(message.Assets) + 1)
+		message.Assets = append(message.Assets, asset)
+	}
+	if err := assetRows.Err(); err != nil {
+		return nil, err
+	}
+	return &message, nil
+}
+
 func (r *Repository) GetAsset(ctx context.Context, userID string, assetID string) (*types.Asset, error) {
 	asset, err := scanAsset(r.pool.QueryRow(ctx, `
 select a.id, a.message_id, a.storage_key, a.file_name, a.mime_type, a.size_bytes,

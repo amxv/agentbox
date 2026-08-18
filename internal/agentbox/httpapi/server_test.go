@@ -324,6 +324,7 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 	var posted struct {
 		Message struct {
+			ID              string  `json:"id"`
 			Body            string  `json:"body"`
 			BodyContentType *string `json:"body_content_type"`
 			Assets          []struct {
@@ -344,6 +345,18 @@ func TestThreadRoutesAndMultipartAsset(t *testing.T) {
 	}
 	if posted.Message.Assets[0].FileName != "hello.txt" || posted.Message.Assets[0].SizeBytes != int64(len("asset body")) {
 		t.Fatalf("asset = %#v", posted.Message.Assets[0])
+	}
+
+	getMessage := httptest.NewRecorder()
+	server.ServeHTTP(getMessage, httptest.NewRequest(http.MethodGet, "/api/messages/"+posted.Message.ID+"?key=dev-key", nil))
+	if getMessage.Code != http.StatusOK || !strings.Contains(getMessage.Body.String(), `"body":"hello with asset"`) || !strings.Contains(getMessage.Body.String(), `"file_name":"hello.txt"`) {
+		t.Fatalf("message get status=%d body=%s", getMessage.Code, getMessage.Body.String())
+	}
+
+	missingMessage := httptest.NewRecorder()
+	server.ServeHTTP(missingMessage, httptest.NewRequest(http.MethodGet, "/api/messages/msg_missing?key=dev-key", nil))
+	if missingMessage.Code != http.StatusNotFound || !strings.Contains(missingMessage.Body.String(), `"code":"MESSAGE_NOT_FOUND"`) {
+		t.Fatalf("missing message status=%d body=%s", missingMessage.Code, missingMessage.Body.String())
 	}
 
 	download := httptest.NewRecorder()

@@ -41,6 +41,10 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 	if len(args) == 0 || args[0] != "chatgpt" {
 		return errors.New(`Usage: agentbox connect chatgpt [--json]`)
 	}
+	if len(args) > 1 && isHelpArg(args[1]) {
+		r.printCommandHelp("connect")
+		return nil
+	}
 	fs := newFlagSet("connect chatgpt")
 	jsonOut := fs.Bool("json", false, "print raw JSON")
 	if err := parseFlags(fs, args[1:]); err != nil {
@@ -88,6 +92,10 @@ func (r *Runner) runConnect(args []string, profileName string) error {
 func (r *Runner) runOwner(args []string, profileName string) error {
 	if len(args) == 0 || args[0] != "setup-token" {
 		return errors.New("Usage: agentbox owner setup-token [--base-url <url>] [--app-url <url>] [--admin-key <key>] [--expires 30m] [--json]")
+	}
+	if len(args) > 1 && isHelpArg(args[1]) {
+		r.printCommandHelp("owner")
+		return nil
 	}
 	fs := newFlagSet("owner setup-token")
 	baseURL := fs.String("base-url", "", "Agentbox backend URL")

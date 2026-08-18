@@ -86,10 +86,12 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"profiles", "add", "--help"}, []string{"Usage: agentbox profiles add <name>", "--base-url <url>"}},
 		{[]string{"doctor", "--help"}, []string{"Usage: agentbox doctor", "authenticated API access"}},
 		{[]string{"owner", "--help"}, []string{"Usage: agentbox owner setup-token", "permanent deployment owner"}},
+		{[]string{"owner", "setup-token", "--help"}, []string{"Usage: agentbox owner setup-token", "permanent deployment owner"}},
 		{[]string{"deploy", "vercel", "--help"}, []string{"Usage: agentbox deploy vercel", "does not mutate Vercel"}},
 		{[]string{"login", "--help"}, []string{"Usage: agentbox login", "user-owned credential"}},
 		{[]string{"mcp-url", "--help"}, []string{"Usage: agentbox mcp-url", "user and actor diagnostics"}},
 		{[]string{"connect", "--help"}, []string{"Usage: agentbox connect chatgpt", "user-owned ChatGPT credential"}},
+		{[]string{"connect", "chatgpt", "--help"}, []string{"Usage: agentbox connect chatgpt", "user-owned ChatGPT credential"}},
 		{[]string{"raycast-key", "--help"}, []string{"Usage: agentbox raycast-key <installation-label>", "Raycast"}},
 		{[]string{"keys", "create", "--help"}, []string{"Usage: agentbox keys create <name>", "signed-in profile's user"}},
 		{[]string{"keys", "list", "--help"}, []string{"Usage: agentbox keys list", "signed-in profile's user"}},
@@ -97,6 +99,8 @@ func TestCLIHelpOutput(t *testing.T) {
 		{[]string{"keys", "revoke", "--help"}, []string{"Usage: agentbox keys revoke <credential-id>", "stable ID"}},
 		{[]string{"search", "--help"}, []string{"Usage: agentbox search <query>", "message counts"}},
 		{[]string{"create", "--help"}, []string{"--message <body>", "first message"}},
+		{[]string{"get", "--help"}, []string{"Usage: agentbox get <thr_...|msg_...>", "5,000 body characters", "--full", "-o/--output"}},
+		{[]string{"download", "--help"}, []string{"--attachment <number>", "destination directory", "destination file"}},
 		{[]string{"visibility", "--help"}, []string{"Usage: agentbox visibility <thread-id>", "atomically change", "--share-team"}},
 	}
 	for _, tc := range cases {
@@ -286,7 +290,7 @@ func TestCLIProfilesAndThreadCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("get failed: code=%d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "# CLI thread") || !strings.Contains(out.String(), "hello from cli") || !strings.Contains(out.String(), "Seed · dev") || !strings.Contains(out.String(), "visibility: Private") {
+	if !strings.Contains(out.String(), "# CLI thread") || !strings.Contains(out.String(), "hello from cli") || !strings.Contains(out.String(), "Seed · dev") || !strings.Contains(out.String(), "Visibility: Private") {
 		t.Fatalf("get output = %s", out.String())
 	}
 
@@ -356,6 +360,238 @@ func TestAttributionLabelUsesSnapshotsAndLegacyFallback(t *testing.T) {
 	}
 	if got := attributionLabel(nil, nil, ""); got != "Agentbox user" {
 		t.Fatalf("empty attribution = %q", got)
+	}
+}
+
+func TestCLIGetUsesProgressiveDisclosureAndSafeFileOutput(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	t.Setenv("AGENTBOX_PROFILE", "")
+	t.Setenv("AGENTBOX_PROFILES", "")
+	t.Setenv("AGENTBOX_URL", "")
+
+	largeBody := strings.Repeat("x", 7000)
+	markdown := "text/markdown"
+	pdf := "application/pdf"
+	fixture := thread{
+		ID:        "thr_large",
+		Title:     "Large report",
+		CreatedAt: "2026-08-16T00:00:00.000Z",
+		UpdatedAt: "2026-08-16T00:01:00.000Z",
+		CreatedBy: "Local CLI",
+		Messages: []message{
+			{
+				ID:        "msg_short",
+				ThreadID:  "thr_large",
+				Author:    "Local CLI",
+				Body:      "hello",
+				CreatedAt: "2026-08-16T00:00:00.000Z",
+			},
+			{
+				ID:              "msg_large",
+				ThreadID:        "thr_large",
+				Author:          "Local CLI",
+				Body:            largeBody,
+				BodyContentType: &markdown,
+				CreatedAt:       "2026-08-16T00:01:00.000Z",
+				Assets: []asset{{
+					ID:        "asset_report",
+					FileName:  "report.pdf",
+					MimeType:  &pdf,
+					SizeBytes: 123,
+				}},
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch r.URL.Path {
+		case "/api/threads/thr_large":
+			_ = json.NewEncoder(w).Encode(map[string]any{"thread": fixture})
+		case "/api/messages/msg_large":
+			_ = json.NewEncoder(w).Encode(map[string]any{"message": fixture.Messages[1]})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("AGENTBOX_BASE_URL", server.URL)
+	t.Setenv("AGENTBOX_API_KEY", "dev-key")
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+
+	if code := runner.Run([]string{"get", "thr_large"}); code != 0 {
+		t.Fatalf("thread peek failed: code=%d stderr=%s", code, stderr.String())
+	}
+	threadPeek := out.String()
+	for _, want := range []string{
+		"Body preview: showing 5000 of 7005 characters",
+		"## Message msg_short",
+		"## Message msg_large",
+		"Characters: 7000",
+		"[1] report.pdf · application/pdf · 123 bytes · asset_report",
+		"Showing 4995 of 7000 characters.",
+		"View complete message: agentbox get msg_large --full",
+		"Save complete message: agentbox get msg_large -o message.md",
+	} {
+		if !strings.Contains(threadPeek, want) {
+			t.Fatalf("thread peek missing %q:\n%s", want, threadPeek)
+		}
+	}
+	if strings.Contains(threadPeek, largeBody) {
+		t.Fatal("thread peek dumped the complete large message body")
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "msg_large"}); code != 0 {
+		t.Fatalf("message peek failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Showing 5000 of 7000 characters.") || strings.Contains(out.String(), largeBody) {
+		t.Fatalf("message peek did not stay bounded: %s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "msg_large", "--full"}); code != 0 {
+		t.Fatalf("message full failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), largeBody) || strings.Contains(out.String(), "Showing 5000") {
+		t.Fatalf("message full output was not complete: %s", out.String())
+	}
+
+	messagePath := filepath.Join(t.TempDir(), "report.md")
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "msg_large", "-o", messagePath}); code != 0 {
+		t.Fatalf("message output failed: code=%d stderr=%s", code, stderr.String())
+	}
+	saved, err := os.ReadFile(messagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != largeBody {
+		t.Fatalf("saved message body length=%d, want exact %d", len(saved), len(largeBody))
+	}
+	if strings.Contains(out.String(), largeBody) || !strings.Contains(out.String(), "Saved 1 message (7000 characters, 7000 bytes)") {
+		t.Fatalf("message output summary = %s", out.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "msg_large", "-o", messagePath}); code == 0 {
+		t.Fatal("message output unexpectedly overwrote an existing file")
+	}
+	if !strings.Contains(stderr.String(), "use --force to overwrite") {
+		t.Fatalf("overwrite error = %s", stderr.String())
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "msg_large", "-o", messagePath, "--force"}); code != 0 {
+		t.Fatalf("forced message output failed: code=%d stderr=%s", code, stderr.String())
+	}
+
+	threadPath := filepath.Join(t.TempDir(), "thread.md")
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "thr_large", "-o", threadPath}); code != 0 {
+		t.Fatalf("thread output failed: code=%d stderr=%s", code, stderr.String())
+	}
+	threadFile, err := os.ReadFile(threadPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(threadFile), "## Message `msg_large`") || !strings.Contains(string(threadFile), largeBody) {
+		t.Fatalf("thread output was not complete markdown: %s", string(threadFile))
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"get", "msg_large", "--json"}); code != 0 {
+		t.Fatalf("message json failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), largeBody) {
+		t.Fatal("explicit JSON output did not retain the complete structured message")
+	}
+}
+
+func TestCLIDownloadSelectedAttachmentUsesPeekNumberAndNamedFile(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	t.Setenv("AGENTBOX_PROFILE", "")
+	t.Setenv("AGENTBOX_PROFILES", "")
+	t.Setenv("AGENTBOX_URL", "")
+
+	firstPayload := "first attachment"
+	secondPayload := "second attachment"
+	var server *httptest.Server
+	signedHits := map[string]int{}
+	r2Hits := map[string]int{}
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/threads/thr_selected":
+			w.Header().Set("content-type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"thread": thread{
+				ID: "thr_selected",
+				Messages: []message{{
+					ID: "msg_files",
+					Assets: []asset{
+						{ID: "asset_first", FileName: "first.txt", SizeBytes: int64(len(firstPayload))},
+						{ID: "asset_second", FileName: "second.bin", SizeBytes: int64(len(secondPayload))},
+					},
+				}},
+			}})
+		case "/api/assets/asset_first/download-url":
+			signedHits["first"]++
+			_ = json.NewEncoder(w).Encode(map[string]string{"download_url": server.URL + "/r2/first"})
+		case "/api/assets/asset_second/download-url":
+			signedHits["second"]++
+			_ = json.NewEncoder(w).Encode(map[string]string{"download_url": server.URL + "/r2/second"})
+		case "/r2/first":
+			r2Hits["first"]++
+			_, _ = w.Write([]byte(firstPayload))
+		case "/r2/second":
+			r2Hits["second"]++
+			_, _ = w.Write([]byte(secondPayload))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("AGENTBOX_BASE_URL", server.URL)
+	t.Setenv("AGENTBOX_API_KEY", "dev-key")
+
+	outputPath := filepath.Join(t.TempDir(), "renamed-file.pdf")
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"download", "thr_selected", "--attachment", "2", "-o", outputPath}); code != 0 {
+		t.Fatalf("selected download failed: code=%d stderr=%s stdout=%s", code, stderr.String(), out.String())
+	}
+	saved, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != secondPayload || signedHits["second"] != 1 || r2Hits["second"] != 1 || signedHits["first"] != 0 || r2Hits["first"] != 0 {
+		t.Fatalf("selected download saved=%q signed=%#v r2=%#v", saved, signedHits, r2Hits)
+	}
+	if !strings.Contains(out.String(), "Saved attachment 2 (second.bin, application/octet-stream") || !strings.Contains(out.String(), outputPath) {
+		t.Fatalf("selected download summary = %s", out.String())
+	}
+
+	existingPath := filepath.Join(t.TempDir(), "existing.txt")
+	if err := os.WriteFile(existingPath, []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"download", "thr_selected", "--attachment", "1", "-o", existingPath}); code == 0 {
+		t.Fatal("selected download unexpectedly overwrote an existing file")
+	}
+	if signedHits["first"] != 0 || !strings.Contains(stderr.String(), "use --force to overwrite") {
+		t.Fatalf("overwrite guard signed=%#v stderr=%s", signedHits, stderr.String())
 	}
 }
 

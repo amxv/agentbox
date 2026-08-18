@@ -25,6 +25,10 @@ func TestFilenameMimeAndStorageHelpers(t *testing.T) {
 	if mimeType == nil || *mimeType != "text/plain; charset=utf-8" {
 		t.Fatalf("mime type = %#v", mimeType)
 	}
+	markdownMimeType := InferMimeType("report.md", nil)
+	if markdownMimeType == nil || *markdownMimeType != "text/markdown; charset=utf-8" {
+		t.Fatalf("markdown mime type = %#v", markdownMimeType)
+	}
 	key := MakeStorageKey("usr_1", "thr_1", "message", "report.txt")
 	if !strings.HasPrefix(key, "agentbox/usr_1/thr_1/message/") || !strings.HasSuffix(key, "-report.txt") {
 		t.Fatalf("storage key = %q", key)

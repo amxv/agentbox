@@ -109,6 +109,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/onboarding/connectors/", s.onboardingConnector)
 	s.mux.HandleFunc("/api/threads", s.threads)
 	s.mux.HandleFunc("/api/threads/", s.threadSubroutes)
+	s.mux.HandleFunc("/api/messages/", s.messageSubroutes)
 	s.mux.HandleFunc("/api/public/threads/", s.publicThreadSubroutes)
 	s.mux.HandleFunc("/api/assets/", s.assetSubroutes)
 	s.mux.Handle("/api/mcp", s.mcpHandler())
@@ -1213,6 +1214,27 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request, threadID stri
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
+}
+
+func (s *Server) messageSubroutes(w http.ResponseWriter, r *http.Request) {
+	messageID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/messages/"), "/")
+	if messageID == "" || strings.Contains(messageID, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	authContext, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	message, err := s.service.GetMessage(r.Context(), *authContext, messageID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message": message})
 }
 
 func (s *Server) createUploadIntents(w http.ResponseWriter, r *http.Request, threadID string) {

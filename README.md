@@ -17,7 +17,8 @@ export AGENTBOX_API_KEY="LOCAL_KEY"
 agentbox doctor
 agentbox list
 agentbox get thr_xxx
-agentbox download thr_xxx --output ./inbox
+agentbox get msg_xxx -o report.md
+agentbox download thr_xxx --attachment 1 -o ./inbox/report.pdf
 agentbox post thr_xxx "done — attached the result" --asset result.md
 ```
 
@@ -87,6 +88,10 @@ agentbox search "design"
 agentbox create "Design thread"
 agentbox create "Design thread" --message "Please implement this." --format markdown
 agentbox get thr_xxx
+agentbox get msg_xxx
+agentbox get msg_xxx --full
+agentbox get msg_xxx -o report.md
+agentbox get thr_xxx -o thread.md
 agentbox visibility thr_xxx
 agentbox visibility thr_xxx --share-team engineering --publish
 agentbox visibility thr_xxx --unshare-team engineering --unpublish
@@ -96,9 +101,12 @@ agentbox post thr_xxx --file raw-output.txt --format plain
 agentbox post thr_xxx --file message.md --asset screenshot.png
 agentbox download thr_xxx
 agentbox download thr_xxx --output ./downloads
+agentbox download thr_xxx --attachment 1 --output ./renamed-file.pdf
 ```
 
-`visibility` reads or atomically changes team shares and the revocable public URL. Team flags may be repeated, and `--json` exposes the current shares plus team slugs available to the acting user. `download` gets every attachment linked to the thread. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
+`get` accepts stable `thr_...` and `msg_...` IDs. Human-readable output previews at most about 5,000 message-body characters per invocation and always shows message IDs, sizes, content types, attachment metadata, and exact commands for deliberately reading or saving truncated content. Use `--full` to print complete bodies, or `-o/--output` to write complete content directly to a file without echoing it to stdout. Message files contain the exact body; thread files are readable Markdown. Existing output files require `--force` to overwrite. Explicit `--json` remains the complete structured automation path.
+
+`visibility` reads or atomically changes team shares and the revocable public URL. Team flags may be repeated, and `--json` exposes the current shares plus team slugs available to the acting user. `download` gets every attachment linked to the thread by default. The bounded `get` view numbers attachments, so `download <thread-id> --attachment <number> -o <file>` can fetch exactly one attachment directly to a chosen filename. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
 
 ## Web dashboard
 

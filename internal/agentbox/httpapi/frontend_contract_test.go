@@ -17,6 +17,7 @@ func TestFrontendRequestLifecycleVisibilityAndPaginationContracts(t *testing.T) 
 	assertSourceContains(t, root, "app/share/[token]/public-thread-view.tsx", "asset.preview_path", "Attachment unavailable")
 	assertSourceContains(t, root, "app/owner/users/owner-users-view.tsx", "Load more users", "Load more teams", "Load more credentials", "Load more invitations", "Load more members")
 	assertSourceContains(t, root, "app/api/public/threads/[token]/assets/[assetId]/preview/route.ts", "/preview")
+	assertSourceContains(t, root, "app/api/messages/[messageId]/route.ts", "/api/messages/", "encodeURIComponent(messageId)")
 }
 
 func TestSupersededVisibilityMutationSurfacesAreAbsent(t *testing.T) {

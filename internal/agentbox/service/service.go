@@ -38,6 +38,7 @@ type Repository interface {
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
+	GetMessage(ctx context.Context, userID string, messageID string) (*types.Message, error)
 	ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error)
 	ListOwnerContentThreadsPage(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) (types.OwnerContentThreadPage, error)
 	SearchOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentSearchParams) ([]types.OwnerContentThreadSummary, error)
@@ -286,6 +287,24 @@ func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadI
 		return nil, CodedError{Code: "THREAD_NOT_FOUND", Message: ErrThreadNotFound.Error(), Err: ErrThreadNotFound}
 	}
 	return thread, nil
+}
+
+func (s *Service) GetMessage(ctx context.Context, auth types.AuthContext, messageID string) (*types.Message, error) {
+	if err := requireScope(auth, "threads:read"); err != nil {
+		return nil, err
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return nil, CodedError{Code: "INVALID_ARGUMENT", Message: "message_id is required."}
+	}
+	message, err := s.repo.GetMessage(ctx, auth.UserID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if message == nil {
+		return nil, CodedError{Code: "MESSAGE_NOT_FOUND", Message: "Message not found."}
+	}
+	return message, nil
 }
 
 func (s *Service) GetThreadVisibility(ctx context.Context, auth types.AuthContext, threadID string) (*types.ThreadVisibility, error) {
