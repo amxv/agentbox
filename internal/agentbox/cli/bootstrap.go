@@ -175,11 +175,11 @@ func (r *Runner) runDeployVercel(args []string, globalProfileName string) error 
 		"vercel env add R2_SECRET_ACCESS_KEY production",
 		"vercel env add R2_BUCKET production",
 		"vercel env add AGENTBOX_ENV production",
-		"vercel --prod --yes -A deploy/vercel/backend/vercel.json",
-		"bun run db:migrate",
-		"vercel link --yes --project agentbox",
-		"printf 'https://YOUR-BACKEND.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production",
-		"vercel --prod --yes -A deploy/vercel/dashboard/vercel.json",
+		"vercel --prod --yes -A cmd/api/vercel.json",
+		"go run ./cmd/migrate",
+		"(cd apps/dashboard && vercel link --yes --project agentbox)",
+		"(cd apps/dashboard && printf 'https://YOUR-BACKEND.vercel.app' | vercel env add AGENTBOX_BACKEND_URL production)",
+		"(cd apps/dashboard && vercel --prod --yes)",
 		"agentbox owner setup-token --base-url https://YOUR-BACKEND.vercel.app --app-url https://YOUR-DASHBOARD.vercel.app --admin-key \"$AGENTBOX_ADMIN_KEY\" --expires 30m",
 	}
 	if *jsonOut {

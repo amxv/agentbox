@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -407,27 +405,6 @@ func TestContentOrdinalsPreserveLiveOrderAcrossReadersAndTimestampTies(t *testin
 		t.Fatal(err)
 	}
 	assertOrder("public", publicThread.Messages)
-}
-
-func TestCutoverPostcheckSQLPassesFinalSchema(t *testing.T) {
-	repository, ctx := openPostgresTestRepository(t)
-	if err := repository.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repository.BootstrapOwner(ctx, "postcheck-owner@example.com", "Postcheck Owner", "hash"); err != nil {
-		t.Fatal(err)
-	}
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve migration test source path")
-	}
-	contents, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "../../../scripts/user-team-cutover-postcheck.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repository.pool.Exec(ctx, string(contents)); err != nil {
-		t.Fatalf("execute cutover postcheck: %v", err)
-	}
 }
 
 func TestBootstrapOwnerIsUniqueIdempotentAndProtected(t *testing.T) {

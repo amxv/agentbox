@@ -2253,7 +2253,7 @@ func onboardingCredentialSpec(value string) (connector string, name string, purp
 
 func raycastSetupMaterial(baseURL string, secret string, credentialID string, label string) types.RaycastSetupMaterial {
 	const repositoryURL = "https://github.com/amxv/agentbox.git"
-	const extensionPath = "raycast/agentbox"
+	const extensionPath = "apps/raycast"
 	return types.RaycastSetupMaterial{
 		CredentialID:  credentialID,
 		Label:         label,
@@ -2264,7 +2264,7 @@ func raycastSetupMaterial(baseURL string, secret string, credentialID string, la
 		InstallCommands: []string{
 			"git clone " + repositoryURL,
 			"cd agentbox/" + extensionPath,
-			"npm install",
+			"npm ci",
 			"npm run dev",
 		},
 		Preferences: []types.RaycastSetupPreference{

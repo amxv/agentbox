@@ -1,288 +1,123 @@
 # Agentbox Agent Guide
 
-Short operating guide for agents maintaining and deploying this repo. For the full rollout checklist, read `docs/go-rollout.md`.
+Agentbox is a Go service and CLI with independent web and Raycast clients. Keep component boundaries obvious and use the smallest relevant verification loop while editing, then run the complete suite before shipping cross-cutting work.
 
-## Runtime Shape
-
-Agentbox is split into two Vercel services:
-
-- `agentbox-go`: Go backend for `/api/*`, `/api/mcp`, Postgres, R2 attachments, migrations, and the Go CLI implementation.
-- `agentbox`: Next.js dashboard for `/`, `/threads`, and `/threads/:threadId`. Its `app/api/*` routes are thin proxies to the Go backend.
-
-Production URLs:
+## Repository map
 
 ```text
-Go backend: https://agentbox-backend.ashray.xyz
-Dashboard:  https://agentbox.ashray.xyz
+cmd/api/             Go backend executable and backend deployment config
+cmd/agentbox/        native CLI executable
+cmd/migrate/         explicit database migration command
+internal/agentbox/   canonical product implementation shared by backend and CLI
+migrations/          embedded ordered PostgreSQL migrations
+apps/dashboard/      Next.js user/admin dashboard and current public web surfaces
+apps/raycast/        independent Raycast extension
+packaging/cli/       @amxv/agentbox npm distribution wrapper
+tests/integration/   cross-component dashboard/backend contracts
 ```
 
-The dashboard must have:
+The MCP server is part of the Go backend at `/api/mcp`; it is not a separate service. The dashboard proxies its `/api/*` routes to the Go backend. Raycast and the CLI are API clients of the same backend.
+
+`docs/` is intentionally unused and reserved for a future Astro documentation site. Do not recreate the old repository-docs collection there. Temporary implementation notes may be kept under ignored `tmp/gg/` when useful, but tracked code and agent instructions must not depend on them.
+
+## First setup
+
+```bash
+make setup
+```
+
+This installs the dashboard with Bun and the Raycast extension with npm. Go uses the root `go.mod` directly.
+
+## Verification
+
+For the common backend + dashboard + CLI change loop:
+
+```bash
+make quick
+```
+
+`make quick` runs Go tests/vet/builds, dashboard typechecking, and the dashboard/backend integration contracts. Use narrower checks while iterating when appropriate:
+
+```bash
+make check-backend
+make check-cli
+make check-mcp
+make check-dashboard-fast
+make check-dashboard
+make check-integration
+make check-raycast
+```
+
+Before shipping a cross-cutting change, run:
+
+```bash
+TEST_DATABASE_URL='postgres://...' make check
+```
+
+The full gate requires PostgreSQL and fails if any Go test skips. CI runs the same component commands in parallel. Do not reintroduce source-text guards or repository-layout tests when a behavioral/protocol test can express the contract.
+
+## Development
+
+```bash
+make dev-backend
+make dev-dashboard
+make build-cli
+make migrate
+```
+
+Useful direct commands remain valid. Prefer native component tools inside a component and the Makefile only for cross-component orchestration.
+
+## Deployment ownership
+
+Backend deployment files are colocated with the backend executable:
 
 ```text
-AGENTBOX_BACKEND_URL=https://agentbox-backend.ashray.xyz
+cmd/api/vercel.json
+cmd/api/should-build.mjs
+cmd/api/r2-cors.json
 ```
 
-## Local Checks
+The dashboard owns its own Vercel config:
 
-Run the broad gate before shipping cross-runtime changes:
-
-```bash
-bun run test:parity
-bun run typecheck
-bun run lint
-bun run verify:chatgpt-files
-go test ./...
-go vet ./...
-bun run build:api
-bun run build:cli
+```text
+apps/dashboard/vercel.json
 ```
 
-Builds:
-
-```bash
-bun run build        # Next.js dashboard
-bun run build:api    # Go backend binary at dist/agentbox-api
-bun run build:cli    # Go CLI binary at dist/agentbox
-```
-
-The local global CLI should point at the Go build output:
-
-```bash
-ln -sf "$PWD/dist/agentbox" "$HOME/.local/bin/agentbox"
-agentbox --version
-```
-
-After this, every `bun run build:cli` refreshes the binary used by `agentbox`.
-
-## Deploy Backend
-
-The backend project is `agentbox-go`.
-
-Link or deploy with the backend config:
+Backend deployment from the repository root:
 
 ```bash
 vercel link --yes --project agentbox-go
-vercel --prod --yes -A deploy/vercel/backend/vercel.json
-```
-
-Required production env on `agentbox-go`:
-
-```text
-DATABASE_URL
-AGENTBOX_ADMIN_KEY
-AGENTBOX_APP_PUBLIC_URL
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-AGENTBOX_ENV=production
-```
-
-Optional backend env:
-
-```text
-AGENTBOX_ALLOWED_ORIGINS
-AGENTBOX_AUTO_MIGRATE
-AGENTBOX_DB_POOL_SIZE
-AGENTBOX_MAX_FILE_SIZE_BYTES
-```
-
-Verify backend:
-
-```bash
-curl https://agentbox-backend.ashray.xyz/api/health
-```
-
-Expected:
-
-```json
-{"ok":true,"service":"agentbox"}
-```
-
-## Run Migrations
-
-Run migrations from a trusted shell with backend production env loaded:
-
-```bash
-bun run db:migrate
-```
-
-This runs:
-
-```bash
+vercel --prod --yes -A cmd/api/vercel.json
 go run ./cmd/migrate
 ```
 
-The ordered SQL files under `migrations/` are embedded in the Go binary and are
-the canonical schema history. Applied versions and checksums are recorded in
-`schema_migrations`. Normal repository requests never execute schema DDL.
-
-Do not rely on `AGENTBOX_AUTO_MIGRATE=true` for production by default.
-
-For the user/team production cutover, the migration CLI can stop immediately
-before the irreversible migration:
+Dashboard deployment from its app directory:
 
 ```bash
-bun run db:migrate -- --through 0016 --timeout 5m
-```
-
-After permanent-owner setup succeeds, run the unbounded command to apply
-`0017`. Never bypass the owner prerequisite or hand-edit the removed columns.
-
-## Permanent Owner Setup
-
-The deployment admin secret is not a daily actor credential. Use it only from a
-trusted operator shell to issue a one-time owner bootstrap or recovery link:
-
-```bash
-agentbox owner setup-token \
-  --base-url https://api.agentbox.example.com \
-  --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --expires 30m
-```
-
-Set `AGENTBOX_APP_PUBLIC_URL` on the Go backend to the Next.js dashboard origin when the
-projects are deployed separately. The token is hash-only in PostgreSQL,
-single-use, expiring, and replaced whenever a new token is issued. Recovery is
-restricted to the same permanent owner email. Browser sessions and API keys
-cannot issue setup tokens, and owner API keys never receive owner-browser-only
-authority. See `docs/owner-setup.md`.
-
-## User/team Cutover Backup Preflight
-
-Before any production user/team authorization cutover, run the content backup
-preflight from a trusted machine with production PostgreSQL/R2 env loaded and a
-compatible `pg_dump` installed:
-
-```bash
-bun run backup:preflight -- \
-  --output-dir /secure/off-host/agentbox-backups \
-  --run-id user-team-cutover-YYYY-MM-DD \
-  --source-prefix agentbox/ \
-  --backup-prefix agentbox-recovery/user-team-cutover-YYYY-MM-DD
-```
-
-The command writes `database.dump` and `manifest.json`, copies every referenced
-R2 object to the recovery prefix, and exits non-zero for missing objects, orphaned
-content rows, mismatched sizes, failed copies, or dump failures. Do not continue
-unless the manifest says `"ready": true`. Rerun the same run ID to resume safely.
-
-Read `docs/user-team-sharing-backup-preflight.md` for separate-bucket options,
-manifest semantics, and restore verification. The Zodex machine has no production
-credentials; the real backup and recorded production counts are a credentialed
-local-agent gate.
-
-The complete maintenance-mode, migration, preservation, smoke, reopen, and
-rollback sequence is in `docs/user-team-sharing-production-cutover.md`. Run the
-credential-free branch gate before handing off to the local operator:
-
-```bash
-bun run verify:cutover
-```
-
-That gate performs a clean Raycast package install and runs its contract tests,
-typecheck, native lint, and production build. Real developer-mode import and
-preference entry require a trusted macOS machine and follow
-`docs/raycast-developer-mode-smoke.md`; Zodex must not claim those live checks.
-The same gate runs the exact ChatGPT file-object descriptor, secure downloader,
-R2, HTTP-boundary, and compensation checks. Real connector refresh/Scan Tools
-and “attach the file I just created” verification require ChatGPT host access
-and follow `docs/chatgpt-file-attachment-smoke.md` during Phase 20.
-
-## Invitation-backed Users
-
-After the permanent owner is established, open `/owner/users` in the dashboard
-to create expiring one-time signup links, review invitation history, and
-disable or re-enable non-owner accounts. These endpoints require the owner's
-browser session; deployment secrets and API keys are not accepted.
-
-Disabling a user revokes browser sessions, API credentials, and pending CLI
-login codes in the same transaction while preserving content and attribution.
-Re-enabling does not restore old credentials. See `docs/user-invitations.md`.
-
-## Deployment-global Login
-
-Login is deployment-global and accepts only email and password. Do not add an
-account-partition selector to browser, CLI, API, or profile contracts. Saved
-CLI profiles contain only service, user, actor, and credential metadata.
-
-Normal users can be created only through owner-issued invitations; the
-permanent owner can be established or recovered only through the one-time
-operator token flow. See
-`docs/deployment-global-identity.md`.
-
-## Deploy Dashboard
-
-The dashboard project is `agentbox`.
-
-Make sure the local Vercel link points back to the dashboard project:
-
-```bash
+cd apps/dashboard
 vercel link --yes --project agentbox
+vercel --prod --yes
 ```
 
-Set or replace the backend URL on the dashboard project:
+The dashboard needs `AGENTBOX_BACKEND_URL` pointing to the Go backend. Do not deploy, publish, migrate production, or cut a CLI release unless the user explicitly asks.
+
+## CLI packaging and releases
+
+The Go CLI version is `internal/agentbox/version/version.go`; the npm wrapper is `packaging/cli/package.json`. Build distribution artifacts with:
 
 ```bash
-vercel env rm AGENTBOX_BACKEND_URL production --yes
-printf 'https://agentbox-backend.ashray.xyz' | vercel env add AGENTBOX_BACKEND_URL production
+make package-cli
+npm pack --dry-run ./packaging/cli
 ```
 
-Deploy:
+For an actual release, follow `.agents/skills/agentbox-cli-release/SKILL.md`.
 
-```bash
-vercel --prod --yes -A deploy/vercel/dashboard/vercel.json
-```
+## Change discipline
 
-Verify dashboard and proxy:
-
-```bash
-curl -i https://agentbox.ashray.xyz/threads
-curl -i https://agentbox.ashray.xyz/api/health
-```
-
-The `/api/health` request should return the Go backend health JSON through the dashboard proxy.
-
-## CLI Smoke
-
-Use the stored `ashray` profile for the public product URL:
-
-```bash
-agentbox --profile ashray doctor
-agentbox --profile ashray list
-agentbox --profile ashray get <thread-id>
-agentbox --profile ashray download <thread-id> --output tmp/agentbox-download-smoke --json
-```
-
-If the profile is missing:
-
-```bash
-agentbox profiles add ashray \
-  --base-url https://agentbox.ashray.xyz \
-  --api-key '<valid-api-key>' \
-  --activate
-```
-
-The `doctor` command should pass health, authenticated API, signed download URL, and MCP URL checks.
-
-## Common Failure Modes
-
-- `go: command not found` during Vercel dashboard install: the dashboard package `prepare` script must skip CLI build when `VERCEL=1`.
-- Dashboard `/api/*` returns `AGENTBOX_BACKEND_URL or AGENTBOX_GO_BACKEND_URL must be set`: set `AGENTBOX_BACKEND_URL` on the `agentbox` dashboard project and redeploy.
-- Backend health fails: inspect `agentbox-go` env and deployment logs first.
-- CLI command not found or points to old `dist/index.js`: relink `~/.local/bin/agentbox` to `dist/agentbox`.
-- Attachments larger than Vercel's request/response cap need a direct-to-R2 upload flow; current Vercel multipart uploads must stay below that cap.
-
-## Cleanup
-
-Remove temporary files that may contain env values:
-
-```bash
-rm -rf tmp/*env* tmp/vercel-env-values tmp/agentbox-download-smoke
-```
-
-Keep `main` clean before and after deploy work:
-
-```bash
-git status --short --branch
-```
+- Keep the root Go module as the canonical backend/CLI implementation. Do not add a Go workspace or JS monorepo framework without a concrete need.
+- Keep dashboard dependencies and scripts inside `apps/dashboard`; installing it must not compile the Go CLI.
+- Keep Raycast independent under `apps/raycast`.
+- Keep npm distribution mechanics under `packaging/cli`; generated binaries and copied licenses remain ignored.
+- Preserve migration history. New schema changes get a new ordered migration rather than editing applied migrations.
+- Prefer behavior and protocol contracts over tests that grep source spelling.
+- Keep temporary plans and handoffs out of the product tree.

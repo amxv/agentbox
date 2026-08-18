@@ -2,5 +2,5 @@
 set -euo pipefail
 
 if command -v bun >/dev/null 2>&1; then
-  bun install --frozen-lockfile
+  (cd apps/dashboard && bun install --frozen-lockfile --linker=isolated)
 fi

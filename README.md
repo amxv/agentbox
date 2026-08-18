@@ -1,229 +1,141 @@
 # Agentbox
 
-Agentbox gives ChatGPT and your local coding agents a shared task inbox.
-
-Use it when you want ChatGPT to hand work to Claude Code, Codex, or another local agent without copy-pasting prompts, files, and terminal output back and forth. Each task lives in a thread. Messages, decisions, and attachments stay together.
+Agentbox is a shared threaded inbox for humans, ChatGPT, local coding agents, Raycast, and automation. A Go backend owns the inbox, authentication, sharing, Postgres state, R2 attachments, and MCP surface; the CLI and web clients all speak to that same service.
 
 ```text
-ChatGPT creates a thread → local agent reads it → local agent attaches results → ChatGPT reviews
+ChatGPT creates a thread → local agent works it → results return as messages/files → humans and agents share one history
 ```
 
-## Quickstart
-
-```bash
-export AGENTBOX_BASE_URL="https://your-agentbox.vercel.app"
-export AGENTBOX_API_KEY="LOCAL_KEY"
-
-agentbox doctor
-agentbox list
-agentbox get thr_xxx
-agentbox get msg_xxx -o report.md
-agentbox download thr_xxx --attachment 1 -o ./inbox/report.pdf
-agentbox post thr_xxx "done — attached the result" --asset result.md
-```
-
-## Install the CLI from npm
+## Install the CLI
 
 ```bash
 npm install -g @amxv/agentbox
 agentbox --version
 ```
 
-For reusable local setup, save a named profile instead of exporting variables in every shell:
+Create a reusable profile:
 
 ```bash
 agentbox profiles add prod \
-  --base-url https://your-agentbox.vercel.app \
+  --base-url https://your-agentbox.example \
   --api-key LOCAL_KEY \
   --activate
 ```
 
-If neither environment variables nor a saved profile are configured, the CLI points you to `agentbox profiles add ...`.
-
-## Connect ChatGPT
-
-Provision a dedicated API key for ChatGPT, then add Agentbox as a custom MCP server using this URL format:
-
-```text
-https://your-agentbox.vercel.app/api/mcp?key=CHATGPT_KEY
-```
-
-Available MCP tools:
-
-```text
-list_threads
-search_threads
-get_thread
-read_attachment
-download_attachment
-create_thread
-post_message
-manage_thread_visibility
-```
-
-`get_thread` returns attachment metadata and stable asset IDs without fetching attachment bytes. Use `read_attachment` to read Markdown, text, source code, scripts, logs, and other UTF-8 attachments explicitly; reads default to 64 KiB and return `next_offset` when more content remains. Use `download_attachment` when the original file is needed. It returns one standard short-lived MCP resource link whose bytes transfer directly from R2 rather than through the Agentbox/Vercel response path. Whether an MCP host can materialize that resource into its own filesystem is host-dependent; Agentbox does not add a ChatGPT-specific file bridge. Local clients should use `agentbox download`, which continues to fetch every thread attachment directly from signed R2 URLs. Agentbox does not advertise the attachment inventory through MCP resources, so attachments are fetched only after an agent chooses a specific asset ID.
-
-`create_thread` can include an optional `initial_message` and optional `body_content_type` (`auto`, `text/plain`, or `text/markdown`) to create the first message with the thread. `post_message` auto-detects whether the message body should render as Markdown or plain text. Pass `body_content_type` as `text/markdown` or `text/plain` when the format is known. In ChatGPT, `post_message` can also attach one file artifact through its optional `file` parameter; ChatGPT supplies the authorized structured file value automatically. Generic HTTP clients use multipart or direct uploads instead. After deploying connector schema changes, refresh/recreate the connector and run Scan Tools when available. The credentialed acceptance procedure is [`docs/chatgpt-file-attachment-smoke.md`](docs/chatgpt-file-attachment-smoke.md).
-
-## Connect Raycast
-
-Open **Onboarding** or **Credentials** in the signed-in dashboard and create a dedicated Raycast connection for each local installation. Copy the one-time `baseUrl` and `apiKey`, then load the checked-in extension in Raycast developer mode:
-
-```bash
-git clone https://github.com/amxv/agentbox.git
-cd agentbox/raycast/agentbox
-npm ci
-npm run verify
-npm run dev
-```
-
-Configure the required `baseUrl` and password `apiKey` preferences from the setup bundle. The extension browses/searches the complete accessible inbox, creates private threads, posts ordered attachments, downloads authorized files, and manages team/public visibility through ordinary user APIs. It cannot use the owner-browser-only content viewer. Store publication remains deferred.
-
-## CLI commands
+Common commands:
 
 ```bash
 agentbox doctor
 agentbox list
 agentbox search "design"
-agentbox create "Design thread"
-agentbox create "Design thread" --message "Please implement this." --format markdown
+agentbox create "Design thread" --message "Please implement this."
 agentbox get thr_xxx
-agentbox get msg_xxx
-agentbox get msg_xxx --full
-agentbox get msg_xxx -o report.md
-agentbox get thr_xxx -o thread.md
-agentbox visibility thr_xxx
-agentbox visibility thr_xxx --share-team engineering --publish
-agentbox visibility thr_xxx --unshare-team engineering --unpublish
-agentbox post thr_xxx "Message body"
-agentbox post thr_xxx --file message.md
-agentbox post thr_xxx --file raw-output.txt --format plain
-agentbox post thr_xxx --file message.md --asset screenshot.png
-agentbox download thr_xxx
+agentbox post thr_xxx "done" --asset result.md
 agentbox download thr_xxx --output ./downloads
-agentbox download thr_xxx --attachment 1 --output ./renamed-file.pdf
+agentbox visibility thr_xxx --share-team engineering --publish
 ```
 
-`get` accepts stable `thr_...` and `msg_...` IDs. Human-readable output previews at most about 5,000 message-body characters per invocation and always shows message IDs, sizes, content types, attachment metadata, and exact commands for deliberately reading or saving truncated content. Use `--full` to print complete bodies, or `-o/--output` to write complete content directly to a file without echoing it to stdout. Message files contain the exact body; thread files are readable Markdown. Existing output files require `--force` to overwrite. Explicit `--json` remains the complete structured automation path.
+## Connect ChatGPT
 
-`visibility` reads or atomically changes team shares and the revocable public URL. Team flags may be repeated, and `--json` exposes the current shares plus team slugs available to the acting user. `download` gets every attachment linked to the thread by default. The bounded `get` view numbers attachments, so `download <thread-id> --attachment <number> -o <file>` can fetch exactly one attachment directly to a chosen filename. The CLI only needs `AGENTBOX_BASE_URL` and `AGENTBOX_API_KEY`; Agentbox returns short-lived signed R2 URLs, so file bytes download directly from R2 to the local machine.
+Create a dedicated user-owned key and add Agentbox as a custom MCP server:
+
+```text
+https://your-agentbox.example/api/mcp?key=CHATGPT_KEY
+```
+
+The MCP server is mounted by the Go backend and exposes thread listing/search, reads, creation/posting, visibility management, and explicit attachment read/download tools. ChatGPT can also pass an authorized file artifact to `post_message`; Agentbox fetches it through the guarded downloader and stores the resulting attachment in private R2.
+
+## Connect Raycast
+
+The extension is an independent app in `apps/raycast`:
+
+```bash
+git clone https://github.com/amxv/agentbox.git
+cd agentbox/apps/raycast
+npm ci
+npm run verify
+npm run dev
+```
+
+Create a dedicated Raycast credential from the signed-in dashboard and enter its `baseUrl` and `apiKey` preferences in Raycast.
 
 ## Web dashboard
 
-Agentbox includes a simple browser viewer for inspecting threads and attachments:
+The Next.js application in `apps/dashboard` provides the user inbox, thread views, attachment previews/downloads, onboarding and credential management, plus permanent-owner administration. Its `/api/*` handlers are thin same-origin proxies to the Go backend.
+
+The current app also still serves a few public setup/landing surfaces. A future lightweight site can take those over without changing the backend or dashboard architecture.
+
+## Repository
 
 ```text
-https://your-agentbox.vercel.app/threads
+cmd/api/             Go backend executable + backend deployment config
+cmd/agentbox/        native CLI executable
+cmd/migrate/         database migration command
+internal/agentbox/   backend/CLI implementation
+migrations/          embedded PostgreSQL schema history
+apps/dashboard/      Next.js dashboard
+apps/raycast/        Raycast extension
+packaging/cli/       npm wrapper and platform packaging
+tests/integration/   cross-component contracts
 ```
 
-Create the permanent owner with `agentbox owner setup-token`, then invite every additional user from `/owner/users`. Browser login uses deployment-global email and password with no account-partition selector. The deployment admin key is only for issuing owner setup or recovery links and should never be stored in the dashboard. The unified inbox can filter accessible threads by Private, Shared with me, one of the signed-in user's teams, or active Public state; each card shows its current visibility and stable `User · Actor` attribution. Thread pages use the same attribution snapshots and render Markdown messages with GitHub-flavored tables, fenced code blocks, copy buttons, syntax highlighting for common languages, and inline Mermaid diagrams. Plain-text messages stay in source view.
-
-## API
-
-```text
-GET  /api/health
-GET  /api/auth/me
-GET  /api/me
-GET  /api/assets/:asset_id/download-url
-GET  /api/mcp
-POST /api/mcp
-GET  /api/threads
-POST /api/threads
-GET  /api/threads/:thread_id
-POST /api/threads/:thread_id/messages
-```
+`docs/` is reserved for the future site and is intentionally absent today.
 
 ## Development
 
-```bash
-bun install
-bun run db:migrate
-bun run dev
-bun run typecheck
-bun run lint
-bun run build
-bun run build:cli
-bun run verify:cutover
-```
-
-The active backend and CLI are implemented in Go:
+Install dependencies:
 
 ```bash
-go run ./cmd/api
-go run ./cmd/agentbox doctor
-bun run build:api
-bun run build:cli
-bun run build:cli:all
-bun run build:cli:npm
+make setup
 ```
 
-The Next.js dashboard remains the web frontend. In split-runtime deployments, set `AGENTBOX_BACKEND_URL` on the dashboard service so same-origin `/api/*` dashboard requests proxy to the Go backend. API, MCP, database, R2, migrations, and CLI behavior are owned by the Go code.
-
-## Environment variables
-
-Required on the deployed server:
-
-```text
-DATABASE_URL
-AGENTBOX_ADMIN_KEY
-AGENTBOX_ENV=production
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-```
-
-Optional:
-
-```text
-AGENTBOX_ALLOWED_ORIGINS
-AGENTBOX_AUTO_MIGRATE
-AGENTBOX_DB_POOL_SIZE
-AGENTBOX_MAX_FILE_SIZE_BYTES
-AGENTBOX_MAINTENANCE_BYPASS_KEY
-```
-
-Direct-upload clients must calculate the lowercase hexadecimal SHA-256 digest
-of each file before requesting an upload intent. Send `file_name`, optional
-`mime_type`, exact `size_bytes`, and `sha256` to
-`POST /api/threads/:threadId/uploads`, PUT the unchanged bytes with the returned
-signed headers, then finalize the message with the returned `upload_id`. The
-presigned URL writes only to a temporary staging key. Authorized finalization
-verifies length, MIME type, SHA-256 metadata/checksum, and source ETag before a
-conditional copy to a new content-addressed final key; only that final key is
-persisted as the attachment. Replaying the original PUT URL can therefore alter
-or recreate only the staging object, never the canonical attachment.
-
-Expired, rejected, abandoned, and stale-finalization objects are drained in
-bounded exact-key cleanup passes. Normal upload traffic performs a small
-opportunistic pass. A trusted operator can drain a larger batch with
-`POST /api/admin/uploads/cleanup?limit=100` and the
-`x-agentbox-maintenance-key` header. The maintenance key is a deployment
-operator secret, not a user credential, and the endpoint never accepts an
-object prefix or caller-supplied storage key.
-
-Credentials are owned by one user, hashed in Postgres, independently attributable, and shown only once on creation. The permanent-owner browser can inspect deployment-wide credential metadata and force-revoke any credential from `/owner/users`, but secrets are never recoverable. Disabling a user revokes sessions, credentials, and pending CLI codes and removes every team membership in one transaction without deleting that user's threads, messages, assets, shares, or attribution snapshots. Enabling the account does not restore any of those access paths. After the backend and dashboard are deployed and migrated, issue the permanent-owner setup link:
+For the normal backend + dashboard + CLI iteration loop:
 
 ```bash
-agentbox owner setup-token \
-  --base-url https://youragentbox-api.vercel.app \
-  --app-url https://youragentbox.vercel.app \
-  --admin-key "$AGENTBOX_ADMIN_KEY" \
-  --expires 30m
+make quick
 ```
 
-After a non-owner user is disabled, the owner browser can separately purge that user's uploaded attachment objects from `/owner/users`. Purge runs in bounded, resumable batches using each asset's exact stored R2 key. Thread/message rows, filenames, and attribution remain as tombstones; authenticated and public readers display `Attachment deleted by deployment owner` and receive no download or preview URL. Attachments uploaded by other users are never selected merely because they appear in the disabled user's threads.
+Useful targeted gates:
 
-The permanent-owner browser also has a separate read-only deployment content viewer at `/owner/content`. It can list, search, and inspect every thread, including another user's private threads, with optional user and team filters and non-purged attachment downloads. This bypass is intentionally isolated from the normal inbox and API authorization path: ordinary users, MCP/CLI/API credentials, owner API keys, and the deployment admin secret cannot use it, and the owner viewer exposes no posting, upload, or visibility controls.
+```bash
+make check-backend
+make check-cli
+make check-mcp
+make check-dashboard-fast
+make check-dashboard
+make check-integration
+make check-raycast
+```
 
-Production upgrades to the user/team model must follow [`docs/user-team-sharing-production-cutover.md`](docs/user-team-sharing-production-cutover.md). It defines the verified backup gate, maintenance mode, the migration stop at `0016`, permanent-owner setup, irreversible migration `0017`, postcheck SQL, smoke matrix, and full-restore rollback procedure.
+Run the complete repository gate before shipping cross-cutting changes:
 
-Use `agentbox login` for browser-assisted profile creation on each machine. A logged-in profile belongs to one user and can create or revoke that user's separate ChatGPT, Raycast, local, and automation credentials. There is no account-partition selector or deployment-wide daily credential.
+```bash
+TEST_DATABASE_URL='postgres://...' make check
+```
 
-## Docs
+The full gate requires PostgreSQL and rejects skipped Go tests. Run `make help` for the complete command surface.
 
-- [`public/setup-self-host.md`](public/setup-self-host.md)
-- [`docs/user-team-sharing-spec.md`](docs/user-team-sharing-spec.md)
-- [`docs/owner-setup.md`](docs/owner-setup.md)
-- [`docs/user-invitations.md`](docs/user-invitations.md)
-- [`docs/user-team-sharing-production-cutover.md`](docs/user-team-sharing-production-cutover.md)
+Local services:
+
+```bash
+make dev-backend
+make dev-dashboard
+make migrate
+make build-cli
+```
+
+## Deployment
+
+The backend is deployed from the root Go module with `cmd/api/vercel.json`. The dashboard is deployed from `apps/dashboard` and owns `apps/dashboard/vercel.json`.
+
+```bash
+# backend, from repo root
+vercel --prod --yes -A cmd/api/vercel.json
+go run ./cmd/migrate
+
+# dashboard
+cd apps/dashboard
+vercel --prod --yes
+```
+
+Set `AGENTBOX_BACKEND_URL` on the dashboard deployment to the backend origin. Backend production configuration uses Postgres plus private R2 storage; the deployment admin key is reserved for permanent-owner setup/recovery rather than normal user or integration access.

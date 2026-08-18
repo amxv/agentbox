@@ -13,15 +13,14 @@ any step runs because GitHub cannot assign a hosted runner.
 
 - Repository: `https://github.com/amxv/agentbox`
 - Go CLI version: `internal/agentbox/version/version.go`
-- npm wrapper version: `npm/agentbox/package.json`
+- npm wrapper version: `packaging/cli/package.json`
 - npm package: `@amxv/agentbox`
 - Release tag: `agentbox-cli-vX.Y.Z`
 - Publish workflow: `.github/workflows/publish-agentbox-npm.yml`
 - Release commit: `chore: release agentbox cli X.Y.Z`
 
-Do not bump the root `package.json` version. It belongs to the private dashboard
-package. The preparation script requires the Go and npm CLI versions to match.
-The generated files under `npm/agentbox/vendor/` are ignored build artifacts and
+The dashboard has its own private package under `apps/dashboard`; do not change its version for CLI releases. The preparation script requires the Go and npm CLI versions to match.
+The generated files under `packaging/cli/vendor/` are ignored build artifacts and
 must not be committed.
 
 The publish workflow runs CLI tests, builds five binaries, packs and publishes
@@ -49,7 +48,7 @@ git fetch origin --tags
 git pull --ff-only origin main
 git tag --list 'agentbox-cli-v*' --sort=-version:refname | head -20
 gh release list --repo amxv/agentbox --limit 10
-node -p "require('./npm/agentbox/package.json').version"
+node -p "require('./packaging/cli/package.json').version"
 npm view @amxv/agentbox version dist-tags --json
 ```
 
@@ -61,16 +60,16 @@ the CLI source and tests relevant to the release, then run the release checks:
 go test ./internal/agentbox/cli ./internal/agentbox/profiles
 go test ./...
 go vet ./...
-node ./scripts/prepare-agentbox-npm.mjs
-npm pack --dry-run ./npm/agentbox
-npm/agentbox/vendor/darwin-arm64/agentbox --version
+node ./packaging/cli/prepare.mjs
+npm pack --dry-run ./packaging/cli
+packaging/cli/vendor/darwin-arm64/agentbox --version
 ```
 
 The dry-run must show the shim, installer, README, license, metadata, and all
 five platform binaries. If the release includes visibility work, also verify:
 
 ```bash
-npm/agentbox/vendor/darwin-arm64/agentbox visibility --help
+packaging/cli/vendor/darwin-arm64/agentbox visibility --help
 ```
 
 ### 2. Bump and push `main`
@@ -79,15 +78,15 @@ Use `apply_patch` to update exactly these two files to the same version:
 
 ```text
 internal/agentbox/version/version.go
-npm/agentbox/package.json
+packaging/cli/package.json
 ```
 
 Check the contract and diff, then commit and push `main`:
 
 ```bash
-node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("npm/agentbox/package.json","utf8")); const v=fs.readFileSync("internal/agentbox/version/version.go","utf8").match(/Version = "([^"]+)"/)[1]; if (p.version !== v) process.exit(1); console.log(v)'
+node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("packaging/cli/package.json","utf8")); const v=fs.readFileSync("internal/agentbox/version/version.go","utf8").match(/Version = "([^"]+)"/)[1]; if (p.version !== v) process.exit(1); console.log(v)'
 git diff --check
-git add internal/agentbox/version/version.go npm/agentbox/package.json
+git add internal/agentbox/version/version.go packaging/cli/package.json
 git commit -m "chore: release agentbox cli X.Y.Z"
 git push origin main
 ```
@@ -162,24 +161,24 @@ from the same prepared binaries. Do not create a replacement tag.
 Prepare a temporary, explicit artifact directory:
 
 ```bash
-node ./scripts/prepare-agentbox-npm.mjs
+node ./packaging/cli/prepare.mjs
 release_tmp="$(mktemp -d /tmp/agentbox-release.XXXXXX)"
-npm pack ./npm/agentbox --pack-destination "$release_tmp"
+npm pack ./packaging/cli --pack-destination "$release_tmp"
 VERSION=X.Y.Z
-tar -C npm/agentbox/vendor/darwin-arm64 -czf "$release_tmp/agentbox-${VERSION}-darwin-arm64.tar.gz" agentbox
-tar -C npm/agentbox/vendor/darwin-amd64 -czf "$release_tmp/agentbox-${VERSION}-darwin-amd64.tar.gz" agentbox
-tar -C npm/agentbox/vendor/linux-arm64 -czf "$release_tmp/agentbox-${VERSION}-linux-arm64.tar.gz" agentbox
-tar -C npm/agentbox/vendor/linux-amd64 -czf "$release_tmp/agentbox-${VERSION}-linux-amd64.tar.gz" agentbox
-(cd npm/agentbox/vendor/windows-amd64 && zip -q "$release_tmp/agentbox-${VERSION}-windows-amd64.zip" agentbox.exe)
+tar -C packaging/cli/vendor/darwin-arm64 -czf "$release_tmp/agentbox-${VERSION}-darwin-arm64.tar.gz" agentbox
+tar -C packaging/cli/vendor/darwin-amd64 -czf "$release_tmp/agentbox-${VERSION}-darwin-amd64.tar.gz" agentbox
+tar -C packaging/cli/vendor/linux-arm64 -czf "$release_tmp/agentbox-${VERSION}-linux-arm64.tar.gz" agentbox
+tar -C packaging/cli/vendor/linux-amd64 -czf "$release_tmp/agentbox-${VERSION}-linux-amd64.tar.gz" agentbox
+(cd packaging/cli/vendor/windows-amd64 && zip -q "$release_tmp/agentbox-${VERSION}-windows-amd64.zip" agentbox.exe)
 ```
 
 The scoped package tarball is named `amxv-agentbox-X.Y.Z.tgz`. Before publishing
 it, verify the package version, a built binary, and npm authentication:
 
 ```bash
-test "$(node -p "require('./npm/agentbox/package.json').version")" = "$VERSION"
-npm/agentbox/vendor/darwin-arm64/agentbox --version
-npm/agentbox/vendor/darwin-arm64/agentbox visibility --help
+test "$(node -p "require('./packaging/cli/package.json').version")" = "$VERSION"
+packaging/cli/vendor/darwin-arm64/agentbox --version
+packaging/cli/vendor/darwin-arm64/agentbox visibility --help
 npm whoami
 if npm view "@amxv/agentbox@$VERSION" >/dev/null 2>&1; then echo "version already exists" >&2; exit 1; fi
 ```
@@ -219,7 +218,7 @@ Trash when available and report that the manual fallback was used.
 
 - Never reuse an existing npm version or tag.
 - Never expose `NPM_TOKEN` or other secrets in commands, logs, or messages.
-- Never commit `npm/agentbox/vendor/` or other generated binaries.
+- Never commit `packaging/cli/vendor/` or other generated binaries.
 - If npm succeeded but GitHub Release creation failed, reconcile the release
   assets without republishing npm.
 - If GitHub Release creation succeeded but an asset is missing, upload the

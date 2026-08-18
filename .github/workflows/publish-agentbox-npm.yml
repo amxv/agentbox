@@ -30,10 +30,10 @@ jobs:
       - name: Verify CLI version matches release tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('npm/agentbox/package.json', 'utf8')).version")
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('packaging/cli/package.json', 'utf8')).version")
           TAG_VERSION="${GITHUB_REF_NAME#agentbox-cli-v}"
           if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
-            echo "npm/agentbox/package.json version ($PACKAGE_VERSION) does not match tag version ($TAG_VERSION)."
+            echo "packaging/cli/package.json version ($PACKAGE_VERSION) does not match tag version ($TAG_VERSION)."
             exit 1
           fi
 
@@ -41,25 +41,25 @@ jobs:
         run: go test ./internal/agentbox/cli ./internal/agentbox/profiles
 
       - name: Build npm release artifacts
-        run: node ./scripts/prepare-agentbox-npm.mjs
+        run: node ./packaging/cli/prepare.mjs
 
       - name: Pack npm package
-        run: npm pack ./npm/agentbox
+        run: npm pack ./packaging/cli
 
       - name: Prepare GitHub release assets
         run: |
-          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('npm/agentbox/package.json', 'utf8')).version")
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('packaging/cli/package.json', 'utf8')).version")
           mkdir -p release-assets
           cp "amxv-agentbox-${PACKAGE_VERSION}.tgz" "release-assets/amxv-agentbox-${PACKAGE_VERSION}.tgz"
-          tar -C npm/agentbox/vendor/darwin-arm64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-darwin-arm64.tar.gz" agentbox
-          tar -C npm/agentbox/vendor/darwin-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-darwin-amd64.tar.gz" agentbox
-          tar -C npm/agentbox/vendor/linux-arm64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-arm64.tar.gz" agentbox
-          tar -C npm/agentbox/vendor/linux-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-amd64.tar.gz" agentbox
-          cd npm/agentbox/vendor/windows-amd64
+          tar -C packaging/cli/vendor/darwin-arm64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-darwin-arm64.tar.gz" agentbox
+          tar -C packaging/cli/vendor/darwin-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-darwin-amd64.tar.gz" agentbox
+          tar -C packaging/cli/vendor/linux-arm64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-arm64.tar.gz" agentbox
+          tar -C packaging/cli/vendor/linux-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-amd64.tar.gz" agentbox
+          cd packaging/cli/vendor/windows-amd64
           zip -q "../../../../release-assets/agentbox-${PACKAGE_VERSION}-windows-amd64.zip" agentbox.exe
 
       - name: Publish npm package
-        working-directory: npm/agentbox
+        working-directory: packaging/cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
@@ -69,7 +69,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('npm/agentbox/package.json', 'utf8')).version")
+          PACKAGE_VERSION=$(node -p "JSON.parse(require('node:fs').readFileSync('packaging/cli/package.json', 'utf8')).version")
           gh release create "$GITHUB_REF_NAME" \
             release-assets/* \
             --title "Agentbox CLI v${PACKAGE_VERSION}" \

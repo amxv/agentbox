@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": [
+    "iad1"
+  ],
+  "installCommand": "bun install --frozen-lockfile --linker=isolated",
+  "buildCommand": "bun run build",
+  "ignoreCommand": "node should-build.mjs"
+}
