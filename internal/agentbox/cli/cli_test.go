@@ -121,6 +121,33 @@ func TestCLIHelpOutput(t *testing.T) {
 	}
 }
 
+func TestCLIPlainHTTPErrorIsReadable(t *testing.T) {
+	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
+	t.Setenv("AGENTBOX_PROFILE", "")
+	t.Setenv("AGENTBOX_PROFILES", "")
+	t.Setenv("AGENTBOX_URL", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "page not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+	t.Setenv("AGENTBOX_BASE_URL", server.URL)
+	t.Setenv("AGENTBOX_API_KEY", "dev-key")
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
+	if code := runner.Run([]string{"get", "msg_missing"}); code == 0 {
+		t.Fatal("plain HTTP 404 unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr.String(), "Request failed with HTTP 404: page not found") {
+		t.Fatalf("plain HTTP error = %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "invalid character") {
+		t.Fatalf("plain HTTP error leaked JSON decoder failure: %q", stderr.String())
+	}
+}
+
 func TestCLIRequiresEnvOrProfileWithActionableMessage(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	t.Setenv("AGENTBOX_BASE_URL", "")

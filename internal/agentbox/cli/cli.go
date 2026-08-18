@@ -421,11 +421,6 @@ func (r *Runner) request(path string, method string, body io.Reader, headers map
 	if err != nil {
 		return err
 	}
-	if len(bytes) > 0 {
-		if err := json.Unmarshal(bytes, target); err != nil {
-			return err
-		}
-	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var payload struct {
 			Error string `json:"error"`
@@ -438,7 +433,20 @@ func (r *Runner) request(path string, method string, body io.Reader, headers map
 			}
 			return errors.New(payload.Error)
 		}
+		bodyText := strings.TrimSpace(string(bytes))
+		if bodyText != "" {
+			const maxErrorBodyCharacters = 500
+			if utf8.RuneCountInString(bodyText) > maxErrorBodyCharacters {
+				bodyText = firstRunes(bodyText, maxErrorBodyCharacters) + "…"
+			}
+			return fmt.Errorf("Request failed with HTTP %d: %s", res.StatusCode, bodyText)
+		}
 		return fmt.Errorf("Request failed with HTTP %d", res.StatusCode)
+	}
+	if len(bytes) > 0 {
+		if err := json.Unmarshal(bytes, target); err != nil {
+			return fmt.Errorf("Could not decode successful HTTP %d response as JSON: %w", res.StatusCode, err)
+		}
 	}
 	return nil
 }
