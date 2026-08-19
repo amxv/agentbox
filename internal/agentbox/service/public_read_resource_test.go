@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"agentbox/internal/agentbox/assets"
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/types"
 )
@@ -72,7 +71,7 @@ type observedHeadStore struct {
 	beforeHead func()
 }
 
-func (s *observedHeadStore) HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error) {
+func (s *observedHeadStore) HeadAssetObject(ctx context.Context, storageKey string) (assets.ObjectMetadata, error) {
 	s.headCalls.Add(1)
 	if s.beforeHead != nil {
 		s.beforeHead()

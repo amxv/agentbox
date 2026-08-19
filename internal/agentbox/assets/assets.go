@@ -13,11 +13,9 @@ import (
 	"net/url"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/config"
 	agenttypes "agentbox/internal/agentbox/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -65,22 +63,21 @@ type PresignedUploadParams struct {
 }
 
 type AssetStore interface {
-	backup.ObjectStore
 	UploadAssetBytes(ctx context.Context, params UploadBytesParams) (agenttypes.NewAsset, error)
 	CreatePresignedAssetUploadURL(ctx context.Context, params PresignedUploadParams) (agenttypes.PresignedUpload, error)
 	CreateSignedAssetDownloadURL(ctx context.Context, params SignedURLParams) (string, error)
-	HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error)
+	HeadAssetObject(ctx context.Context, storageKey string) (ObjectMetadata, error)
 	ReadAssetObjectRange(ctx context.Context, params ReadAssetRangeParams) ([]byte, error)
-	CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error)
+	CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (ObjectMetadata, error)
 	DeleteAssetObject(ctx context.Context, storageKey string) error
 	UploadChatGPTFile(ctx context.Context, userID string, threadID string, input ChatGPTFileInput) (agenttypes.NewAsset, error)
 }
 
 var ErrObjectChanged = errors.New("asset object changed")
 
-func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
+func (s *R2Store) headObject(ctx context.Context, bucket string, key string) (ObjectMetadata, error) {
 	if strings.TrimSpace(bucket) == "" {
-		return backup.ObjectMetadata{}, errors.New("R2 bucket is required")
+		return ObjectMetadata{}, errors.New("R2 bucket is required")
 	}
 	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket:       aws.String(bucket),
@@ -89,11 +86,11 @@ func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (ba
 	})
 	if err != nil {
 		if isObjectNotFound(err) {
-			return backup.ObjectMetadata{}, fmt.Errorf("%w: r2://%s/%s", backup.ErrObjectNotFound, bucket, key)
+			return ObjectMetadata{}, fmt.Errorf("%w: r2://%s/%s", ErrObjectNotFound, bucket, key)
 		}
-		return backup.ObjectMetadata{}, err
+		return ObjectMetadata{}, err
 	}
-	return backup.ObjectMetadata{
+	return ObjectMetadata{
 		Bucket:         bucket,
 		Key:            key,
 		SizeBytes:      aws.ToInt64(output.ContentLength),
@@ -105,47 +102,9 @@ func (s *R2Store) HeadObject(ctx context.Context, bucket string, key string) (ba
 	}, nil
 }
 
-func (s *R2Store) ListObjects(ctx context.Context, bucket string, prefix string) ([]backup.ObjectMetadata, error) {
-	if strings.TrimSpace(bucket) == "" {
-		return nil, errors.New("R2 bucket is required")
-	}
-	objects := []backup.ObjectMetadata{}
-	var continuationToken *string
-	for {
-		output, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(bucket),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: continuationToken,
-		})
-		if err != nil {
-			return nil, err
-		}
-		for _, object := range output.Contents {
-			objects = append(objects, backup.ObjectMetadata{
-				Bucket:       bucket,
-				Key:          aws.ToString(object.Key),
-				SizeBytes:    aws.ToInt64(object.Size),
-				ETag:         normalizeETag(aws.ToString(object.ETag)),
-				LastModified: object.LastModified,
-			})
-		}
-		if !aws.ToBool(output.IsTruncated) {
-			break
-		}
-		if output.NextContinuationToken == nil || aws.ToString(output.NextContinuationToken) == "" {
-			return nil, errors.New("R2 object listing was truncated without a continuation token")
-		}
-		continuationToken = output.NextContinuationToken
-	}
-	sort.Slice(objects, func(i, j int) bool {
-		return objects[i].Key < objects[j].Key
-	})
-	return objects, nil
-}
-
-func (s *R2Store) CopyObject(ctx context.Context, request backup.CopyObjectRequest) (backup.ObjectMetadata, error) {
+func (s *R2Store) copyObject(ctx context.Context, request copyObjectRequest) (ObjectMetadata, error) {
 	if strings.TrimSpace(request.SourceBucket) == "" || strings.TrimSpace(request.DestinationBucket) == "" {
-		return backup.ObjectMetadata{}, errors.New("source and destination R2 buckets are required")
+		return ObjectMetadata{}, errors.New("source and destination R2 buckets are required")
 	}
 	input := &s3.CopyObjectInput{
 		Bucket:     aws.String(request.DestinationBucket),
@@ -156,9 +115,9 @@ func (s *R2Store) CopyObject(ctx context.Context, request backup.CopyObjectReque
 		input.CopySourceIfMatch = aws.String(`"` + normalizeETag(request.ExpectedETag) + `"`)
 	}
 	if _, err := s.client.CopyObject(ctx, input); err != nil {
-		return backup.ObjectMetadata{}, err
+		return ObjectMetadata{}, err
 	}
-	return s.HeadObject(ctx, request.DestinationBucket, request.DestinationKey)
+	return s.headObject(ctx, request.DestinationBucket, request.DestinationKey)
 }
 
 type ChatGPTFileInput struct {
@@ -335,11 +294,11 @@ func (s *R2Store) CreateSignedAssetDownloadURL(ctx context.Context, params Signe
 	return out.URL, nil
 }
 
-func (s *R2Store) HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error) {
+func (s *R2Store) HeadAssetObject(ctx context.Context, storageKey string) (ObjectMetadata, error) {
 	if strings.TrimSpace(s.cfg.R2Bucket) == "" {
-		return backup.ObjectMetadata{}, errors.New("R2_BUCKET is required for asset inspection.")
+		return ObjectMetadata{}, errors.New("R2_BUCKET is required for asset inspection.")
 	}
-	return s.HeadObject(ctx, s.cfg.R2Bucket, strings.TrimSpace(storageKey))
+	return s.headObject(ctx, s.cfg.R2Bucket, strings.TrimSpace(storageKey))
 }
 
 func (s *R2Store) ReadAssetObjectRange(ctx context.Context, params ReadAssetRangeParams) ([]byte, error) {
@@ -371,7 +330,7 @@ func (s *R2Store) ReadAssetObjectRange(ctx context.Context, params ReadAssetRang
 	output, err := s.client.GetObject(ctx, input)
 	if err != nil {
 		if isObjectNotFound(err) {
-			return nil, fmt.Errorf("%w: r2://%s/%s", backup.ErrObjectNotFound, s.cfg.R2Bucket, storageKey)
+			return nil, fmt.Errorf("%w: r2://%s/%s", ErrObjectNotFound, s.cfg.R2Bucket, storageKey)
 		}
 		if isObjectChanged(err) {
 			return nil, fmt.Errorf("%w: r2://%s/%s", ErrObjectChanged, s.cfg.R2Bucket, storageKey)
@@ -389,11 +348,11 @@ func (s *R2Store) ReadAssetObjectRange(ctx context.Context, params ReadAssetRang
 	return contents, nil
 }
 
-func (s *R2Store) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
+func (s *R2Store) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (ObjectMetadata, error) {
 	if strings.TrimSpace(s.cfg.R2Bucket) == "" {
-		return backup.ObjectMetadata{}, errors.New("R2_BUCKET is required for asset copies.")
+		return ObjectMetadata{}, errors.New("R2_BUCKET is required for asset copies.")
 	}
-	return s.CopyObject(ctx, backup.CopyObjectRequest{
+	return s.copyObject(ctx, copyObjectRequest{
 		SourceBucket:      s.cfg.R2Bucket,
 		SourceKey:         strings.TrimSpace(sourceStorageKey),
 		DestinationBucket: s.cfg.R2Bucket,

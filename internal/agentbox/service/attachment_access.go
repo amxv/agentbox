@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"agentbox/internal/agentbox/assets"
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/types"
 	"agentbox/internal/agentbox/validate"
 )
@@ -211,7 +210,7 @@ func (s *Service) readAttachmentRange(ctx context.Context, asset types.Asset, ex
 		MaxBytes:     maxBytes,
 		ExpectedETag: expectedETag,
 	})
-	if errors.Is(err, backup.ErrObjectNotFound) {
+	if errors.Is(err, assets.ErrObjectNotFound) {
 		return nil, CodedError{Code: "ATTACHMENT_UNAVAILABLE", Message: "Attachment unavailable because its stored object is missing.", Err: err}
 	}
 	if errors.Is(err, assets.ErrObjectChanged) {

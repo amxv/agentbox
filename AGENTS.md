@@ -18,6 +18,13 @@ tests/integration/   cross-component dashboard/backend contracts
 
 The MCP server is part of the Go backend at `/api/mcp`; it is not a separate service. The dashboard proxies its `/api/*` routes to the Go backend. Raycast and the CLI are API clients of the same backend.
 
+Within the Go implementation, follow the domain filenames instead of starting from a giant catch-all file:
+
+- `internal/agentbox/db/repository_*.go` contains PostgreSQL behavior by domain (`threads`, `uploads`, `credentials`, `accounts`, `teams`); the matching `memory_*.go` files mirror those behaviors for the in-memory repository. `repository_helpers.go` owns shared row scanners/value helpers, while `repository.go` owns the shared repository core.
+- `internal/agentbox/service/{threads,uploads,credentials,accounts,sessions}.go` contains product behavior; `service.go` owns the repository contract, shared types, and cross-domain helpers.
+- `internal/agentbox/httpapi/server_{threads,credentials,auth,owner}.go` contains HTTP handlers; `server.go` owns routing, middleware, parsing/error helpers, and response shaping.
+- Large Go tests are split by the same durable behavior areas. Prefer adding a test beside the behavior it exercises rather than growing a generic test file.
+
 `docs/` is intentionally unused and reserved for a future Astro documentation site. Do not recreate the old repository-docs collection there. Temporary implementation notes may be kept under ignored `tmp/gg/` when useful, but tracked code and agent instructions must not depend on them.
 
 ## First setup

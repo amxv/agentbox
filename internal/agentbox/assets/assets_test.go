@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/config"
 )
 
@@ -186,13 +185,11 @@ func TestR2PresignedUploadBindsActualLengthTypeAndSHA256AtStorageBoundary(t *tes
 	}
 }
 
-func TestFakeStoreObjectMaintenance(t *testing.T) {
+func TestFakeStoreObjectFinalizationPrimitives(t *testing.T) {
 	store := &FakeStore{}
 	store.PutObject("primary", "agentbox/a.bin", 3, `"etag-a"`)
-	store.PutObject("primary", "agentbox/b.bin", 5, "etag-b")
-	store.PutObject("other", "agentbox/c.bin", 7, "etag-c")
 
-	object, err := store.HeadObject(context.Background(), "primary", "agentbox/a.bin")
+	object, err := store.headObject(context.Background(), "primary", "agentbox/a.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,15 +197,7 @@ func TestFakeStoreObjectMaintenance(t *testing.T) {
 		t.Fatalf("unexpected object metadata: %#v", object)
 	}
 
-	objects, err := store.ListObjects(context.Background(), "primary", "agentbox/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(objects) != 2 || objects[0].Key != "agentbox/a.bin" || objects[1].Key != "agentbox/b.bin" {
-		t.Fatalf("unexpected object inventory: %#v", objects)
-	}
-
-	copied, err := store.CopyObject(context.Background(), backup.CopyObjectRequest{
+	copied, err := store.copyObject(context.Background(), copyObjectRequest{
 		SourceBucket:      "primary",
 		SourceKey:         "agentbox/a.bin",
 		DestinationBucket: "recovery",
@@ -225,11 +214,11 @@ func TestFakeStoreObjectMaintenance(t *testing.T) {
 		t.Fatalf("copy calls = %d, want 1", len(store.CopyCalls))
 	}
 
-	_, err = store.HeadObject(context.Background(), "primary", "agentbox/missing.bin")
-	if !errors.Is(err, backup.ErrObjectNotFound) {
+	_, err = store.headObject(context.Background(), "primary", "agentbox/missing.bin")
+	if !errors.Is(err, ErrObjectNotFound) {
 		t.Fatalf("HeadObject error = %v, want ErrObjectNotFound", err)
 	}
-	_, err = store.CopyObject(context.Background(), backup.CopyObjectRequest{
+	_, err = store.copyObject(context.Background(), copyObjectRequest{
 		SourceBucket:      "primary",
 		SourceKey:         "agentbox/a.bin",
 		DestinationBucket: "recovery",

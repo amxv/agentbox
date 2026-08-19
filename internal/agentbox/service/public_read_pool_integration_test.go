@@ -13,7 +13,6 @@ import (
 
 	"agentbox/internal/agentbox/assets"
 	authpkg "agentbox/internal/agentbox/auth"
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/config"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/types"
@@ -29,12 +28,12 @@ type deliberatelySlowAssetStore struct {
 	headCalls atomic.Int32
 }
 
-func (s *deliberatelySlowAssetStore) HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error) {
+func (s *deliberatelySlowAssetStore) HeadAssetObject(ctx context.Context, storageKey string) (assets.ObjectMetadata, error) {
 	s.headCalls.Add(1)
 	select {
 	case <-time.After(s.delay):
 	case <-ctx.Done():
-		return backup.ObjectMetadata{}, ctx.Err()
+		return assets.ObjectMetadata{}, ctx.Err()
 	}
 	return s.FakeStore.HeadAssetObject(ctx, storageKey)
 }

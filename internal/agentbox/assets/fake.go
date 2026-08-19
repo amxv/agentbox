@@ -6,13 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/types"
 )
 
@@ -22,14 +20,13 @@ type FakeStore struct {
 	Uploads          []types.NewAsset
 	ChatGPTInputs    []ChatGPTFileInput
 	ChatGPTFailure   error
-	Buckets          map[string]map[string]backup.ObjectMetadata
+	Buckets          map[string]map[string]ObjectMetadata
 	ObjectBytes      map[string]map[string][]byte
-	CopyCalls        []backup.CopyObjectRequest
+	CopyCalls        []copyObjectRequest
 	DeleteCalls      []string
 	ReadCalls        []ReadAssetRangeParams
 	SignedURLCalls   []SignedURLParams
 	HeadFailures     map[string]error
-	ListFailures     map[string]error
 	CopyFailures     map[string]error
 	DeleteFailures   map[string]error
 	ReadFailures     map[string]error
@@ -64,7 +61,7 @@ func (f *FakeStore) UploadAssetBytes(_ context.Context, params UploadBytesParams
 	f.ensureBucket(bucket)
 	f.ensureByteBucket(bucket)
 	now := time.Now().UTC()
-	f.Buckets[bucket][storageKey] = backup.ObjectMetadata{Bucket: bucket, Key: storageKey, SizeBytes: asset.SizeBytes, ETag: digestHex, ContentType: asset.MimeType, Metadata: map[string]string{"agentbox-sha256": digestHex}, LastModified: &now}
+	f.Buckets[bucket][storageKey] = ObjectMetadata{Bucket: bucket, Key: storageKey, SizeBytes: asset.SizeBytes, ETag: digestHex, ContentType: asset.MimeType, Metadata: map[string]string{"agentbox-sha256": digestHex}, LastModified: &now}
 	f.ObjectBytes[bucket][storageKey] = append([]byte(nil), params.Bytes...)
 	hook := f.AfterUpload
 	f.mutex.Unlock()
@@ -79,7 +76,7 @@ func (f *FakeStore) PutObject(bucket string, key string, sizeBytes int64, etag s
 	defer f.mutex.Unlock()
 	f.ensureBucket(bucket)
 	now := time.Now().UTC()
-	f.Buckets[bucket][key] = backup.ObjectMetadata{
+	f.Buckets[bucket][key] = ObjectMetadata{
 		Bucket:       bucket,
 		Key:          key,
 		SizeBytes:    sizeBytes,
@@ -105,7 +102,7 @@ func (f *FakeStore) PutAssetObjectWithSHA(key string, sizeBytes int64, contentTy
 	if strings.TrimSpace(digestHex) != "" {
 		metadata["agentbox-sha256"] = strings.ToLower(strings.TrimSpace(digestHex))
 	}
-	f.Buckets[bucket][key] = backup.ObjectMetadata{
+	f.Buckets[bucket][key] = ObjectMetadata{
 		Bucket:       bucket,
 		Key:          key,
 		SizeBytes:    sizeBytes,
@@ -128,7 +125,7 @@ func (f *FakeStore) PutAssetBytes(key string, contents []byte, contentType *stri
 	f.ensureBucket(bucket)
 	f.ensureByteBucket(bucket)
 	now := time.Now().UTC()
-	f.Buckets[bucket][key] = backup.ObjectMetadata{
+	f.Buckets[bucket][key] = ObjectMetadata{
 		Bucket:       bucket,
 		Key:          key,
 		SizeBytes:    int64(len(contents)),
@@ -140,50 +137,32 @@ func (f *FakeStore) PutAssetBytes(key string, contents []byte, contentType *stri
 	f.ObjectBytes[bucket][key] = append([]byte(nil), contents...)
 }
 
-func (f *FakeStore) HeadObject(_ context.Context, bucket string, key string) (backup.ObjectMetadata, error) {
+func (f *FakeStore) headObject(_ context.Context, bucket string, key string) (ObjectMetadata, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	if err := f.HeadFailures[failureKey(bucket, key)]; err != nil {
-		return backup.ObjectMetadata{}, err
+		return ObjectMetadata{}, err
 	}
 	objects := f.Buckets[bucket]
 	object, ok := objects[key]
 	if !ok {
-		return backup.ObjectMetadata{}, fmtObjectNotFound(bucket, key)
+		return ObjectMetadata{}, fmtObjectNotFound(bucket, key)
 	}
 	return object, nil
 }
 
-func (f *FakeStore) ListObjects(_ context.Context, bucket string, prefix string) ([]backup.ObjectMetadata, error) {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	if err := f.ListFailures[bucket]; err != nil {
-		return nil, err
-	}
-	objects := []backup.ObjectMetadata{}
-	for key, object := range f.Buckets[bucket] {
-		if strings.HasPrefix(key, prefix) {
-			objects = append(objects, object)
-		}
-	}
-	sort.Slice(objects, func(i, j int) bool {
-		return objects[i].Key < objects[j].Key
-	})
-	return objects, nil
-}
-
-func (f *FakeStore) CopyObject(_ context.Context, request backup.CopyObjectRequest) (backup.ObjectMetadata, error) {
+func (f *FakeStore) copyObject(_ context.Context, request copyObjectRequest) (ObjectMetadata, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 	if err := f.CopyFailures[failureKey(request.DestinationBucket, request.DestinationKey)]; err != nil {
-		return backup.ObjectMetadata{}, err
+		return ObjectMetadata{}, err
 	}
 	source, ok := f.Buckets[request.SourceBucket][request.SourceKey]
 	if !ok {
-		return backup.ObjectMetadata{}, fmtObjectNotFound(request.SourceBucket, request.SourceKey)
+		return ObjectMetadata{}, fmtObjectNotFound(request.SourceBucket, request.SourceKey)
 	}
 	if request.ExpectedETag != "" && normalizeETag(request.ExpectedETag) != source.ETag {
-		return backup.ObjectMetadata{}, errors.New("source ETag changed before copy")
+		return ObjectMetadata{}, errors.New("source ETag changed before copy")
 	}
 	f.ensureBucket(request.DestinationBucket)
 	f.ensureByteBucket(request.DestinationBucket)
@@ -258,12 +237,12 @@ func (f *FakeStore) CreateSignedAssetDownloadURL(_ context.Context, params Signe
 	return u.String(), nil
 }
 
-func (f *FakeStore) HeadAssetObject(ctx context.Context, storageKey string) (backup.ObjectMetadata, error) {
+func (f *FakeStore) HeadAssetObject(ctx context.Context, storageKey string) (ObjectMetadata, error) {
 	bucket := f.AssetBucket
 	if bucket == "" {
 		bucket = "assets"
 	}
-	return f.HeadObject(ctx, bucket, storageKey)
+	return f.headObject(ctx, bucket, storageKey)
 }
 
 func (f *FakeStore) ReadAssetObjectRange(_ context.Context, params ReadAssetRangeParams) ([]byte, error) {
@@ -320,12 +299,12 @@ func (f *FakeStore) ReadAssetObjectRange(_ context.Context, params ReadAssetRang
 	return result, nil
 }
 
-func (f *FakeStore) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
+func (f *FakeStore) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (ObjectMetadata, error) {
 	bucket := f.AssetBucket
 	if bucket == "" {
 		bucket = "assets"
 	}
-	return f.CopyObject(ctx, backup.CopyObjectRequest{
+	return f.copyObject(ctx, copyObjectRequest{
 		SourceBucket:      bucket,
 		SourceKey:         sourceStorageKey,
 		DestinationBucket: bucket,
@@ -402,10 +381,10 @@ func (e *tooLargeError) Error() string {
 
 func (f *FakeStore) ensureBucket(bucket string) {
 	if f.Buckets == nil {
-		f.Buckets = make(map[string]map[string]backup.ObjectMetadata)
+		f.Buckets = make(map[string]map[string]ObjectMetadata)
 	}
 	if f.Buckets[bucket] == nil {
-		f.Buckets[bucket] = make(map[string]backup.ObjectMetadata)
+		f.Buckets[bucket] = make(map[string]ObjectMetadata)
 	}
 }
 
@@ -423,5 +402,5 @@ func failureKey(bucket string, key string) string {
 }
 
 func fmtObjectNotFound(bucket string, key string) error {
-	return errors.Join(backup.ErrObjectNotFound, errors.New("r2://"+bucket+"/"+key))
+	return errors.Join(ErrObjectNotFound, errors.New("r2://"+bucket+"/"+key))
 }

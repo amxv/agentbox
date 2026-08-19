@@ -1071,7 +1071,7 @@ func TestCLIAdminKeyManagementIsDisabled(t *testing.T) {
 	runner := &Runner{Stdout: &out, Stderr: &stderr, Stdin: bytes.NewReader(nil), HTTPClient: server.Client()}
 
 	if code := runner.Run([]string{"keys", "create", "builder", "--base-url", server.URL, "--admin-key", "adm"}); code == 0 {
-		t.Fatalf("legacy admin key creation unexpectedly succeeded: stdout=%s", out.String())
+		t.Fatalf("removed admin key creation unexpectedly succeeded: stdout=%s", out.String())
 	}
 	if !strings.Contains(stderr.String(), "--admin-key and --base-url are no longer supported") {
 		t.Fatalf("stderr = %s", stderr.String())

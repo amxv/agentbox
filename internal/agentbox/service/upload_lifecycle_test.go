@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"agentbox/internal/agentbox/assets"
-	"agentbox/internal/agentbox/backup"
 	"agentbox/internal/agentbox/db"
 	"agentbox/internal/agentbox/types"
 )
@@ -22,10 +21,10 @@ type failOnceCopyStore struct {
 	remainingFailures int
 }
 
-func (s *failOnceCopyStore) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (backup.ObjectMetadata, error) {
+func (s *failOnceCopyStore) CopyAssetObject(ctx context.Context, sourceStorageKey string, destinationStorageKey string, expectedETag string) (assets.ObjectMetadata, error) {
 	if s.remainingFailures > 0 {
 		s.remainingFailures--
-		return backup.ObjectMetadata{}, errors.New("simulated copy outage")
+		return assets.ObjectMetadata{}, errors.New("simulated copy outage")
 	}
 	return s.FakeStore.CopyAssetObject(ctx, sourceStorageKey, destinationStorageKey, expectedETag)
 }
@@ -201,12 +200,12 @@ func TestPresignedUploadReplayCannotMutateCanonicalAttachmentAcrossLifecycleTran
 		if err != nil || purge.Purged != 1 || !purge.Complete {
 			t.Fatalf("purge=%#v err=%v", purge, err)
 		}
-		if _, err := store.HeadAssetObject(t.Context(), finalKey); !errors.Is(err, backup.ErrObjectNotFound) {
+		if _, err := store.HeadAssetObject(t.Context(), finalKey); !errors.Is(err, assets.ErrObjectNotFound) {
 			t.Fatalf("purged canonical object still exists: %v", err)
 		}
 		replayType := "application/octet-stream"
 		store.PutAssetObjectWithSHA(fixture.upload.StorageKey, fixture.upload.SizeBytes+9, &replayType, strings.Repeat("e", 64))
-		if _, err := store.HeadAssetObject(t.Context(), finalKey); !errors.Is(err, backup.ErrObjectNotFound) {
+		if _, err := store.HeadAssetObject(t.Context(), finalKey); !errors.Is(err, assets.ErrObjectNotFound) {
 			t.Fatalf("staging replay recreated purged canonical object: %v", err)
 		}
 		if len(repo.Assets) != 1 || repo.Assets[0].PurgedAt == nil || repo.Assets[0].StorageKey != finalKey {
@@ -265,7 +264,7 @@ func TestImmutableUploadBoundaryCleanupRetryQuotaAndIdentity(t *testing.T) {
 		if err != nil || cleanup.Cleaned != 1 || cleanup.Failed != 0 {
 			t.Fatalf("cleanup retry=%#v err=%v", cleanup, err)
 		}
-		if _, err := store.HeadAssetObject(t.Context(), stagingKey); !errors.Is(err, backup.ErrObjectNotFound) {
+		if _, err := store.HeadAssetObject(t.Context(), stagingKey); !errors.Is(err, assets.ErrObjectNotFound) {
 			t.Fatalf("cleanup did not remove exact staging key: %v", err)
 		}
 		repeated, err := svc.CleanupPendingUploads(t.Context(), 100)
@@ -299,7 +298,7 @@ func TestImmutableUploadBoundaryCleanupRetryQuotaAndIdentity(t *testing.T) {
 		if err != nil || cleanup.Attempted != 1 || cleanup.Cleaned != 1 {
 			t.Fatalf("abandoned cleanup=%#v err=%v", cleanup, err)
 		}
-		if _, err := store.HeadAssetObject(t.Context(), uploads[0].StorageKey); !errors.Is(err, backup.ErrObjectNotFound) {
+		if _, err := store.HeadAssetObject(t.Context(), uploads[0].StorageKey); !errors.Is(err, assets.ErrObjectNotFound) {
 			t.Fatalf("abandoned staging object survived cleanup: %v", err)
 		}
 		repeated, err := svc.CleanupPendingUploads(t.Context(), 1)
@@ -385,7 +384,7 @@ func TestImmutableUploadBoundaryCleanupRetryQuotaAndIdentity(t *testing.T) {
 		if repo.Pending[0].Status != "pending" || repo.Pending[0].FinalizationToken != "" || repo.Pending[0].FinalStorageKey != "" || repo.Pending[0].FinalizationStartedAt != nil {
 			t.Fatalf("stale claim was not released: %#v", repo.Pending[0])
 		}
-		if _, err := store.HeadAssetObject(t.Context(), staleFinalKey); !errors.Is(err, backup.ErrObjectNotFound) {
+		if _, err := store.HeadAssetObject(t.Context(), staleFinalKey); !errors.Is(err, assets.ErrObjectNotFound) {
 			t.Fatalf("stale final candidate survived cleanup: %v", err)
 		}
 		if _, err := store.HeadAssetObject(t.Context(), uploads[0].StorageKey); err != nil {

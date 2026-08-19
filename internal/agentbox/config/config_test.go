@@ -65,10 +65,10 @@ func TestLoadFromEnvAuthSettings(t *testing.T) {
 
 func TestLoadFromEnvMaintenanceSettings(t *testing.T) {
 	t.Setenv("AGENTBOX_MAINTENANCE_MODE", "true")
-	t.Setenv("AGENTBOX_MAINTENANCE_BYPASS_KEY", "  cutover-secret  ")
+	t.Setenv("AGENTBOX_MAINTENANCE_BYPASS_KEY", "  maintenance-secret  ")
 
 	cfg := LoadFromEnv()
-	if !cfg.MaintenanceMode || cfg.MaintenanceBypassKey != "cutover-secret" {
+	if !cfg.MaintenanceMode || cfg.MaintenanceBypassKey != "maintenance-secret" {
 		t.Fatalf("maintenance config = %#v", cfg)
 	}
 }

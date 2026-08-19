@@ -2,9 +2,7 @@ package db
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	migrationfiles "agentbox/migrations"
@@ -21,42 +19,14 @@ type appliedMigration struct {
 // Migrate applies every checked-in SQL migration exactly once. Migration files
 // are immutable after application; checksum drift is treated as an error.
 func (r *Repository) Migrate(ctx context.Context) error {
-	return r.migrateThrough(ctx, "")
-}
-
-// MigrateThrough applies canonical migrations through one exact checked-in
-// version. It is used by the production cutover to stop immediately before the
-// owner-required point-of-no-return migration.
-func (r *Repository) MigrateThrough(ctx context.Context, maxVersion string) error {
-	maxVersion = strings.TrimSpace(maxVersion)
-	if maxVersion == "" {
-		return errors.New("migration version is required")
-	}
-	return r.migrateThrough(ctx, maxVersion)
-}
-
-// migrateThrough applies migrations up to and including maxVersion. An empty
-// maxVersion applies the full checked-in set. The bounded form exists so the
-// legacy-fixture test can prove the explicit owner-setup boundary immediately
-// before the irreversible tenant-removal migration.
-func (r *Repository) migrateThrough(ctx context.Context, maxVersion string) error {
 	migrations, err := migrationfiles.Load()
 	if err != nil {
 		return err
 	}
-	if maxVersion != "" {
-		found := false
-		for _, migration := range migrations {
-			if migration.Version == maxVersion {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("unknown migration version %q", maxVersion)
-		}
-	}
+	return r.applyMigrations(ctx, migrations)
+}
 
+func (r *Repository) applyMigrations(ctx context.Context, migrations []migrationfiles.Migration) error {
 	connection, err := r.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire migration connection: %w", err)
@@ -89,9 +59,6 @@ create table if not exists schema_migrations (
 	}
 
 	for _, migration := range migrations {
-		if maxVersion != "" && migration.Version > maxVersion {
-			break
-		}
 		if existing, ok := applied[migration.Version]; ok {
 			if existing.Name != migration.Name || existing.Checksum != migration.Checksum {
 				return fmt.Errorf(
