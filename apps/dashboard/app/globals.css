@@ -326,7 +326,10 @@ html:has([data-panel-root]) {
 
 [data-panel-root] [data-slot="toggle"][aria-pressed="true"],
 [data-panel-root] [data-slot="toggle"][data-state="on"],
-[data-panel-root] [data-slot="toggle"][data-pressed] {
+[data-panel-root] [data-slot="toggle"][data-pressed],
+[data-panel-root] [data-slot="toggle-group-item"][aria-pressed="true"],
+[data-panel-root] [data-slot="toggle-group-item"][data-state="on"],
+[data-panel-root] [data-slot="toggle-group-item"][data-pressed] {
   border-color: var(--panel-active-border);
   background: var(--panel-active-bg);
   color: var(--panel-active-foreground);
@@ -334,7 +337,10 @@ html:has([data-panel-root]) {
 
 [data-panel-root] [data-slot="toggle"][aria-pressed="true"] svg,
 [data-panel-root] [data-slot="toggle"][data-state="on"] svg,
-[data-panel-root] [data-slot="toggle"][data-pressed] svg {
+[data-panel-root] [data-slot="toggle"][data-pressed] svg,
+[data-panel-root] [data-slot="toggle-group-item"][aria-pressed="true"] svg,
+[data-panel-root] [data-slot="toggle-group-item"][data-state="on"] svg,
+[data-panel-root] [data-slot="toggle-group-item"][data-pressed] svg {
   color: currentColor;
   stroke: currentColor;
 }
