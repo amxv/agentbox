@@ -184,7 +184,7 @@ html:has([data-panel-root]) {
 
 .panel-nav-shell {
   border-bottom: 1px solid var(--border);
-  background: color-mix(in oklch, var(--background), transparent 7%);
+  background: var(--background);
   backdrop-filter: blur(18px) saturate(120%);
 }
 
