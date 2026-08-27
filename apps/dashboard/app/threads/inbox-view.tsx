@@ -51,9 +51,13 @@ type ThreadPageInfo = {
 };
 
 const initialThreadPage: ThreadPageInfo = { limit: 50, has_more: false };
+const visiblePollIntervalMs = 30_000;
+const searchedPollIntervalMs = 60_000;
+const fullRefreshAfterInactiveMs = 15_000;
+const autoRefreshDedupMs = 1_000;
 
-function threadQuery(filter: InboxFilter, searchQuery: string, cursor?: string) {
-  const query = new URLSearchParams({ limit: "50" });
+function threadQuery(filter: InboxFilter, searchQuery: string, cursor?: string, limit = 50) {
+  const query = new URLSearchParams({ limit: String(limit) });
   if (filter.startsWith("team:")) {
     query.set("filter", "team");
     query.set("team", filter.slice("team:".length));
@@ -68,6 +72,10 @@ function threadQuery(filter: InboxFilter, searchQuery: string, cursor?: string) 
 function appendUniqueThreads(current: Thread[], incoming: Thread[]) {
   const seen = new Set(current.map((thread) => thread.id));
   return [...current, ...incoming.filter((thread) => !seen.has(thread.id))];
+}
+
+function threadVersion(thread?: Thread) {
+  return thread ? `${thread.id}:${thread.updated_at}` : "";
 }
 
 function visibilityLabels(thread: Thread) {
@@ -102,6 +110,11 @@ export function InboxView() {
   const [error, setError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const requestGeneration = useRef(0);
+  const latestThreadVersion = useRef("");
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const latestCheckInFlight = useRef<Promise<void> | null>(null);
+  const inactiveSince = useRef<number | null>(null);
+  const lastAutoRefreshAt = useRef(0);
 
   const loadThreads = useCallback(async function loadThreads(signal: AbortSignal, generation: number) {
     setLoading(true);
@@ -145,6 +158,128 @@ export function InboxView() {
       controller.abort();
     };
   }, [loadThreads]);
+
+  useEffect(() => {
+    latestThreadVersion.current = threadVersion(threads[0]);
+  }, [threads]);
+
+  const refreshThreadsSilently = useCallback(() => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const generation = requestGeneration.current;
+    const query = threadQuery(activeFilter, submittedQuery);
+    const refresh = (async () => {
+      try {
+        const response = await fetch(`/api/threads?${query.toString()}`, { cache: "no-store" });
+        if (response.status === 401) {
+          router.replace("/login?next=/threads");
+          return;
+        }
+        const data = await response.json();
+        if (!response.ok || generation !== requestGeneration.current) return;
+        setThreads(data.threads ?? []);
+        setThreadPage(data.page ?? initialThreadPage);
+      } catch {
+        // Auto-refresh is best-effort. Keep the last good inbox visible on transient failures.
+      } finally {
+        refreshInFlight.current = null;
+      }
+    })();
+    refreshInFlight.current = refresh;
+    return refresh;
+  }, [activeFilter, router, submittedQuery]);
+
+  const checkLatestThread = useCallback(() => {
+    if (latestCheckInFlight.current || refreshInFlight.current) {
+      return latestCheckInFlight.current ?? refreshInFlight.current ?? Promise.resolve();
+    }
+    const generation = requestGeneration.current;
+    const query = threadQuery(activeFilter, submittedQuery, undefined, 1);
+    const check = (async () => {
+      try {
+        const response = await fetch(`/api/threads?${query.toString()}`, { cache: "no-store" });
+        if (response.status === 401) {
+          router.replace("/login?next=/threads");
+          return;
+        }
+        const data = await response.json();
+        if (!response.ok || generation !== requestGeneration.current) return;
+        if (threadVersion(data.threads?.[0]) !== latestThreadVersion.current) {
+          await refreshThreadsSilently();
+        }
+      } catch {
+        // A later poll/focus event will retry without surfacing background network noise.
+      } finally {
+        latestCheckInFlight.current = null;
+      }
+    })();
+    latestCheckInFlight.current = check;
+    return check;
+  }, [activeFilter, refreshThreadsSilently, router, submittedQuery]);
+
+  useEffect(() => {
+    let pollTimer: number | null = null;
+
+    function stopPolling() {
+      if (pollTimer !== null) window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    function startPolling() {
+      stopPolling();
+      if (document.hidden || !document.hasFocus()) return;
+      pollTimer = window.setInterval(() => {
+        void checkLatestThread();
+      }, submittedQuery ? searchedPollIntervalMs : visiblePollIntervalMs);
+    }
+
+    function markInactive() {
+      if (inactiveSince.current === null) inactiveSince.current = Date.now();
+      stopPolling();
+    }
+
+    function refreshOnReturn() {
+      if (document.hidden || !document.hasFocus()) return;
+      const now = Date.now();
+      const inactiveFor = inactiveSince.current === null ? 0 : now - inactiveSince.current;
+      inactiveSince.current = null;
+      startPolling();
+      if (now - lastAutoRefreshAt.current < autoRefreshDedupMs) return;
+      lastAutoRefreshAt.current = now;
+      if (inactiveFor >= fullRefreshAfterInactiveMs) {
+        void refreshThreadsSilently();
+      } else {
+        void checkLatestThread();
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.hidden) markInactive();
+      else refreshOnReturn();
+    }
+
+    function handlePageShow(event: PageTransitionEvent) {
+      if (event.persisted) {
+        lastAutoRefreshAt.current = Date.now();
+        void refreshThreadsSilently();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", markInactive);
+    window.addEventListener("focus", refreshOnReturn);
+    window.addEventListener("online", refreshOnReturn);
+    window.addEventListener("pageshow", handlePageShow);
+    startPolling();
+
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", markInactive);
+      window.removeEventListener("focus", refreshOnReturn);
+      window.removeEventListener("online", refreshOnReturn);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [checkLatestThread, refreshThreadsSilently, submittedQuery]);
 
   async function loadMoreThreads() {
     const cursor = threadPage.next_cursor;
