@@ -156,7 +156,16 @@ export function ThreadView({ threadId }: { threadId: string }) {
       const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/view`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-      setThread(data.thread);
+      const nextThread = data.thread as Thread;
+      setThread(nextThread);
+      setExpandedMessages((current) => {
+        const next = new Set<string>();
+        for (const message of nextThread.messages) {
+          if (current.has(message.id)) next.add(message.id);
+        }
+        if (nextThread.messages.length === 1) next.add(nextThread.messages[0].id);
+        return next;
+      });
       setAssetResolutions({});
       setMarkdownPreviewBodies({});
       setMarkdownPreviewErrors({});

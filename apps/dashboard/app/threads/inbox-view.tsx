@@ -11,13 +11,19 @@ import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput
+} from "@/components/ui/input-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { MessageComposer } from "../components/message-composer";
-import { AuthContext, fetchSession } from "../components/session";
+import { fetchSession } from "../components/session";
 import { createDashboardThread, postDashboardMessage } from "../components/agentbox-write";
 import { attributionLabel } from "../components/attribution";
-import { MetricStrip, MonoValue, PanelHeader, PanelMain, SectionIntro } from "../components/panel-shell";
+import { MonoValue, PanelMain, SectionIntro } from "../components/panel-shell";
 
 type Thread = {
   id: string;
@@ -95,7 +101,6 @@ function formatDate(value: string) {
 
 export function InboxView() {
   const router = useRouter();
-  const [auth, setAuth] = useState<AuthContext | null>(null);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadPage, setThreadPage] = useState<ThreadPageInfo>(initialThreadPage);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -125,7 +130,6 @@ export function InboxView() {
         router.replace("/login?next=/threads");
         return;
       }
-      setAuth(session);
       const query = threadQuery(activeFilter, submittedQuery);
       const [response, teamsResponse] = await Promise.all([
         fetch(`/api/threads?${query.toString()}`, { cache: "no-store", signal }),
@@ -362,29 +366,88 @@ export function InboxView() {
   }
 
   return (
-      <PanelMain>
-        <PanelHeader
-          title="Threads that belong to you."
-          description="Private work you own and every thread shared with one of your teams, in one quiet, searchable-by-context queue."
-          actions={
-            <Button type="button" onClick={() => setShowCreateComposer((value) => !value)}>
+      <PanelMain className="gap-5 py-5 sm:py-6 lg:gap-6 lg:py-7">
+        <section className="grid gap-2.5" aria-label="Thread controls">
+          <form onSubmit={submitSearch}>
+            <InputGroup className="h-9 bg-card">
+              <InputGroupAddon>
+                <SearchIcon />
+              </InputGroupAddon>
+              <InputGroupInput
+                id="thread-search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search threads"
+                aria-label="Search thread titles and message bodies"
+                type="search"
+              />
+              {searchQuery || submittedQuery ? (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label="Clear search"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSearch("");
+                    }}
+                  >
+                    <XIcon />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              ) : null}
+            </InputGroup>
+          </form>
+
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0 flex-1 overflow-x-auto pb-px">
+              <ToggleGroup
+                aria-label="Inbox filters"
+                className="min-w-max"
+                value={[activeFilter]}
+                variant="outline"
+                size="sm"
+                spacing={0}
+                onValueChange={(value) => {
+                  const next = value[0] as InboxFilter | undefined;
+                  if (next) selectFilter(next);
+                }}
+              >
+                {([
+                  ["all", "All"],
+                  ["private", "Private"],
+                  ["shared", "Shared with me"],
+                  ["public", "Public"]
+                ] as const).map(([value, label]) => (
+                  <ToggleGroupItem value={value} key={value}>{label}</ToggleGroupItem>
+                ))}
+                {teams.map((team) => (
+                  <ToggleGroupItem value={`team:${team.id}`} key={team.id}>{team.name}</ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+            <Button
+              className="shrink-0"
+              size="sm"
+              type="button"
+              onClick={() => setShowCreateComposer((value) => !value)}
+            >
               {showCreateComposer ? <XIcon data-icon="inline-start" /> : <PlusIcon data-icon="inline-start" />}
-              {showCreateComposer ? "Close composer" : "Create thread"}
+              {showCreateComposer ? "Close" : "Create thread"}
             </Button>
-          }
-          aside={
-            <MetricStrip
-              items={[
-                { label: "Loaded", value: threads.length, detail: submittedQuery ? `matching “${submittedQuery}”` : "threads in this filter" },
-                {
-                  label: "Latest activity",
-                  value: latestUpdatedAt ? formatDate(new Date(latestUpdatedAt).toISOString()) : "None",
-                  detail: auth ? attributionLabel(auth.user_display_name, auth.actor_name) : "Resolving session"
-                }
-              ]}
-            />
-          }
-        />
+          </div>
+
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[0.68rem] text-muted-foreground">
+            <span>{loading ? "Loading threads" : `${threads.length} loaded`}</span>
+            <span aria-hidden="true">·</span>
+            <span>{latestUpdatedAt ? `Latest activity ${formatDate(new Date(latestUpdatedAt).toISOString())}` : "No activity loaded"}</span>
+            {submittedQuery ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="max-w-full truncate">Search: “{submittedQuery}”</span>
+              </>
+            ) : null}
+          </div>
+        </section>
 
         {showCreateComposer ? (
           <section className="grid gap-6" aria-label="Create thread">
@@ -438,76 +501,6 @@ export function InboxView() {
             ) : null}
           </section>
         ) : null}
-
-        <Card>
-          <CardHeader className="border-b">
-            <SectionIntro
-              className="border-0 px-0 pb-0"
-              eyebrow="Browse"
-              title="Search and filter accessible threads"
-              description="Search titles and message bodies inside the selected visibility filter. Authorization and filtering stay server-side."
-            />
-          </CardHeader>
-          <CardContent className="grid gap-5">
-            <Field>
-              <FieldLabel htmlFor="thread-search">Search threads</FieldLabel>
-              <form className="flex min-w-0 gap-2" onSubmit={submitSearch}>
-                <Input
-                  id="thread-search"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Titles and message bodies"
-                  type="search"
-                />
-                <Button type="submit">
-                  <SearchIcon data-icon="inline-start" />
-                  Search
-                </Button>
-                {submittedQuery ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    aria-label="Clear search"
-                    onClick={() => {
-                      setSearchQuery("");
-                      setSearch("");
-                    }}
-                  >
-                    <XIcon />
-                  </Button>
-                ) : null}
-              </form>
-              <FieldDescription>Search stays active when you switch between All, Private, Shared with me, Public, and team filters.</FieldDescription>
-            </Field>
-            <div className="overflow-x-auto pb-1">
-              <ToggleGroup
-                aria-label="Inbox filters"
-                className="min-w-max"
-                value={[activeFilter]}
-                variant="outline"
-                size="lg"
-                spacing={0}
-                onValueChange={(value) => {
-                  const next = value[0] as InboxFilter | undefined;
-                  if (next) selectFilter(next);
-                }}
-              >
-                {([
-                  ["all", "All"],
-                  ["private", "Private"],
-                  ["shared", "Shared with me"],
-                  ["public", "Public"]
-                ] as const).map(([value, label]) => (
-                  <ToggleGroupItem value={value} key={value}>{label}</ToggleGroupItem>
-                ))}
-                {teams.map((team) => (
-                  <ToggleGroupItem value={`team:${team.id}`} key={team.id}>{team.name}</ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </div>
-          </CardContent>
-        </Card>
 
         <section className="grid gap-5" aria-label="Agentbox threads">
           {loading ? <ThreadListSkeleton /> : null}
