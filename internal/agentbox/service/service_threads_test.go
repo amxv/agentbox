@@ -388,7 +388,7 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created.Public || created.PublicLink == nil || !strings.HasPrefix(created.PublicLink.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.PublicLink.Token || created.PublicLink.TokenHash == "" || created.PublicLink.TokenHash == created.PublicLink.Token {
+	if !created.Public || created.PublicLink == nil || !strings.HasPrefix(created.PublicLink.Token, "agpub_") || created.PublicURL != "https://agentbox.example/share/"+created.PublicLink.Token || created.PublicMarkdownURL != "https://agentbox.example/share/"+created.PublicLink.Token+".md" || created.PublicLink.TokenHash == "" || created.PublicLink.TokenHash == created.PublicLink.Token {
 		t.Fatalf("created visibility=%#v", created)
 	}
 	createdToken := created.PublicLink.Token
@@ -397,7 +397,7 @@ func TestPublicThreadLinksAreHashedRevocableAndTokenScoped(t *testing.T) {
 		t.Fatalf("idempotent publish=%#v err=%v", idempotent, err)
 	}
 	metadata, err := svc.ManageThreadVisibility(context.Background(), ownerAuth, thread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{})
-	if err != nil || metadata.PublicLink == nil || metadata.PublicLink.TokenPrefix == "" || metadata.PublicURL == "" {
+	if err != nil || metadata.PublicLink == nil || metadata.PublicLink.TokenPrefix == "" || metadata.PublicURL == "" || metadata.PublicMarkdownURL == "" {
 		t.Fatalf("public metadata=%#v err=%v", metadata, err)
 	}
 

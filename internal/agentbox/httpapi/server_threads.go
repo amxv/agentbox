@@ -171,6 +171,13 @@ func (s *Server) publicThreadSubroutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
 		return
 	}
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "markdown" {
+		if !method(w, r, http.MethodGet) {
+			return
+		}
+		s.publicThreadMarkdown(w, r, parts[0])
+		return
+	}
 	if len(parts) == 4 && parts[0] != "" && parts[1] == "assets" && parts[2] != "" {
 		if !method(w, r, http.MethodGet) {
 			return

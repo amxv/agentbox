@@ -204,6 +204,7 @@ export type ManagedThreadVisibility = {
   public: boolean;
   public_link?: ThreadPublicLink;
   public_url?: string;
+  public_markdown_url?: string;
 };
 
 export type ManageThreadVisibilityInput = {
@@ -705,6 +706,7 @@ function decodeManagedThreadVisibility(value: unknown): ManagedThreadVisibility 
     public: expectBoolean(record.public, "visibility.public"),
     public_link: record.public_link === undefined ? undefined : decodePublicLink(record.public_link),
     public_url: optionalString(record.public_url, "visibility.public_url"),
+    public_markdown_url: optionalString(record.public_markdown_url, "visibility.public_markdown_url"),
   };
 }
 

@@ -4,8 +4,15 @@ const backendUrl = process.env.AGENTBOX_BACKEND_URL ?? process.env.AGENTBOX_GO_B
 
 const nextConfig: NextConfig = {
   async rewrites() {
-    if (!backendUrl) return [];
+    const routes = [
+      {
+        source: "/share/:token.md",
+        destination: "/share/:token/markdown"
+      }
+    ];
+    if (!backendUrl) return routes;
     return [
+      ...routes,
       {
         source: "/api/:path*",
         destination: `${backendUrl.replace(/\/+$/, "")}/api/:path*`

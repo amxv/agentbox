@@ -75,6 +75,7 @@ type ThreadVisibility = {
   public: boolean;
   public_link?: ThreadPublicLink;
   public_url?: string;
+  public_markdown_url?: string;
 };
 
 type ThreadPublicLink = {
@@ -268,6 +269,12 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
     setCopied(true);
   }
 
+  async function copyPublicMarkdownURL() {
+    const markdownURL = visibility?.public_markdown_url || (generatedPublicURL ? `${generatedPublicURL}.md` : "");
+    if (!markdownURL) return;
+    await navigator.clipboard.writeText(markdownURL);
+  }
+
   const sharedCount = visibility?.shared_teams.length ?? 0;
   const isPublic = visibility?.public ?? false;
   const teamLabel = sharedCount === 0 ? "" : sharedCount === 1 ? visibility?.shared_teams[0]?.name ?? "1 team" : `${sharedCount} teams`;
@@ -378,17 +385,39 @@ export function ThreadVisibilityControl({ threadId }: { threadId: string }) {
             ) : null}
 
             {generatedPublicURL ? (
-              <InputGroup>
-                <InputGroupInput readOnly value={generatedPublicURL} aria-label="Public thread URL" />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton size="icon-sm" aria-label="Copy public URL" onClick={() => void copyPublicURL()}>
-                    {copied ? <CheckIcon /> : <ClipboardIcon />}
-                  </InputGroupButton>
-                  <InputGroupButton size="sm" variant="outline" render={<a href={generatedPublicURL} target="_blank" rel="noreferrer" />}>
-                    Open
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
+              <div className="flex flex-col gap-2">
+                <InputGroup>
+                  <InputGroupInput readOnly value={generatedPublicURL} aria-label="Public thread URL" />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton size="icon-sm" aria-label="Copy public URL" onClick={() => void copyPublicURL()}>
+                      {copied ? <CheckIcon /> : <ClipboardIcon />}
+                    </InputGroupButton>
+                    <InputGroupButton size="sm" variant="outline" render={<a href={generatedPublicURL} target="_blank" rel="noreferrer" />}>
+                      Open
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+                <InputGroup>
+                  <InputGroupInput
+                    readOnly
+                    value={visibility?.public_markdown_url || `${generatedPublicURL}.md`}
+                    aria-label="Public thread Markdown URL"
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton size="icon-sm" aria-label="Copy Markdown URL" onClick={() => void copyPublicMarkdownURL()}>
+                      <ClipboardIcon />
+                    </InputGroupButton>
+                    <InputGroupButton
+                      size="sm"
+                      variant="outline"
+                      render={<a href={visibility?.public_markdown_url || `${generatedPublicURL}.md`} target="_blank" rel="noreferrer" />}
+                    >
+                      Markdown
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+                <p className="text-xs/relaxed text-muted-foreground">Use the Markdown URL for coding agents and CLI workflows. Attachment links resolve directly to short-lived Cloudflare R2 URLs.</p>
+              </div>
             ) : null}
 
             {publicLink ? (

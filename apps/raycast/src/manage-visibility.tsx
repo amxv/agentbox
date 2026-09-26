@@ -167,6 +167,20 @@ export default function ManageVisibility({ onChanged, onSelfRevoked, threadId, t
                   <Action.CopyToClipboard title="Copy Public Link" icon={Icon.Link} content={visibility.public_url} />
                 </>
               )}
+              {visibility.public_markdown_url && (
+                <>
+                  <Action.OpenInBrowser
+                    title="Open Markdown Link"
+                    icon={Icon.Code}
+                    url={visibility.public_markdown_url}
+                  />
+                  <Action.CopyToClipboard
+                    title="Copy Markdown Link"
+                    icon={Icon.Clipboard}
+                    content={visibility.public_markdown_url}
+                  />
+                </>
+              )}
               <Action
                 title="Regenerate Public Link"
                 icon={Icon.RotateClockwise}
@@ -217,6 +231,9 @@ export default function ManageVisibility({ onChanged, onSelfRevoked, threadId, t
         onChange={setPublicEnabled}
       />
       {visibility?.public_url && <Form.Description title="Current Public URL" text={visibility.public_url} />}
+      {visibility?.public_markdown_url && (
+        <Form.Description title="Agent Markdown URL" text={visibility.public_markdown_url} />
+      )}
       {selfRevoking && (
         <Form.Description
           title="Access Warning"

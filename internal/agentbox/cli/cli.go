@@ -909,6 +909,9 @@ func printVisibility(w io.Writer, visibility types.ManagedThreadVisibility) {
 		} else {
 			fmt.Fprintln(w, "Public: On")
 		}
+		if visibility.PublicMarkdownURL != "" {
+			fmt.Fprintf(w, "Markdown: %s\n", visibility.PublicMarkdownURL)
+		}
 	} else {
 		fmt.Fprintln(w, "Public: Off")
 	}

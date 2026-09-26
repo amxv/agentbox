@@ -705,6 +705,19 @@ func TestCLIVisibilityReadsAndMutatesAtomically(t *testing.T) {
 		t.Fatalf("visibility mutation=%#v", mutated.Visibility)
 	}
 	firstPublicURL := mutated.Visibility.PublicURL
+	firstMarkdownURL := mutated.Visibility.PublicMarkdownURL
+	if firstMarkdownURL != firstPublicURL+".md" {
+		t.Fatalf("visibility markdown URL=%q want=%q", firstMarkdownURL, firstPublicURL+".md")
+	}
+
+	out.Reset()
+	stderr.Reset()
+	if code := runner.Run([]string{"visibility", thread.ID}); code != 0 {
+		t.Fatalf("visibility published text failed: code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), "Public: "+firstPublicURL) || !strings.Contains(out.String(), "Markdown: "+firstMarkdownURL) {
+		t.Fatalf("visibility published text output=%s", out.String())
+	}
 
 	out.Reset()
 	stderr.Reset()

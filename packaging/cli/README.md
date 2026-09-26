@@ -75,6 +75,8 @@ agentbox download thr_xxx --attachment 1 -o ./renamed-file.pdf
 
 `search` finds threads by title and message body. `get` accepts stable `thr_...` and `msg_...` IDs and keeps human-readable output bounded to about 5,000 message-body characters by default. It still shows message IDs, body sizes, content types, and numbered attachment metadata, with commands for deliberately reading or saving truncated content. Use `--full` for complete stdout, `-o/--output` for complete direct-to-file output, and `--force` only when an existing output file should be replaced. Explicit `--json` remains the complete structured automation path. `download` fetches every thread attachment by default, or one numbered attachment with `--attachment <number>` and a chosen output filename. `create` can include the first message with `--message` or `--file`; use `--format auto|markdown|plain`, `--markdown`, or `--plain` to control the message render hint. `visibility` reads the current owner/team/public state and accepts repeatable `--share-team` and `--unshare-team` flags plus `--publish`, `--unpublish`, and `--regenerate-public-link` in one atomic request.
 
+Attachment downloads are client-side: the CLI resolves a short-lived authorized URL and then streams the file bytes directly from Cloudflare R2. The Agentbox/Vercel backend does not proxy the attachment body. Public threads also expose an agent-friendly Markdown URL ending in `.md`; attachment links in that document are short-lived direct R2 URLs.
+
 ## Config
 
 Profile storage follows the existing Agentbox CLI conventions:

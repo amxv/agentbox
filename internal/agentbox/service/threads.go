@@ -241,6 +241,7 @@ func (s *Service) ManageThreadVisibility(ctx context.Context, auth types.AuthCon
 	}
 	if state.PublicLink != nil && strings.TrimSpace(state.PublicLink.Token) != "" && baseURL != "" {
 		state.PublicURL = publicThreadURL(baseURL, state.PublicLink.Token)
+		state.PublicMarkdownURL = publicThreadMarkdownURL(baseURL, state.PublicLink.Token)
 	}
 	return state, nil
 }
@@ -251,6 +252,14 @@ func publicThreadURL(baseURL string, token string) string {
 		return ""
 	}
 	return baseURL + "/share/" + url.PathEscape(token)
+}
+
+func publicThreadMarkdownURL(baseURL string, token string) string {
+	publicURL := publicThreadURL(baseURL, token)
+	if publicURL == "" {
+		return ""
+	}
+	return publicURL + ".md"
 }
 
 func (s *Service) GetPublicThread(ctx context.Context, token string) (*types.PublicThreadView, error) {

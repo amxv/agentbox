@@ -101,6 +101,7 @@ describe("dashboard-origin visibility proxy", () => {
     expect(published.visibility.shared_teams.map((team) => team.id)).toEqual([fixture.team_a]);
     expect(published.visibility.public).toBe(true);
     expect(published.visibility.public_url).toStartWith("https://dashboard.example/share/");
+    expect(published.visibility.public_markdown_url).toBe(`${published.visibility.public_url}.md`);
     const firstPublicURL = published.visibility.public_url;
 
     const replaceTeam = await patch({ add_teams: [fixture.team_b], remove_teams: [fixture.team_a] });

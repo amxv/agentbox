@@ -249,13 +249,14 @@ type ManageThreadVisibilityInput struct {
 }
 
 type ManagedThreadVisibility struct {
-	ThreadID       string            `json:"thread_id"`
-	OwnerUserID    string            `json:"owner_user_id"`
-	SharedTeams    []Team            `json:"shared_teams"`
-	AvailableTeams []Team            `json:"available_teams"`
-	Public         bool              `json:"public"`
-	PublicLink     *ThreadPublicLink `json:"public_link,omitempty"`
-	PublicURL      string            `json:"public_url,omitempty"`
+	ThreadID          string            `json:"thread_id"`
+	OwnerUserID       string            `json:"owner_user_id"`
+	SharedTeams       []Team            `json:"shared_teams"`
+	AvailableTeams    []Team            `json:"available_teams"`
+	Public            bool              `json:"public"`
+	PublicLink        *ThreadPublicLink `json:"public_link,omitempty"`
+	PublicURL         string            `json:"public_url,omitempty"`
+	PublicMarkdownURL string            `json:"public_markdown_url,omitempty"`
 }
 
 type PublicAsset struct {

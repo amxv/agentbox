@@ -778,7 +778,7 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Visibility.PublicLink == nil || !strings.HasPrefix(created.Visibility.PublicURL, "https://agentbox.example/share/agpub_") || created.Visibility.PublicLink.Token != "" || created.Visibility.PublicLink.TokenHash != "" {
+	if created.Visibility.PublicLink == nil || !strings.HasPrefix(created.Visibility.PublicURL, "https://agentbox.example/share/agpub_") || created.Visibility.PublicMarkdownURL != created.Visibility.PublicURL+".md" || created.Visibility.PublicLink.Token != "" || created.Visibility.PublicLink.TokenHash != "" {
 		t.Fatalf("created public visibility=%#v body=%s", created, createdResponse.Body.String())
 	}
 	createdToken := strings.TrimPrefix(created.Visibility.PublicURL, "https://agentbox.example/share/")
@@ -787,7 +787,7 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 		t.Fatalf("idempotent publish status=%d body=%s", idempotent.Code, idempotent.Body.String())
 	}
 	metadata := request(http.MethodGet, "/api/threads/"+thread.ID+"/visibility", ownerKey.Key, "")
-	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"public_url":"https://agentbox.example/share/`+createdToken+`"`) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
+	if metadata.Code != http.StatusOK || !strings.Contains(metadata.Body.String(), `"public_url":"https://agentbox.example/share/`+createdToken+`"`) || !strings.Contains(metadata.Body.String(), `"public_markdown_url":"https://agentbox.example/share/`+createdToken+`.md"`) || strings.Contains(metadata.Body.String(), "token_hash") || !strings.Contains(metadata.Body.String(), "token_prefix") {
 		t.Fatalf("visibility metadata status=%d body=%s", metadata.Code, metadata.Body.String())
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
@@ -809,6 +809,15 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	publicWrite := request(http.MethodPost, "/api/public/threads/"+createdToken, "", `{"body":"blocked"}`)
 	if publicWrite.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("public link accepted write: status=%d body=%s", publicWrite.Code, publicWrite.Body.String())
+	}
+	publicMarkdown := request(http.MethodGet, "/api/public/threads/"+createdToken+"/markdown", "", "")
+	if publicMarkdown.Code != http.StatusOK || publicMarkdown.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(publicMarkdown.Header().Get("Content-Type"), "text/markdown") || !strings.Contains(publicMarkdown.Body.String(), "# HTTP public marker") || !strings.Contains(publicMarkdown.Body.String(), "HTTP public body") || !strings.Contains(publicMarkdown.Body.String(), "https://r2.test/") || !strings.Contains(publicMarkdown.Body.String(), "http-public.png") || !strings.Contains(publicMarkdown.Body.String(), "short-lived presigned Cloudflare R2 URLs") {
+		t.Fatalf("public markdown status=%d content-type=%q cache=%q body=%s", publicMarkdown.Code, publicMarkdown.Header().Get("Content-Type"), publicMarkdown.Header().Get("Cache-Control"), publicMarkdown.Body.String())
+	}
+	for _, forbidden := range []string{"tenant_id", "owner_user_id", "created_by_user_id", "created_by_key_id", "storage_key", "token_hash"} {
+		if strings.Contains(publicMarkdown.Body.String(), forbidden) {
+			t.Fatalf("public markdown leaked %q: %s", forbidden, publicMarkdown.Body.String())
+		}
 	}
 	publicDownload := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/download", "", "")
 	if publicDownload.Code != http.StatusOK || !strings.Contains(publicDownload.Body.String(), `"download_url"`) {
@@ -833,6 +842,10 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	missingPreview := request(http.MethodGet, "/api/public/threads/"+createdToken+"/assets/"+message.Assets[0].ID+"/preview", "", "")
 	if missingPreview.Code != http.StatusOK || !strings.Contains(missingPreview.Body.String(), `"available":false`) || strings.Contains(missingPreview.Body.String(), `"preview_url"`) {
 		t.Fatalf("missing public preview was not asset-scoped: status=%d body=%s", missingPreview.Code, missingPreview.Body.String())
+	}
+	missingMarkdown := request(http.MethodGet, "/api/public/threads/"+createdToken+"/markdown", "", "")
+	if missingMarkdown.Code != http.StatusOK || !strings.Contains(missingMarkdown.Body.String(), "http-public.png — unavailable:") || strings.Contains(missingMarkdown.Body.String(), "https://r2.test/") {
+		t.Fatalf("missing object broke public markdown: status=%d body=%s", missingMarkdown.Code, missingMarkdown.Body.String())
 	}
 	stillReadable := request(http.MethodGet, "/api/public/threads/"+createdToken, "", "")
 	if stillReadable.Code != http.StatusOK || !strings.Contains(stillReadable.Body.String(), "HTTP public marker") {
@@ -876,6 +889,10 @@ func TestHTTPPublicThreadLinkLifecycleIsReadOnlyAndTokenScoped(t *testing.T) {
 	revokedView := request(http.MethodGet, "/api/public/threads/"+rotatedToken, "", "")
 	if revokedView.Code != http.StatusNotFound {
 		t.Fatalf("revoked public URL remained active: status=%d body=%s", revokedView.Code, revokedView.Body.String())
+	}
+	revokedMarkdown := request(http.MethodGet, "/api/public/threads/"+rotatedToken+"/markdown", "", "")
+	if revokedMarkdown.Code != http.StatusNotFound {
+		t.Fatalf("revoked public Markdown URL remained active: status=%d body=%s", revokedMarkdown.Code, revokedMarkdown.Body.String())
 	}
 	revokedDownload := request(http.MethodGet, "/api/public/threads/"+rotatedToken+"/assets/"+message.Assets[0].ID+"/download", "", "")
 	if revokedDownload.Code != http.StatusNotFound {

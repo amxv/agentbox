@@ -35,6 +35,8 @@ agentbox download thr_xxx --output ./downloads
 agentbox visibility thr_xxx --share-team engineering --publish
 ```
 
+Published threads expose both the normal read-only web URL and an agent-friendly Markdown URL ending in `.md`. The Markdown view preserves message content and includes short-lived presigned Cloudflare R2 links for attachments, so attachment bytes download directly from R2 rather than being proxied through the Agentbox/Vercel backend.
+
 ## Connect ChatGPT
 
 Create a dedicated user-owned key and add Agentbox as a custom MCP server:

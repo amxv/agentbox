@@ -288,6 +288,7 @@ test("visibility reads and patches preserve team and public-link metadata", asyn
       updated_at: timestamp,
     },
     public_url: "https://agentbox.example/public/agpub",
+    public_markdown_url: "https://agentbox.example/public/agpub.md",
   };
   const client = new AgentboxClient({ baseUrl: "https://agentbox.example", apiKey: "secret" }, async (input, init) => {
     assert.equal(new URL(String(input)).pathname, "/api/threads/thr_visibility/visibility");
@@ -295,6 +296,10 @@ test("visibility reads and patches preserve team and public-link metadata", asyn
     return json({ visibility });
   });
   assert.equal((await client.getThreadVisibility("thr_visibility")).public_url, visibility.public_url);
+  assert.equal(
+    (await client.getThreadVisibility("thr_visibility")).public_markdown_url,
+    visibility.public_markdown_url,
+  );
   const managed = await client.manageThreadVisibility("thr_visibility", {
     add_teams: ["team_design"],
     remove_teams: ["team_platform"],

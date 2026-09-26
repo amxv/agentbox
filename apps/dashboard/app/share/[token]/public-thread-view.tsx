@@ -220,7 +220,7 @@ export function PublicThreadView({ token }: { token: string }) {
               <div className={styles.heroTop}><span>Public thread</span><span>{thread.messages.length} {thread.messages.length === 1 ? "message" : "messages"}</span></div>
               <h1>{thread.title || "Untitled thread"}</h1>
               <div className={styles.threadMeta}><span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span><span>Updated {formatDate(thread.updated_at)}</span></div>
-              <p>This live URL provides read-only access. Posting, uploads, and visibility changes require an authenticated Agentbox user.</p>
+              <p>This live URL provides read-only access. Posting, uploads, and visibility changes require an authenticated Agentbox user. <a href={`/share/${encodeURIComponent(token)}.md`}>Markdown for agents</a>.</p>
             </section>
 
             {error && <div className={styles.error}><strong>Attachment action failed.</strong><span>{error}</span></div>}
