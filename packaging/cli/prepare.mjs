@@ -16,7 +16,8 @@ const targets = [
   { goos: "darwin", goarch: "amd64", dir: "darwin-amd64", binary: "agentbox" },
   { goos: "linux", goarch: "arm64", dir: "linux-arm64", binary: "agentbox" },
   { goos: "linux", goarch: "amd64", dir: "linux-amd64", binary: "agentbox" },
-  { goos: "windows", goarch: "amd64", dir: "windows-amd64", binary: "agentbox.exe" }
+  { goos: "windows", goarch: "amd64", dir: "windows-amd64", binary: "agentbox.exe" },
+  { goos: "windows", goarch: "arm64", dir: "windows-arm64", binary: "agentbox.exe" }
 ];
 
 function fail(message) {

@@ -23,7 +23,7 @@ The dashboard has its own private package under `apps/dashboard`; do not change 
 The generated files under `packaging/cli/vendor/` are ignored build artifacts and
 must not be committed.
 
-The publish workflow runs CLI tests, builds five binaries, packs and publishes
+The publish workflow runs CLI tests, builds six binaries, packs and publishes
 the npm package with the `NPM_TOKEN` repository secret, and creates a GitHub
 Release for tag pushes matching `agentbox-cli-v*`. The expected release assets
 are:
@@ -32,6 +32,7 @@ are:
 - `agentbox-X.Y.Z-darwin-amd64.tar.gz`
 - `agentbox-X.Y.Z-linux-arm64.tar.gz`
 - `agentbox-X.Y.Z-linux-amd64.tar.gz`
+- `agentbox-X.Y.Z-windows-arm64.zip`
 - `agentbox-X.Y.Z-windows-amd64.zip`
 - `amxv-agentbox-X.Y.Z.tgz`
 
@@ -58,8 +59,10 @@ the CLI source and tests relevant to the release, then run the release checks:
 
 ```bash
 go test ./internal/agentbox/cli ./internal/agentbox/profiles
+cd packaging/cli && npm test && cd ../..
 go test ./...
 go vet ./...
+make check-windows-cli
 node ./packaging/cli/prepare.mjs
 npm pack --dry-run ./packaging/cli
 packaging/cli/vendor/darwin-arm64/agentbox --version
@@ -113,7 +116,7 @@ gh release view agentbox-cli-vX.Y.Z --repo amxv/agentbox --json tagName,url,asse
 npm view @amxv/agentbox version dist-tags.latest --json
 ```
 
-Confirm that npm reports `X.Y.Z` as `latest` and that all six assets have state
+Confirm that npm reports `X.Y.Z` as `latest` and that all seven assets have state
 `uploaded`. Report the release URL and any warnings to the requester.
 
 ## GitHub Actions availability gate
@@ -170,6 +173,7 @@ tar -C packaging/cli/vendor/darwin-amd64 -czf "$release_tmp/agentbox-${VERSION}-
 tar -C packaging/cli/vendor/linux-arm64 -czf "$release_tmp/agentbox-${VERSION}-linux-arm64.tar.gz" agentbox
 tar -C packaging/cli/vendor/linux-amd64 -czf "$release_tmp/agentbox-${VERSION}-linux-amd64.tar.gz" agentbox
 (cd packaging/cli/vendor/windows-amd64 && zip -q "$release_tmp/agentbox-${VERSION}-windows-amd64.zip" agentbox.exe)
+(cd packaging/cli/vendor/windows-arm64 && zip -q "$release_tmp/agentbox-${VERSION}-windows-arm64.zip" agentbox.exe)
 ```
 
 The scoped package tarball is named `amxv-agentbox-X.Y.Z.tgz`. Before publishing
@@ -192,7 +196,7 @@ npm view @amxv/agentbox version dist-tags.latest --json
 
 If npm publish fails, stop. Do not create a GitHub Release until npm confirms
 the version. Once npm succeeds, create a release for the existing tag with all
-six artifacts:
+seven artifacts:
 
 ```bash
 gh release create "agentbox-cli-v${VERSION}" \
@@ -204,6 +208,7 @@ gh release create "agentbox-cli-v${VERSION}" \
   "$release_tmp/agentbox-${VERSION}-darwin-amd64.tar.gz" \
   "$release_tmp/agentbox-${VERSION}-linux-arm64.tar.gz" \
   "$release_tmp/agentbox-${VERSION}-linux-amd64.tar.gz" \
+  "$release_tmp/agentbox-${VERSION}-windows-arm64.zip" \
   "$release_tmp/agentbox-${VERSION}-windows-amd64.zip" \
   "$release_tmp/amxv-agentbox-${VERSION}.tgz"
 gh release view "agentbox-cli-v${VERSION}" --repo amxv/agentbox --json tagName,url,assets

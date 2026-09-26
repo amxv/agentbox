@@ -38,7 +38,10 @@ jobs:
           fi
 
       - name: Run CLI tests
-        run: go test ./internal/agentbox/cli ./internal/agentbox/profiles
+        run: |
+          go test ./internal/agentbox/cli ./internal/agentbox/profiles
+          cd packaging/cli
+          npm test
 
       - name: Build npm release artifacts
         run: node ./packaging/cli/prepare.mjs
@@ -57,6 +60,8 @@ jobs:
           tar -C packaging/cli/vendor/linux-amd64 -czf "release-assets/agentbox-${PACKAGE_VERSION}-linux-amd64.tar.gz" agentbox
           cd packaging/cli/vendor/windows-amd64
           zip -q "../../../../release-assets/agentbox-${PACKAGE_VERSION}-windows-amd64.zip" agentbox.exe
+          cd ../windows-arm64
+          zip -q "../../../../release-assets/agentbox-${PACKAGE_VERSION}-windows-arm64.zip" agentbox.exe
 
       - name: Publish npm package
         working-directory: packaging/cli

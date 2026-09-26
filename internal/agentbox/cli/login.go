@@ -269,7 +269,11 @@ func (r *Runner) exchangeCLILoginCode(baseURL string, code string, state string,
 }
 
 func (r *Runner) openBrowser(loginURL string) error {
-	switch runtime.GOOS {
+	return r.openBrowserForOS(runtime.GOOS, loginURL)
+}
+
+func (r *Runner) openBrowserForOS(goos string, loginURL string) error {
+	switch goos {
 	case "darwin":
 		_, _, err := r.RunExternal("open", []string{loginURL}, "", nil)
 		return err

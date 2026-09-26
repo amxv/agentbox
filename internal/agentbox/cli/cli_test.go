@@ -1297,6 +1297,26 @@ func TestCLILoginSavesUserProfile(t *testing.T) {
 	}
 }
 
+func TestWindowsBrowserOpenUsesShellSafeRundll32Arguments(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	runner := &Runner{RunExternal: func(name string, args []string, stdin string, env map[string]string) (string, string, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return "", "", nil
+	}}
+	const loginURL = "https://agentbox.example/login/cli?state=a&redirect_uri=http%3A%2F%2F127.0.0.1%3A1234%2Fcallback"
+	if err := runner.openBrowserForOS("windows", loginURL); err != nil {
+		t.Fatal(err)
+	}
+	if gotName != "rundll32" {
+		t.Fatalf("windows browser command = %q", gotName)
+	}
+	if len(gotArgs) != 2 || gotArgs[0] != "url.dll,FileProtocolHandler" || gotArgs[1] != loginURL {
+		t.Fatalf("windows browser args = %#v", gotArgs)
+	}
+}
+
 func TestShouldReadStdinForPipe(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {

@@ -13,6 +13,8 @@ npm install -g @amxv/agentbox
 agentbox --version
 ```
 
+Windows x64 and Windows ARM64 are both shipped as native executables. The npm installer selects the native binary automatically.
+
 Create a reusable profile:
 
 ```bash

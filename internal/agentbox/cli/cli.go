@@ -974,7 +974,7 @@ func (r *Runner) runDownload(args []string, profileName string) error {
 		selected := attachments[*attachmentNumber-1]
 		outputPath := strings.TrimSpace(*output)
 		if outputPath == "" {
-			outputPath = assetFileName(selected.Asset)
+			outputPath = localAssetFileName(selected.Asset)
 		}
 		if err := r.downloadAsset(selected.Asset, outputPath, profileName, *force); err != nil {
 			return err
@@ -1002,7 +1002,7 @@ func (r *Runner) runDownload(args []string, profileName string) error {
 	}
 	downloads := []map[string]string{}
 	for _, attachment := range attachments {
-		outputPath := filepath.Join(outputDir, attachment.Asset.ID+"-"+assetFileName(attachment.Asset))
+		outputPath := filepath.Join(outputDir, attachment.Asset.ID+"-"+localAssetFileName(attachment.Asset))
 		if err := r.downloadAsset(attachment.Asset, outputPath, profileName, true); err != nil {
 			return err
 		}

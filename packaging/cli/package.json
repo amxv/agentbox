@@ -15,7 +15,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "install": "node ./scripts/install.js"
+    "install": "node ./scripts/install.js",
+    "test": "node --test ./test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public"

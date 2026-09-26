@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestDefaultConfigDirForWindowsUsesRoamingAppData(t *testing.T) {
+	got := defaultConfigDirForOS("windows", `C:\Users\ashray`, `C:\Users\ashray\AppData\Roaming`, "")
+	want := filepath.Join(`C:\Users\ashray\AppData\Roaming`, "agentbox")
+	if got != want {
+		t.Fatalf("windows config dir = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultConfigDirForWindowsFallsBackToUserProfileLayout(t *testing.T) {
+	got := defaultConfigDirForOS("windows", `C:\Users\ashray`, "", "")
+	want := filepath.Join(`C:\Users\ashray`, "AppData", "Roaming", "agentbox")
+	if got != want {
+		t.Fatalf("windows fallback config dir = %q, want %q", got, want)
+	}
+}
+
 func TestReadTypeScriptCreatedProfilesJSON(t *testing.T) {
 	t.Setenv("AGENTBOX_CONFIG_DIR", t.TempDir())
 	raw := `{

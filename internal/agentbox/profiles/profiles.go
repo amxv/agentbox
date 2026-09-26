@@ -35,19 +35,29 @@ func DefaultConfigDir() string {
 	if value := strings.TrimSpace(os.Getenv("AGENTBOX_CONFIG_DIR")); value != "" {
 		return value
 	}
-	if runtime.GOOS == "windows" {
-		if appData := strings.TrimSpace(os.Getenv("APPDATA")); appData != "" {
+	home, _ := os.UserHomeDir()
+	return defaultConfigDirForOS(runtime.GOOS, home, os.Getenv("APPDATA"), os.Getenv("XDG_CONFIG_HOME"))
+}
+
+func defaultConfigDirForOS(goos string, home string, appData string, xdgConfigHome string) string {
+	home = strings.TrimSpace(home)
+	switch goos {
+	case "windows":
+		if appData = strings.TrimSpace(appData); appData != "" {
 			return filepath.Join(appData, "agentbox")
 		}
-	}
-	home, _ := os.UserHomeDir()
-	if runtime.GOOS == "darwin" {
+		// APPDATA can be absent in stripped-down shells or CI environments even
+		// though USERPROFILE is present. Keep the standard roaming-config layout
+		// instead of unexpectedly falling back to a Unix-style ~/.config path.
+		return filepath.Join(home, "AppData", "Roaming", "agentbox")
+	case "darwin":
 		return filepath.Join(home, "Library", "Application Support", "agentbox")
+	default:
+		if xdgConfigHome = strings.TrimSpace(xdgConfigHome); xdgConfigHome != "" {
+			return filepath.Join(xdgConfigHome, "agentbox")
+		}
+		return filepath.Join(home, ".config", "agentbox")
 	}
-	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
-		return filepath.Join(xdg, "agentbox")
-	}
-	return filepath.Join(home, ".config", "agentbox")
 }
 
 func DefaultConfigPath() string {

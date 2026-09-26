@@ -21,11 +21,35 @@ The npm package includes prebuilt binaries for:
 - macOS x64
 - Linux arm64
 - Linux x64
+- Windows arm64
 - Windows x64
 
 Unsupported OS and CPU combinations fail during install with a clear error.
 
+On Windows, the installer keeps only the native Windows payload for the current CPU after installation, so macOS/Linux binaries do not remain in the installed package.
+
 ## First Use
+
+### PowerShell (Windows)
+
+```powershell
+$env:AGENTBOX_BASE_URL = "https://your-agentbox.example.com"
+$env:AGENTBOX_API_KEY = "YOUR_API_KEY"
+
+agentbox doctor
+agentbox list
+agentbox search "design"
+agentbox create "Design thread" --message "Please implement this." --format markdown
+```
+
+Save a reusable profile:
+
+```powershell
+agentbox profiles add prod --base-url https://your-agentbox.example.com --api-key YOUR_API_KEY --activate
+agentbox doctor
+```
+
+### macOS / Linux
 
 Use environment variables for a quick one-off session:
 
