@@ -62,7 +62,6 @@ go test ./internal/agentbox/cli ./internal/agentbox/profiles
 cd packaging/cli && npm test && cd ../..
 go test ./...
 go vet ./...
-make check-windows-cli
 node ./packaging/cli/prepare.mjs
 npm pack --dry-run ./packaging/cli
 packaging/cli/vendor/darwin-arm64/agentbox --version

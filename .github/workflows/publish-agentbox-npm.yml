@@ -10,7 +10,61 @@ permissions:
   contents: write
 
 jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Verify version matches release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $packageVersion = node -p "JSON.parse(require('node:fs').readFileSync('packaging/cli/package.json', 'utf8')).version"
+          $tagVersion = $env:GITHUB_REF_NAME.Replace('agentbox-cli-v', '')
+          if ($packageVersion -ne $tagVersion) { throw "package version $packageVersion does not match tag $tagVersion" }
+
+      - name: Build and install the exact npm package on Windows
+        shell: pwsh
+        run: |
+          go test ./cmd/agentbox ./internal/agentbox/cli ./internal/agentbox/profiles
+          cd packaging/cli
+          npm test
+          cd ../..
+          node ./packaging/cli/prepare.mjs
+          $packDir = Join-Path $env:RUNNER_TEMP "agentbox-pack"
+          New-Item -ItemType Directory -Force -Path $packDir | Out-Null
+          npm pack ./packaging/cli --pack-destination $packDir
+          $package = Get-ChildItem $packDir -Filter "amxv-agentbox-*.tgz" | Select-Object -First 1
+          if (-not $package) { throw "Packed Agentbox npm tarball not found." }
+          npm install --global $package.FullName
+          $expected = node -p "require('./packaging/cli/package.json').version"
+          $actual = (agentbox --version).Trim()
+          if ($actual -ne $expected) { throw "agentbox --version returned $actual; expected $expected" }
+          agentbox --help | Out-Null
+          $globalRoot = (npm root --global).Trim()
+          $installedRoot = Join-Path $globalRoot "@amxv\agentbox"
+          if (-not (Test-Path (Join-Path $installedRoot "vendor\windows-amd64\agentbox.exe"))) { throw "Native Windows x64 payload was not retained." }
+          if (Test-Path (Join-Path $installedRoot "vendor\linux-amd64")) { throw "Non-Windows payload was not pruned after install." }
+          $env:AGENTBOX_CONFIG_DIR = Join-Path $env:RUNNER_TEMP "agentbox-config"
+          agentbox profiles add smoke --base-url https://agentbox.example --api-key agb_windows_smoke --activate
+          $profiles = agentbox profiles --json | ConvertFrom-Json
+          if ($profiles.active_profile -ne "smoke") { throw "Windows profile persistence failed." }
+          if (-not (Test-Path (Join-Path $env:AGENTBOX_CONFIG_DIR "profiles.json"))) { throw "Windows profile file was not created." }
+          if (-not (Test-Path "packaging/cli/vendor/windows-arm64/agentbox.exe")) { throw "Windows ARM64 release binary was not produced." }
+
   publish:
+    needs: windows-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

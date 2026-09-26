@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: help setup setup-dashboard setup-raycast quick check check-go check-go-full check-backend check-cli check-windows-cli check-mcp check-dashboard-fast check-dashboard check-integration check-raycast check-hygiene dev-backend dev-dashboard build-cli package-cli migrate
+.PHONY: help setup setup-dashboard setup-raycast quick check check-go check-go-full check-backend check-cli check-mcp check-dashboard-fast check-dashboard check-integration check-raycast check-hygiene dev-backend dev-dashboard build-cli package-cli migrate
 
 help:
 	@printf '%s\n' \
@@ -13,10 +13,9 @@ help:
 	  '  make check                 complete repository validation (requires TEST_DATABASE_URL)' \
 	  '' \
 	  '  make check-go              Go tests, vet, and builds; DB tests may skip without TEST_DATABASE_URL' \
-	  '  make check-backend         focused backend/MCP/storage Go packages' \
+  '  make check-backend         focused backend/MCP/storage Go packages' \
   '  make check-cli             focused CLI tests + local CLI build' \
-  '  make check-windows-cli     cross-compile Windows x64 + ARM64 CLI binaries' \
-	  '  make check-mcp             focused MCP and attachment contract tests' \
+  '  make check-mcp             focused MCP and attachment contract tests' \
 	  '  make check-dashboard-fast  dashboard typecheck only' \
 	  '  make check-dashboard       dashboard typecheck, lint, production build' \
 	  '  make check-integration     dashboard <-> Go contract tests' \
@@ -61,11 +60,6 @@ check-cli:
 	cd packaging/cli && npm test
 	@mkdir -p dist
 	go build -o dist/agentbox ./cmd/agentbox
-
-check-windows-cli:
-	@mkdir -p dist
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/agentbox-windows-amd64.exe ./cmd/agentbox
-	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/agentbox-windows-arm64.exe ./cmd/agentbox
 
 check-mcp:
 	go test ./internal/agentbox/assets ./internal/agentbox/mcpserver ./internal/agentbox/service ./internal/agentbox/httpapi
