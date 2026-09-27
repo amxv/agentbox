@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -10,7 +11,10 @@ import (
 	"github.com/google/uuid"
 )
 
-func (m *MemoryRepository) CreateTeam(_ context.Context, slug string, name string) (types.Team, error) {
+func (m *MemoryRepository) CreateTeam(ctx context.Context, slug string, name string, initialMemberUserID ...string) (types.Team, error) {
+	if len(initialMemberUserID) > 1 {
+		return types.Team{}, errors.New("at most one initial team member is supported")
+	}
 	slug = strings.TrimSpace(slug)
 	name = strings.TrimSpace(name)
 	for _, team := range m.Teams {
@@ -21,6 +25,12 @@ func (m *MemoryRepository) CreateTeam(_ context.Context, slug string, name strin
 	now := isoMillis(time.Now().UTC())
 	team := types.Team{ID: "team_" + uuid.NewString(), Slug: slug, Name: name, CreatedAt: now, UpdatedAt: now}
 	m.Teams = append(m.Teams, team)
+	if len(initialMemberUserID) == 1 {
+		if _, err := m.AddTeamMember(ctx, team.ID, initialMemberUserID[0]); err != nil {
+			m.Teams = m.Teams[:len(m.Teams)-1]
+			return types.Team{}, err
+		}
+	}
 	return team, nil
 }
 

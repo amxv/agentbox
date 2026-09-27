@@ -655,6 +655,41 @@ where tm.user_id = $1
 	}
 }
 
+func TestCreateTeamCanAtomicallyAddInitialMember(t *testing.T) {
+	repository, ctx := openPostgresTestRepository(t)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repository.BootstrapOwner(ctx, "owner@example.com", "Owner", "owner-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	team, err := repository.CreateTeam(ctx, "owner-team", "Owner Team", owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	teams, err := repository.ListUserTeams(ctx, owner.ID)
+	if err != nil || len(teams) != 1 || teams[0].ID != team.ID {
+		t.Fatalf("initial team membership=%#v err=%v", teams, err)
+	}
+
+	if _, err := repository.CreateTeam(ctx, "rolled-back-team", "Rolled Back Team", "usr_missing"); !errors.Is(err, types.ErrUserNotFound) {
+		t.Fatalf("missing initial member error=%v", err)
+	}
+	var rolledBackCount int
+	if err := repository.pool.QueryRow(ctx, `
+select count(*)
+from teams
+where slug = 'rolled-back-team'
+`).Scan(&rolledBackCount); err != nil {
+		t.Fatal(err)
+	}
+	if rolledBackCount != 0 {
+		t.Fatalf("team creation was not rolled back after membership failure: count=%d", rolledBackCount)
+	}
+}
+
 func TestUserOnboardingCredentialsAreExplicitResumableAndSerialized(t *testing.T) {
 	repository, ctx := openPostgresTestRepository(t)
 	if err := repository.Migrate(ctx); err != nil {

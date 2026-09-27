@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -12,8 +13,33 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-func (r *Repository) CreateTeam(ctx context.Context, slug string, name string) (types.Team, error) {
-	team, err := scanTeam(r.pool.QueryRow(ctx, `
+func (r *Repository) CreateTeam(ctx context.Context, slug string, name string, initialMemberUserID ...string) (types.Team, error) {
+	if len(initialMemberUserID) > 1 {
+		return types.Team{}, fmt.Errorf("at most one initial team member is supported")
+	}
+	if len(initialMemberUserID) == 0 {
+		team, err := scanTeam(r.pool.QueryRow(ctx, `
+insert into teams (id, slug, name)
+values ($1, $2, $3)
+returning id, slug, name, created_at, updated_at
+`, "team_"+uuid.NewString(), strings.TrimSpace(slug), strings.TrimSpace(name)))
+		if err != nil {
+			var postgresError *pgconn.PgError
+			if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+				return types.Team{}, types.ErrTeamSlugConflict
+			}
+			return types.Team{}, err
+		}
+		return team, nil
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return types.Team{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	team, err := scanTeam(tx.QueryRow(ctx, `
 insert into teams (id, slug, name)
 values ($1, $2, $3)
 returning id, slug, name, created_at, updated_at
@@ -23,6 +49,20 @@ returning id, slug, name, created_at, updated_at
 		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
 			return types.Team{}, types.ErrTeamSlugConflict
 		}
+		return types.Team{}, err
+	}
+	userID := strings.TrimSpace(initialMemberUserID[0])
+	if err := requireTeamAndUserTx(ctx, tx, team.ID, userID); err != nil {
+		return types.Team{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+insert into team_memberships (team_id, user_id)
+values ($1, $2)
+on conflict (team_id, user_id) do nothing
+`, team.ID, userID); err != nil {
+		return types.Team{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return types.Team{}, err
 	}
 	return team, nil

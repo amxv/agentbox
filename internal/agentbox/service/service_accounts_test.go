@@ -208,6 +208,18 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ownerMemberships, err := svc.ListMyTeams(context.Background(), ownerAuth)
+	if err != nil || len(ownerMemberships) != 2 || ownerMemberships[0].ID != engineering.ID || ownerMemberships[1].ID != operations.ID {
+		t.Fatalf("owner team memberships=%#v err=%v", ownerMemberships, err)
+	}
+	shareableThread, err := svc.CreateThread(context.Background(), ownerAuth, "owner-created team is immediately shareable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := svc.ManageThreadVisibility(context.Background(), ownerAuth, shareableThread.ID, "https://agentbox.example", types.ManageThreadVisibilityInput{AddTeams: []string{operations.Slug}})
+	if err != nil || len(shared.SharedTeams) != 1 || shared.SharedTeams[0].ID != operations.ID {
+		t.Fatalf("new owner team was not immediately shareable: visibility=%#v err=%v", shared, err)
+	}
 	if _, err := svc.CreateTeam(context.Background(), ownerAuth, "Engineering", "Duplicate"); !hasCodedError(err, "TEAM_SLUG_CONFLICT") {
 		t.Fatalf("duplicate team slug error=%v", err)
 	}
@@ -239,7 +251,7 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 		t.Fatalf("invitation memberships=%#v err=%v", memberTeams, err)
 	}
 	ownerTeams, err := svc.ListOwnerTeams(context.Background(), ownerAuth)
-	if err != nil || len(ownerTeams) != 2 || len(ownerTeams[0].Members) != 1 || ownerTeams[0].Members[0].ID != member.ID {
+	if err != nil || len(ownerTeams) != 2 || len(ownerTeams[0].Members) != 2 {
 		t.Fatalf("owner team view=%#v err=%v", ownerTeams, err)
 	}
 	if _, err := svc.AddTeamMember(context.Background(), ownerAuth, engineering.ID, ownerAuth.UserID); err != nil {
@@ -315,7 +327,8 @@ func TestInvitationRegistrationAndOwnerUserLifecycle(t *testing.T) {
 	if _, err := svc.ListOwnerTeams(context.Background(), *ownerKeyAuth); !hasCodedError(err, "OWNER_BROWSER_REQUIRED") {
 		t.Fatalf("owner API key listed owner team view: %v", err)
 	}
-	if teams, err := svc.ListMyTeams(context.Background(), *ownerKeyAuth); err != nil || len(teams) != 1 || teams[0].ID != engineering.ID {
+	if teams, err := svc.ListMyTeams(context.Background(), *ownerKeyAuth); err != nil || len(teams) != 2 ||
+		!((teams[0].ID == engineering.ID && teams[1].ID == operations.ID) || (teams[0].ID == operations.ID && teams[1].ID == engineering.ID)) {
 		t.Fatalf("owner credential own-team list=%#v err=%v", teams, err)
 	}
 

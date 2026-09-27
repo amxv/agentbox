@@ -93,7 +93,7 @@ type Repository interface {
 	ListUsersPage(ctx context.Context, page types.PageRequest) (types.UserPage, error)
 	GetUserByID(ctx context.Context, userID string) (*types.User, error)
 	SetUserDisabled(ctx context.Context, userID string, disabled bool) (types.User, error)
-	CreateTeam(ctx context.Context, slug string, name string) (types.Team, error)
+	CreateTeam(ctx context.Context, slug string, name string, initialMemberUserID ...string) (types.Team, error)
 	RenameTeam(ctx context.Context, teamID string, name string) (types.Team, error)
 	ListTeams(ctx context.Context) ([]types.Team, error)
 	ListTeamsPage(ctx context.Context, page types.PageRequest, memberLimit int) (types.TeamPage, error)

@@ -411,7 +411,7 @@ func (s *Service) CreateTeam(ctx context.Context, authContext types.AuthContext,
 	if err != nil {
 		return types.Team{}, err
 	}
-	team, err := s.repo.CreateTeam(ctx, slug, name)
+	team, err := s.repo.CreateTeam(ctx, slug, name, authContext.UserID)
 	if errors.Is(err, types.ErrTeamSlugConflict) {
 		return types.Team{}, CodedError{Code: "TEAM_SLUG_CONFLICT", Message: "That team slug is already in use.", Err: err}
 	}
