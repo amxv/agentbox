@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +15,8 @@ import { attributionLabel } from "../../../components/attribution";
 import { MetricStrip, MonoValue, PanelHeader, PanelMain } from "../../../components/panel-shell";
 import { fetchSession } from "../../../components/session";
 import { MessageContent } from "../../../threads/[threadId]/message-content";
+import { isPlainTextMessage } from "../../../threads/[threadId]/markdown-utils";
+import { ThreadMarkdownPreviewButton, useThreadMarkdownPreview } from "../../../components/thread-markdown-preview";
 
 type Asset = {
   id: string;
@@ -85,6 +87,14 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
   const [assetBusy, setAssetBusy] = useState<string | null>(null);
+  const markdownPreview = useThreadMarkdownPreview();
+  const resetMarkdownPreview = markdownPreview.reset;
+
+  useEffect(() => {
+    resetMarkdownPreview();
+  }, [threadId, resetMarkdownPreview]);
+
+  const plainTextCount = thread?.messages.filter((message) => isPlainTextMessage(message.body, message.body_content_type)).length ?? 0;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -234,6 +244,11 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
               }
               actions={
                 <>
+                  <ThreadMarkdownPreviewButton
+                    active={markdownPreview.allPlainAsMarkdown}
+                    count={plainTextCount}
+                    onToggle={markdownPreview.toggleAll}
+                  />
                   {thread.visibility_summary.private ? <Badge variant="outline">Private</Badge> : null}
                   {thread.visibility.shared_teams.map((team) => <Badge variant="outline" key={team.id}>{team.name}</Badge>)}
                   {thread.visibility_summary.public ? <Badge>Public</Badge> : null}
@@ -261,23 +276,26 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
               ) : null}
 
               {thread.messages.map((message, index) => (
-                <Card key={message.id}>
+                <Card key={message.id} className="min-w-0">
                   <CardHeader className="border-b">
                     <div className="flex min-w-0 flex-col gap-1">
                       <span className="font-mono text-[0.65rem] tracking-[0.12em] text-muted-foreground uppercase">Message {index + 1}</span>
-                      <h2 className="font-heading text-sm font-semibold">
+                      <h2 className="break-words font-heading text-sm font-semibold">
                         {attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}
                       </h2>
                       <MonoValue>{message.id}</MonoValue>
-                    </div>
-                    <CardAction>
                       <time className="text-xs text-muted-foreground" dateTime={message.created_at}>
                         {formatDate(message.created_at)}
                       </time>
-                    </CardAction>
+                    </div>
                   </CardHeader>
-                  <CardContent className="grid gap-5">
-                    <MessageContent body={message.body} contentType={message.body_content_type} />
+                  <CardContent className="grid min-w-0 gap-5">
+                    <MessageContent
+                      body={message.body}
+                      contentType={message.body_content_type}
+                      forceMarkdown={markdownPreview.isMessageMarkdown(message.id)}
+                      onForceMarkdownChange={(enabled) => markdownPreview.setMessageMarkdown(message.id, enabled)}
+                    />
                     {message.assets.length > 0 ? (
                       <div className="grid gap-4">
                         <Separator />

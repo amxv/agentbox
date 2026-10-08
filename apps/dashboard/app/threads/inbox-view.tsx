@@ -398,8 +398,8 @@ export function InboxView() {
             </InputGroup>
           </form>
 
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="min-w-0 flex-1 overflow-x-auto pb-px">
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="min-w-0 w-full flex-1 overflow-x-auto pb-px">
               <ToggleGroup
                 aria-label="Inbox filters"
                 className="min-w-max"
@@ -426,7 +426,7 @@ export function InboxView() {
               </ToggleGroup>
             </div>
             <Button
-              className="shrink-0"
+              className="w-full shrink-0 sm:w-auto"
               size="sm"
               type="button"
               onClick={() => setShowCreateComposer((value) => !value)}
@@ -464,16 +464,18 @@ export function InboxView() {
                 <FieldGroup>
                   <Field orientation="responsive">
                     <FieldLabel htmlFor="new-thread-title">Thread title</FieldLabel>
-                    <div className="flex min-w-0 flex-1 gap-3">
+                    <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:gap-3">
                       <Input
                         id="new-thread-title"
                         value={newThreadTitle}
                         onChange={(event) => setNewThreadTitle(event.target.value)}
                         placeholder="A precise title for the handoff"
+                        className="min-w-0"
                         type="text"
                       />
                       <Button
                         variant="outline"
+                        className="w-full sm:w-auto"
                         disabled={creatingEmpty || !newThreadTitle.trim()}
                         type="button"
                         onClick={() => void createThreadOnly()}
@@ -530,7 +532,7 @@ export function InboxView() {
                       <MonoValue>{thread.id}</MonoValue>
                       <span className="text-sm text-muted-foreground">Updated {formatDate(thread.updated_at)}</span>
                     </div>
-                    <h2 className="font-heading text-xl font-semibold tracking-[-0.03em] text-balance sm:text-2xl">
+                    <h2 className="break-words font-heading text-xl font-semibold tracking-[-0.03em] text-balance sm:text-2xl">
                       {thread.title}
                     </h2>
                   </div>

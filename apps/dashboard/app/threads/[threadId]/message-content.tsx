@@ -1,6 +1,6 @@
 "use client";
 
-import { Code2Icon, EyeIcon } from "lucide-react";
+import { Code2Icon, EyeIcon, RotateCcwIcon, WandSparklesIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,28 +10,72 @@ import { inferBodyContentType, messageFormatLabel, normalizeContentType } from "
 
 const LARGE_MARKDOWN_THRESHOLD = 300_000;
 
-export function MessageContent({ body, contentType }: { body: string; contentType?: string | null }) {
+export function MessageContent({
+  body,
+  contentType,
+  forceMarkdown,
+  onForceMarkdownChange
+}: {
+  body: string;
+  contentType?: string | null;
+  forceMarkdown?: boolean;
+  onForceMarkdownChange?: (enabled: boolean) => void;
+}) {
   const safeBody = body || "(empty message)";
   const explicitType = normalizeContentType(contentType);
   const inferredType = useMemo(() => inferBodyContentType(body), [body]);
   const resolvedType = explicitType ?? inferredType;
   const wasInferred = explicitType === null;
-  const [showSource, setShowSource] = useState(resolvedType === "text/markdown" && body.length > LARGE_MARKDOWN_THRESHOLD);
+  const isPlainText = resolvedType === "text/plain";
+  const [localMarkdownPreview, setLocalMarkdownPreview] = useState(false);
+  const previewMarkdown = isPlainText && (forceMarkdown ?? localMarkdownPreview);
+  const [sourcePreference, setSourcePreference] = useState<boolean | null>(null);
+  const showSource = previewMarkdown
+    ? sourcePreference === true
+    : isPlainText || (sourcePreference ?? body.length > LARGE_MARKDOWN_THRESHOLD);
 
-  if (resolvedType === "text/plain" || showSource) {
+  function toggleMarkdownPreview() {
+    const next = !previewMarkdown;
+    setSourcePreference(null);
+    if (onForceMarkdownChange) onForceMarkdownChange(next);
+    else setLocalMarkdownPreview(next);
+  }
+
+  const previewAction = isPlainText ? (
+    <Button
+      variant={previewMarkdown ? "secondary" : "outline"}
+      size="sm"
+      type="button"
+      onClick={toggleMarkdownPreview}
+      aria-label={previewMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
+      title={previewMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
+      aria-pressed={previewMarkdown}
+      className="h-9 min-w-9 px-2.5 sm:h-8"
+    >
+      {previewMarkdown ? <RotateCcwIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
+      <span className="hidden sm:inline">{previewMarkdown ? "Plain text" : "Try Markdown"}</span>
+    </Button>
+  ) : null;
+
+  if (showSource) {
     return (
-      <div className="flex min-w-0 flex-col gap-5">
+      <div className="flex min-w-0 flex-col gap-3 sm:gap-5">
         <MessageToolbar
-          label={messageFormatLabel(resolvedType, wasInferred)}
+          label={previewMarkdown ? "Markdown · preview" : messageFormatLabel(resolvedType, wasInferred)}
           body={body}
-          action={resolvedType === "text/markdown" ? (
-            <Button variant="outline" size="sm" type="button" onClick={() => setShowSource(false)}>
-              <EyeIcon data-icon="inline-start" />
-              Rendered
-            </Button>
-          ) : null}
+          action={
+            <>
+              {previewAction}
+              {resolvedType === "text/markdown" || previewMarkdown ? (
+                <Button variant="outline" size="sm" type="button" className="h-9 sm:h-8" onClick={() => setSourcePreference(false)} title="Show rendered Markdown">
+                  <EyeIcon aria-hidden="true" />
+                  <span className="hidden sm:inline">Rendered</span>
+                </Button>
+              ) : null}
+            </>
+          }
         />
-        <pre className="max-h-[60rem] min-w-0 overflow-auto whitespace-pre-wrap break-words border bg-[var(--panel-code-bg)] p-6 font-mono text-sm/7 text-[var(--panel-code-foreground)]">
+        <pre className="max-h-[60rem] min-w-0 overflow-auto whitespace-pre-wrap break-words border bg-[var(--panel-code-bg)] p-3 font-mono text-[0.84rem]/relaxed text-[var(--panel-code-foreground)] sm:p-6 sm:text-sm/7">
           {safeBody}
         </pre>
       </div>
@@ -39,15 +83,18 @@ export function MessageContent({ body, contentType }: { body: string; contentTyp
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-3 sm:gap-5">
       <MessageToolbar
-        label={messageFormatLabel(resolvedType, wasInferred)}
+        label={previewMarkdown ? "Markdown · preview" : messageFormatLabel(resolvedType, wasInferred)}
         body={body}
         action={
-          <Button variant="outline" size="sm" type="button" onClick={() => setShowSource(true)}>
-            <Code2Icon data-icon="inline-start" />
-            Raw
-          </Button>
+          <>
+            {previewAction}
+            <Button variant="outline" size="sm" type="button" className="h-9 sm:h-8" onClick={() => setSourcePreference(true)} title="Show Markdown source" aria-label="Show Markdown source">
+              <Code2Icon aria-hidden="true" />
+              <span className="hidden sm:inline">Raw</span>
+            </Button>
+          </>
         }
       />
       <MarkdownMessage body={body} />
@@ -65,9 +112,9 @@ function MessageToolbar({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
+    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b pb-3 sm:gap-3 sm:pb-4">
       <Badge variant="secondary">{label}</Badge>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
         <CopyButton value={body} label="Copy message" />
         {action}
       </div>

@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AgentboxMark } from "../../components/agentbox-mark";
 import { ThemeSwitcher } from "../../components/theme-switcher";
+import { ThreadMarkdownPreviewButton, useThreadMarkdownPreview } from "../../components/thread-markdown-preview";
 import { MessageContent } from "../../threads/[threadId]/message-content";
+import { isPlainTextMessage } from "../../threads/[threadId]/markdown-utils";
 import { attributionLabel } from "../../components/attribution";
 import styles from "./public-thread.module.css";
 
@@ -82,6 +84,14 @@ export function PublicThreadView({ token }: { token: string }) {
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState<string | null>(null);
   const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
+  const markdownPreview = useThreadMarkdownPreview();
+  const resetMarkdownPreview = markdownPreview.reset;
+
+  useEffect(() => {
+    resetMarkdownPreview();
+  }, [token, resetMarkdownPreview]);
+
+  const plainTextCount = thread?.messages.filter((message) => isPlainTextMessage(message.body, message.body_content_type)).length ?? 0;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -221,6 +231,14 @@ export function PublicThreadView({ token }: { token: string }) {
               <h1>{thread.title || "Untitled thread"}</h1>
               <div className={styles.threadMeta}><span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)}</span><span>Updated {formatDate(thread.updated_at)}</span></div>
               <p>This live URL provides read-only access. Posting, uploads, and visibility changes require an authenticated Agentbox user. <a href={`/share/${encodeURIComponent(token)}.md`}>Markdown for agents</a>.</p>
+              <div className="mt-5 flex items-center gap-3">
+                <ThreadMarkdownPreviewButton
+                  active={markdownPreview.allPlainAsMarkdown}
+                  count={plainTextCount}
+                  onToggle={markdownPreview.toggleAll}
+                />
+                {plainTextCount > 0 ? <span className="text-xs text-muted-foreground">Preview only · original text is unchanged</span> : null}
+              </div>
             </section>
 
             {error && <div className={styles.error}><strong>Attachment action failed.</strong><span>{error}</span></div>}
@@ -232,7 +250,12 @@ export function PublicThreadView({ token }: { token: string }) {
                   <div className={styles.rail}><span>{String(index + 1).padStart(2, "0")}</span><i/></div>
                   <div className={styles.messageContent}>
                     <header><div><strong>{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong><span>Message {index + 1}</span></div><time dateTime={message.created_at}>{formatDate(message.created_at)}</time></header>
-                    {message.body && <MessageContent body={message.body} contentType={message.body_content_type}/>}
+                    {message.body && <MessageContent
+                      body={message.body}
+                      contentType={message.body_content_type}
+                      forceMarkdown={markdownPreview.isMessageMarkdown(message.id)}
+                      onForceMarkdownChange={(enabled) => markdownPreview.setMessageMarkdown(message.id, enabled)}
+                    />}
                     {message.assets.length > 0 && (
                       <div className={styles.attachments}>
                         {message.assets.map((asset) => {

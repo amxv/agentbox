@@ -86,7 +86,7 @@ button.attachment:hover { background: var(--secondary); }
   .header { padding: 0 14px; }
   .brand small, .headerMeta > span { display: none; }
   .main { width: min(100% - 22px, 1120px); padding-top: 48px; }
-  .hero h1 { font-size: 48px; }
+  .hero h1 { font-size: clamp(34px, 10vw, 48px); overflow-wrap: anywhere; }
   .message { grid-template-columns: 24px minmax(0, 1fr); gap: 8px; }
   .messageContent { padding: 16px; }
   .messageContent > header { align-items: start; flex-direction: column; gap: 5px; }

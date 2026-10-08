@@ -22,7 +22,7 @@ export function PanelMain({
   return (
     <main
       className={cn(
-        "mx-auto flex w-full flex-col gap-8 px-5 py-8 sm:px-7 sm:py-10 lg:gap-10 lg:px-8 lg:py-12",
+        "mx-auto flex min-w-0 w-full flex-col gap-6 px-3 py-5 sm:gap-8 sm:px-7 sm:py-10 lg:gap-10 lg:px-8 lg:py-12",
         width === "default" && "max-w-6xl",
         width === "wide" && "max-w-[1440px]",
         width === "reading" && "max-w-[1240px]",
@@ -52,14 +52,14 @@ export function PanelHeader({
   return (
     <header
       className={cn(
-        "grid gap-7 border-b pb-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:pb-9",
+        "grid min-w-0 gap-5 border-b pb-6 sm:gap-7 sm:pb-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:pb-9",
         className
       )}
     >
       <div className="flex min-w-0 flex-col gap-4">
         <div className="flex flex-col gap-2">
           {eyebrow ? <PanelEyebrow>{eyebrow}</PanelEyebrow> : null}
-          <h1 className="max-w-5xl font-heading text-4xl leading-[1.02] font-medium tracking-[-0.035em] text-balance sm:text-5xl lg:text-[3.6rem]">
+          <h1 className="max-w-5xl break-words font-heading text-[2.15rem] leading-[1.05] font-medium tracking-[-0.035em] text-balance sm:text-5xl lg:text-[3.6rem]">
             {title}
           </h1>
         </div>
@@ -68,7 +68,7 @@ export function PanelHeader({
             {description}
           </div>
         ) : null}
-        {actions ? <div className="flex flex-wrap items-center gap-2.5 pt-1">{actions}</div> : null}
+        {actions ? <div className="flex min-w-0 flex-wrap items-center gap-2 pt-1 sm:gap-2.5">{actions}</div> : null}
       </div>
       {aside ? <div className="min-w-0 lg:max-w-lg">{aside}</div> : null}
     </header>
@@ -91,20 +91,20 @@ export function MetricStrip({
   className?: string;
 }) {
   return (
-    <dl className={cn("grid border border-foreground/15 bg-card sm:grid-cols-2", className)}>
+    <dl className={cn("grid min-w-0 grid-cols-2 border border-foreground/15 bg-card", className)}>
       {items.map((item, index) => (
         <div
           className={cn(
-            "flex min-w-0 flex-col gap-2.5 p-4 sm:p-5",
-            index > 0 && "border-t sm:border-t-0 sm:border-l",
-            index > 1 && "sm:border-t"
+            "flex min-w-0 flex-col gap-1.5 p-3 sm:gap-2.5 sm:p-5",
+            index > 0 && "border-l",
+            index > 1 && "border-t"
           )}
           key={`${item.label}-${index}`}
         >
           <dt className="font-mono text-[0.72rem] tracking-[0.12em] text-muted-foreground uppercase">
             {item.label}
           </dt>
-          <dd className="font-heading text-2xl leading-tight font-medium tracking-[-0.025em]">{item.value}</dd>
+          <dd className="break-words font-heading text-xl leading-tight font-medium tracking-[-0.025em] sm:text-2xl">{item.value}</dd>
           {item.detail ? <span className="text-sm/relaxed text-muted-foreground">{item.detail}</span> : null}
         </div>
       ))}

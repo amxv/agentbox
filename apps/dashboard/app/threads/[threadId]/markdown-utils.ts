@@ -34,8 +34,11 @@ export function inferBodyContentType(body: string): MessageContentType {
   return score >= 3 ? "text/markdown" : "text/plain";
 }
 
+export function isPlainTextMessage(body: string, contentType?: string | null) {
+  return (normalizeContentType(contentType) ?? inferBodyContentType(body)) === "text/plain";
+}
+
 export function messageFormatLabel(contentType: MessageContentType, wasInferred: boolean) {
   const label = contentType === "text/markdown" ? "Markdown" : "Plain text";
   return wasInferred ? `${label} · auto` : label;
 }
-

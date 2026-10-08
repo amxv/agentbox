@@ -58,10 +58,11 @@ export function MessageComposer({ label, placeholder, submitLabel, onSubmit, can
   return (
     <form onSubmit={handleSubmit}>
       <Card>
-        <CardHeader className="border-b">
+        <CardHeader className="grid-cols-1 border-b sm:grid-cols-[minmax(0,1fr)_auto]">
           <CardTitle>{label}</CardTitle>
-          <CardAction>
+          <CardAction className="col-start-1 row-auto justify-self-stretch sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:justify-self-end">
             <Button
+              className="w-full sm:w-auto"
               disabled={submitting || !canSubmit || (!body.trim() && files.length === 0)}
               type="submit"
             >

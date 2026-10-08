@@ -44,6 +44,8 @@ import { postDashboardMessage } from "../../components/agentbox-write";
 import { fetchSession } from "../../components/session";
 import { ThreadVisibilityControl } from "./thread-visibility-control";
 import { attributionLabel } from "../../components/attribution";
+import { ThreadMarkdownPreviewButton, useThreadMarkdownPreview } from "../../components/thread-markdown-preview";
+import { isPlainTextMessage } from "./markdown-utils";
 import {
   MetricStrip,
   MonoValue,
@@ -143,6 +145,12 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [markdownPreviewBodies, setMarkdownPreviewBodies] = useState<Record<string, string>>({});
   const [markdownPreviewErrors, setMarkdownPreviewErrors] = useState<Record<string, string>>({});
   const [expandedMarkdownPreviews, setExpandedMarkdownPreviews] = useState<Set<string>>(() => new Set());
+  const markdownPreview = useThreadMarkdownPreview();
+  const resetMarkdownPreview = markdownPreview.reset;
+
+  useEffect(() => {
+    resetMarkdownPreview();
+  }, [threadId, resetMarkdownPreview]);
 
   const loadThread = useCallback(async function loadThread() {
     setLoading(true);
@@ -235,6 +243,10 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
   const assetCount = useMemo(
     () => thread?.messages.reduce((total, message) => total + message.assets.length, 0) ?? 0,
+    [thread]
+  );
+  const plainTextCount = useMemo(
+    () => thread?.messages.filter((message) => isPlainTextMessage(message.body, message.body_content_type)).length ?? 0,
     [thread]
   );
 
@@ -372,6 +384,11 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 <PlusIcon data-icon="inline-start" />
                 {showReplyComposer ? "Close reply" : "Reply"}
               </Button>
+              <ThreadMarkdownPreviewButton
+                active={markdownPreview.allPlainAsMarkdown}
+                count={plainTextCount}
+                onToggle={markdownPreview.toggleAll}
+              />
               {thread ? <ThreadVisibilityControl threadId={thread.id} /> : null}
             </>
           }
@@ -402,7 +419,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </Alert>
         ) : null}
 
-        <section className="flex flex-col gap-5" aria-label="Thread messages">
+        <section className="flex min-w-0 flex-col gap-3 sm:gap-5" aria-label="Thread messages">
           {loading ? <MessageSkeleton /> : null}
           {!loading && !error && thread?.messages.length === 0 ? (
             <Empty className="border py-16">
@@ -417,40 +434,45 @@ export function ThreadView({ threadId }: { threadId: string }) {
             const isExpanded = expandedMessages.has(message.id);
             return (
               <Collapsible open={isExpanded} onOpenChange={() => toggleMessage(message.id)} key={message.id}>
-                <Card>
+                <Card className="min-w-0">
                   <CollapsibleTrigger
                     render={
                       <Button
                         type="button"
                         variant="ghost"
-                        className="panel-message-trigger h-auto w-full items-start justify-between gap-5 rounded-none p-5 text-left whitespace-normal"
+                        className="panel-message-trigger h-auto w-full min-w-0 flex-col items-stretch justify-start gap-3 rounded-none p-3.5 text-left whitespace-normal sm:p-5"
                       />
                     }
                   >
-                    <span className="flex min-w-0 items-start gap-4">
-                      <Badge variant="secondary">#{index + 1}</Badge>
-                      <span className="flex min-w-0 flex-col gap-3">
-                        <span className="flex flex-wrap items-center gap-3">
-                          <strong className="font-heading text-base font-semibold">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
-                          <Badge variant="outline">{getMessageKind(message.body_content_type)}</Badge>
-                          {message.assets.length > 0 ? <Badge variant="outline">{message.assets.length} attachment{message.assets.length === 1 ? "" : "s"}</Badge> : null}
+                    <span className="flex w-full min-w-0 items-start gap-2.5 sm:gap-3">
+                      <Badge variant="secondary" className="shrink-0">#{index + 1}</Badge>
+                      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <strong className="min-w-0 break-words font-heading text-sm font-semibold sm:text-base">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
+                          <Badge variant="outline" className="shrink-0">{getMessageKind(message.body_content_type)}</Badge>
+                          {message.assets.length > 0 ? <Badge variant="outline" className="shrink-0">{message.assets.length} attachment{message.assets.length === 1 ? "" : "s"}</Badge> : null}
                         </span>
-                        <span className="panel-message-preview line-clamp-2 text-sm/relaxed">{getMessagePreview(message.body)}</span>
-                        <span className="flex flex-wrap items-center gap-3">
-                          <MonoValue>{message.id}</MonoValue>
-                          <span onClick={(event) => event.stopPropagation()}><CopyButton value={message.id} label="Copy message ID" /></span>
+                        <span className="panel-message-meta text-xs/relaxed sm:text-sm">
+                          <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
                         </span>
                       </span>
+                      <ChevronDownIcon className={cn("mt-0.5 size-4 shrink-0 transition-transform", isExpanded && "rotate-180")} />
                     </span>
-                    <span className="panel-message-meta flex shrink-0 items-center gap-3 text-sm">
-                      <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
-                      <ChevronDownIcon className={cn("transition-transform", isExpanded && "rotate-180")} />
-                    </span>
+                    {!isExpanded ? <span className="panel-message-preview line-clamp-2 w-full min-w-0 break-words text-sm/relaxed">{getMessagePreview(message.body)}</span> : null}
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <Separator />
-                    <CardContent className="flex flex-col gap-8 pt-6">
-                      <MessageContent body={message.body} contentType={message.body_content_type} />
+                    <CardContent className="flex min-w-0 flex-col gap-5 pt-4 sm:gap-8 sm:pt-6">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <MonoValue className="min-w-0 truncate sm:break-all">{message.id}</MonoValue>
+                        <CopyButton value={message.id} label="Copy message ID" />
+                      </div>
+                      <MessageContent
+                        body={message.body}
+                        contentType={message.body_content_type}
+                        forceMarkdown={markdownPreview.isMessageMarkdown(message.id)}
+                        onForceMarkdownChange={(enabled) => markdownPreview.setMessageMarkdown(message.id, enabled)}
+                      />
                       {message.assets.length > 0 ? (
                         <section className="flex flex-col gap-4" aria-label="Attachments">
                           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -485,7 +507,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                     <div className="flex min-w-0 items-start gap-4">
                                       <span className="flex size-10 shrink-0 items-center justify-center border bg-muted"><FileTextIcon /></span>
                                       <div className="flex min-w-0 flex-col gap-2">
-                                        <CardTitle>{asset.file_name}</CardTitle>
+                                        <CardTitle className="break-words">{asset.file_name}</CardTitle>
                                         <CardDescription>{asset.mime_type ?? "Unknown type"} · {formatBytes(asset.size_bytes)}</CardDescription>
                                       </div>
                                     </div>
@@ -504,20 +526,20 @@ export function ThreadView({ threadId }: { threadId: string }) {
                                     ) : unavailable ? (
                                       <Alert variant="destructive"><AlertTitle>Attachment unavailable</AlertTitle><AlertDescription>{unavailableReason}</AlertDescription></Alert>
                                     ) : (
-                                      <div className="flex flex-wrap gap-3">
+                                      <div className="flex flex-wrap gap-2 sm:gap-3">
                                         {asset.preview_path && isMarkdownAsset(asset) ? (
-                                          <Button variant="outline" disabled={previewBusy} onClick={() => void toggleMarkdownPreview(asset)}>
+                                          <Button className="w-full sm:w-auto" variant="outline" disabled={previewBusy} onClick={() => void toggleMarkdownPreview(asset)}>
                                             {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
                                             {markdownPreviewOpen ? "Hide preview" : markdownPreviewError ? "Retry preview" : "Preview Markdown"}
                                           </Button>
                                         ) : asset.preview_path && !resolution?.preview_url && (!isPreviewableImage(asset) || resolution?.preview_failed) ? (
-                                          <Button variant="outline" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
+                                          <Button className="w-full sm:w-auto" variant="outline" disabled={previewBusy} onClick={() => void resolveAsset(asset, "preview")}>
                                             {previewBusy ? <Spinner data-icon="inline-start" /> : <EyeIcon data-icon="inline-start" />}
                                             {resolution?.preview_failed ? "Retry preview" : "Preview"}
                                           </Button>
                                         ) : null}
                                         {asset.download_path ? (
-                                          <Button variant="outline" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
+                                          <Button className="w-full sm:w-auto" variant="outline" disabled={downloadBusy} onClick={() => void resolveAsset(asset, "download")}>
                                             {downloadBusy ? <Spinner data-icon="inline-start" /> : <DownloadIcon data-icon="inline-start" />}
                                             Download attachment
                                           </Button>

@@ -188,6 +188,15 @@ html:has([data-panel-root]) {
   backdrop-filter: blur(18px) saturate(120%);
 }
 
+.panel-mobile-nav {
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.panel-mobile-nav::-webkit-scrollbar {
+  display: none;
+}
+
 .panel-brand {
   display: inline-flex;
   flex: none;
@@ -642,4 +651,49 @@ html:has([data-panel-root]) {
   max-width: 100%;
   margin-block: 1.75rem;
   border: 1px solid var(--border);
+}
+
+/* On a phone, controls and timestamps must not steal the message's entire
+ * reading width. Keep wide code and data tables scrollable inside the card. */
+@media (max-width: 639px) {
+  [data-panel-root] [data-slot="card-header"]:has(> [data-slot="card-action"] > [data-slot="button"] ~ [data-slot="button"]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-panel-root] [data-slot="card-header"]:has(> [data-slot="card-action"] > [data-slot="button"] ~ [data-slot="button"]) > [data-slot="card-action"] {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    max-width: 100%;
+  }
+
+  [data-panel-root] [data-slot="card-footer"] {
+    flex-wrap: wrap;
+  }
+
+  [data-panel-root] [data-slot="card-title"],
+  [data-panel-root] [data-slot="card-description"] {
+    overflow-wrap: anywhere;
+  }
+
+  [data-panel-root] [data-slot="table-container"] {
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .agentbox-markdown {
+    font-size: 0.96rem;
+    line-height: 1.65;
+  }
+
+  .agentbox-markdown h1 { font-size: 1.8rem; margin-block: 2rem 1rem; }
+  .agentbox-markdown h2 { font-size: 1.55rem; margin-block: 1.9rem 1rem; }
+  .agentbox-markdown h3 { font-size: 1.3rem; margin-block: 1.6rem 0.75rem; }
+  .agentbox-markdown :where(p, ul, ol, blockquote) { margin-block: 1rem; }
+  .agentbox-markdown :where(ul, ol) { padding-left: 1.3rem; }
+
+  .agentbox-code-toolbar { padding: 0.65rem 0.75rem; }
+  .agentbox-code-block { padding: 0.9rem; font-size: 0.78rem; }
+  .agentbox-markdown th, .agentbox-markdown td { padding: 0.65rem; }
 }

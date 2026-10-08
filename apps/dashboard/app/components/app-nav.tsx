@@ -92,7 +92,7 @@ export function AppNav() {
 
   return (
     <header className="panel-nav-shell sticky top-0 z-40">
-      <div className="mx-auto flex h-[4.5rem] max-w-[1480px] items-center gap-4 px-5 sm:px-7 lg:px-8">
+      <div className="mx-auto flex h-14 max-w-[1480px] items-center gap-3 px-3 sm:h-16 sm:px-7 lg:h-[4.5rem] lg:gap-4 lg:px-8">
         <Link className="panel-brand" href="/threads" aria-label="Agentbox inbox">
           <AgentboxMark className="panel-brand-mark" />
           <span className="panel-brand-name">Agentbox</span>
@@ -145,13 +145,13 @@ export function AppNav() {
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-2 lg:hidden">
-          <ThemeSwitcher compact />
+          <div className="hidden sm:block"><ThemeSwitcher compact /></div>
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="outline" size="icon" />}>
+            <DropdownMenuTrigger render={<Button variant="outline" size="icon" className="size-10 sm:size-9" />}>
               <MenuIcon />
               <span className="sr-only">Open navigation</span>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72">
+            <DropdownMenuContent align="end" className="w-[min(19rem,calc(100vw-1rem))]">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>
                   <span className="flex items-center gap-2.5 text-foreground">
@@ -178,6 +178,10 @@ export function AppNav() {
                   );
                 })}
               </DropdownMenuGroup>
+              <div className="flex items-center justify-between gap-3 border-t px-3 py-3 sm:hidden">
+                <span className="text-xs font-medium text-muted-foreground">Appearance</span>
+                <ThemeSwitcher compact />
+              </div>
               {auth ? (
                 <>
                   <DropdownMenuSeparator />
@@ -194,6 +198,26 @@ export function AppNav() {
           </DropdownMenu>
         </div>
       </div>
+      <nav className="panel-mobile-nav flex gap-1 overflow-x-auto border-t border-border/60 px-3 py-1.5 sm:px-7 lg:hidden" aria-label="Quick navigation">
+        {PRIMARY_LINKS.map((link) => {
+          const Icon = link.icon;
+          const active = isActive(pathname, link.href);
+          return (
+            <Link
+              key={link.href}
+              href={link.href}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors",
+                active ? "bg-[var(--panel-active-bg)] text-[var(--panel-active-foreground)]" : "hover:bg-muted hover:text-foreground"
+              )}
+            >
+              <Icon className="size-4" aria-hidden="true" />
+              {link.shortLabel}
+            </Link>
+          );
+        })}
+      </nav>
     </header>
   );
 }
