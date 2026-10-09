@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { RotateCcwIcon, WandSparklesIcon } from "lucide-react";
+import { AlignLeftIcon, WandSparklesIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type MarkdownPreference = {
@@ -219,7 +219,7 @@ export function ThreadMarkdownPreviewButton({
       onClick={onToggle}
       className="h-9 min-w-9 gap-2 px-2.5 sm:px-3"
     >
-      {active ? <RotateCcwIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
+      {active ? <AlignLeftIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
       <span className="hidden sm:inline">{active ? "Original formatting" : "Try Markdown for thread"}</span>
     </Button>
   );

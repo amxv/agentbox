@@ -1,6 +1,6 @@
 "use client";
 
-import { Code2Icon, EyeIcon, RotateCcwIcon, WandSparklesIcon } from "lucide-react";
+import { AlignLeftIcon, Code2Icon, EyeIcon, WandSparklesIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,7 +56,7 @@ export function MessageContent({
       aria-pressed={previewMarkdown}
       className="h-9 min-w-9 px-2.5 sm:h-8"
     >
-      {previewMarkdown ? <RotateCcwIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
+      {previewMarkdown ? <AlignLeftIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
       <span className="hidden sm:inline">{previewMarkdown ? "Plain text" : "Try Markdown"}</span>
     </Button>
   ) : null;

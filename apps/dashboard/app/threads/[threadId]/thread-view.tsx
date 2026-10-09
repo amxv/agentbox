@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlignLeftIcon,
   ChevronDownIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
@@ -10,7 +11,6 @@ import {
   FileTextIcon,
   MessageSquareIcon,
   PlusIcon,
-  RotateCcwIcon,
   ShieldAlertIcon,
   WandSparklesIcon
 } from "lucide-react";
@@ -553,7 +553,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
             return (
               <Collapsible open={isExpanded} onOpenChange={() => toggleMessage(message.id)} key={message.id}>
                 <Card className="min-w-0 gap-0 py-0">
-                  <div className="flex min-w-0 flex-col gap-1 border-b border-border/70 p-2 sm:flex-row sm:items-center sm:gap-2 sm:px-3">
+                  <div className="flex min-w-0 flex-col gap-1 border-b border-border/70 p-2 md:flex-row md:items-center md:gap-2 sm:px-3">
                     <CollapsibleTrigger
                       render={<Button type="button" variant="ghost" className="panel-message-trigger h-auto min-w-0 flex-1 justify-start gap-1.5 rounded-sm px-1 py-1.5 text-left whitespace-normal sm:gap-2" />}
                     >
@@ -565,40 +565,43 @@ export function ThreadView({ threadId }: { threadId: string }) {
                         {forceMarkdown ? "Markdown · preview" : getMessageKind(message.body_content_type)}
                       </Badge>
                       {message.assets.length ? <span className="text-[0.7rem] text-muted-foreground">· {message.assets.length} files</span> : null}
-                      <time className="ml-auto hidden shrink-0 text-xs text-muted-foreground md:inline" dateTime={message.created_at}>{formatDate(message.created_at)}</time>
                       <ChevronDownIcon className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", isExpanded && "rotate-180")} />
                     </CollapsibleTrigger>
-                    <div className="flex min-w-0 items-center gap-0.5 sm:shrink-0" role="group" aria-label={`Message ${index + 1} actions`}>
-                      <time className="mr-auto text-[0.7rem] text-muted-foreground sm:hidden" dateTime={message.created_at} title={formatDate(message.created_at)}>{formatCompactDate(message.created_at)}</time>
-                      <span className="min-w-0 max-w-[4.5rem] truncate font-mono text-[0.65rem] text-muted-foreground sm:max-w-28" title={message.id}>{message.id}</span>
-                      <CopyButton value={message.id} label="Copy message ID" size="icon-xs" />
-                      <CopyButton value={message.body} label="Copy message" size="icon-xs" />
-                      {isPlain ? (
-                        <Button
-                          size="icon-xs"
-                          variant={forceMarkdown ? "secondary" : "ghost"}
-                          type="button"
-                          aria-label={forceMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
-                          title={forceMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
-                          aria-pressed={forceMarkdown}
-                          onClick={() => toggleMarkdownForMessage(message.id, !forceMarkdown)}
-                        >
-                          {forceMarkdown ? <RotateCcwIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
-                        </Button>
-                      ) : null}
-                      {canRenderMarkdown ? (
-                        <Button
-                          size="icon-xs"
-                          variant={showRaw ? "secondary" : "ghost"}
-                          type="button"
-                          aria-label={showRaw ? "Show rendered Markdown" : "Show raw Markdown"}
-                          title={showRaw ? "Show rendered Markdown" : "Show raw Markdown"}
-                          aria-pressed={showRaw}
-                          onClick={() => setRawMessageOverrides((current) => ({ ...current, [message.id]: !showRaw }))}
-                        >
-                          {showRaw ? <EyeIcon aria-hidden="true" /> : <Code2Icon aria-hidden="true" />}
-                        </Button>
-                      ) : null}
+                    <div className="flex min-w-0 flex-wrap items-center gap-1 md:shrink-0" role="group" aria-label={`Message ${index + 1} actions`}>
+                      <span className="flex min-w-0 items-center gap-0.5">
+                        <span className="min-w-0 max-w-20 truncate font-mono text-[0.65rem] text-muted-foreground sm:max-w-28" title={message.id}>{message.id}</span>
+                        <CopyButton value={message.id} label="Copy message ID" size="icon-xs" />
+                        <time className="shrink-0 text-[0.7rem] text-muted-foreground" dateTime={message.created_at} title={formatDate(message.created_at)}>{formatCompactDate(message.created_at)}</time>
+                      </span>
+                      <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                        <CopyButton value={message.body} label="Copy message" size="icon-xs" icon="clipboard" />
+                        {isPlain ? (
+                          <Button
+                            size="icon-xs"
+                            variant={forceMarkdown ? "secondary" : "ghost"}
+                            type="button"
+                            aria-label={forceMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
+                            title={forceMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
+                            aria-pressed={forceMarkdown}
+                            onClick={() => toggleMarkdownForMessage(message.id, !forceMarkdown)}
+                          >
+                            {forceMarkdown ? <AlignLeftIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
+                          </Button>
+                        ) : null}
+                        {canRenderMarkdown ? (
+                          <Button
+                            size="icon-xs"
+                            variant={showRaw ? "secondary" : "ghost"}
+                            type="button"
+                            aria-label={showRaw ? "Show rendered Markdown" : "Show raw Markdown"}
+                            title={showRaw ? "Show rendered Markdown" : "Show raw Markdown"}
+                            aria-pressed={showRaw}
+                            onClick={() => setRawMessageOverrides((current) => ({ ...current, [message.id]: !showRaw }))}
+                          >
+                            {showRaw ? <EyeIcon aria-hidden="true" /> : <Code2Icon aria-hidden="true" />}
+                          </Button>
+                        ) : null}
+                      </span>
                     </div>
                   </div>
                   {!isExpanded ? (
