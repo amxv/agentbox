@@ -1,19 +1,17 @@
 "use client";
 
-import { CheckIcon, ClipboardIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
 export function CopyButton({
   value,
   label = "Copy",
-  size = "icon-sm",
-  icon = "copy"
+  size = "icon-sm"
 }: {
   value: string;
   label?: string;
   size?: "icon-xs" | "icon-sm" | "icon";
-  icon?: "copy" | "clipboard";
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -36,7 +34,7 @@ export function CopyButton({
       size={size}
       onClick={handleClick}
     >
-      {copied ? <CheckIcon /> : icon === "clipboard" ? <ClipboardIcon /> : <CopyIcon />}
+      {copied ? <CheckIcon /> : <CopyIcon />}
     </Button>
   );
 }

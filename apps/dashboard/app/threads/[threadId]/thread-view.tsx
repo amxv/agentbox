@@ -574,7 +574,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                         <time className="shrink-0 text-[0.7rem] text-muted-foreground" dateTime={message.created_at} title={formatDate(message.created_at)}>{formatCompactDate(message.created_at)}</time>
                       </span>
                       <span className="ml-auto flex shrink-0 items-center gap-0.5">
-                        <CopyButton value={message.body} label="Copy message" size="icon-xs" icon="clipboard" />
+                        <CopyButton value={message.body} label="Copy message" size="icon-xs" />
                         {isPlain ? (
                           <Button
                             size="icon-xs"
