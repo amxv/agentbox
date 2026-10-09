@@ -188,15 +188,6 @@ html:has([data-panel-root]) {
   backdrop-filter: blur(18px) saturate(120%);
 }
 
-.panel-mobile-nav {
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
-}
-
-.panel-mobile-nav::-webkit-scrollbar {
-  display: none;
-}
-
 .panel-brand {
   display: inline-flex;
   flex: none;
@@ -240,47 +231,6 @@ html:has([data-panel-root]) {
   font-size: 0.98rem;
   font-weight: 650;
   letter-spacing: -0.02em;
-}
-
-.panel-nav-links {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.2rem;
-}
-
-.panel-nav-link {
-  display: inline-flex;
-  height: 2.35rem;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  color: var(--muted-foreground);
-  padding: 0 0.72rem;
-  font-size: 0.86rem;
-  font-weight: 540;
-  text-decoration: none;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.panel-nav-link:hover {
-  border-color: var(--border);
-  background: var(--secondary);
-  color: var(--foreground);
-}
-
-.panel-nav-link.is-active,
-.panel-nav-link.is-active:hover {
-  border-color: var(--panel-active-border);
-  background: var(--panel-active-bg);
-  color: var(--panel-active-foreground);
-}
-
-.panel-nav-link.is-owner:not(.is-active) {
-  color: color-mix(in oklch, var(--muted-foreground), transparent 12%);
 }
 
 .panel-account-avatar {
