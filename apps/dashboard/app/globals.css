@@ -203,12 +203,8 @@ html:has([data-panel-root]) {
 
 .panel-brand-mark,
 .panel-menu-mark {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.15rem;
-  border: 1px solid var(--foreground);
-  background: var(--foreground);
-  padding: 0.25rem;
+  display: block;
+  flex: none;
 }
 
 .panel-brand-mark {
@@ -219,12 +215,6 @@ html:has([data-panel-root]) {
 .panel-menu-mark {
   width: 1.35rem;
   height: 1.35rem;
-}
-
-.panel-brand-mark > i,
-.panel-menu-mark > i {
-  display: block;
-  background: var(--background);
 }
 
 .panel-brand-name {
