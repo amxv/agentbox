@@ -62,7 +62,7 @@ func (s *Server) build() *mcp.Server {
 		OutputSchema: objectSchema(map[string]any{
 			"threads": map[string]any{"type": "array", "items": map[string]any{}},
 		}, []string{"threads"}),
-		Annotations: annotations(true, false, false),
+		Annotations: annotations(false),
 	}, s.listThreads)
 	server.AddTool(&mcp.Tool{
 		Name:        "search_threads",
@@ -77,7 +77,7 @@ func (s *Server) build() *mcp.Server {
 		OutputSchema: objectSchema(map[string]any{
 			"threads": map[string]any{"type": "array", "items": map[string]any{}},
 		}, []string{"threads"}),
-		Annotations: annotations(true, false, false),
+		Annotations: annotations(false),
 	}, s.searchThreads)
 	server.AddTool(&mcp.Tool{
 		Name:        "get_thread",
@@ -89,7 +89,7 @@ func (s *Server) build() *mcp.Server {
 		OutputSchema: objectSchema(map[string]any{
 			"thread": map[string]any{},
 		}, []string{"thread"}),
-		Annotations: annotations(true, false, false),
+		Annotations: annotations(false),
 	}, s.getThread)
 	server.AddTool(&mcp.Tool{
 		Name:        "read_attachment",
@@ -101,7 +101,7 @@ func (s *Server) build() *mcp.Server {
 			"max_bytes":    map[string]any{"type": "integer", "minimum": service.MinAttachmentReadBytes, "maximum": service.MaxAttachmentReadBytes},
 		}, []string{"asset_id"}),
 		OutputSchema: attachmentReadOutputSchema(),
-		Annotations:  annotations(true, false, false),
+		Annotations:  annotations(false),
 	}, s.readAttachment)
 	server.AddTool(&mcp.Tool{
 		Name:        "download_attachment",
@@ -114,7 +114,7 @@ func (s *Server) build() *mcp.Server {
 			"asset":      attachmentSummarySchema(),
 			"expires_in": map[string]any{"type": "integer", "minimum": 60, "maximum": 3600},
 		}, []string{"asset", "expires_in"}),
-		Annotations: annotations(true, false, false),
+		Annotations: annotations(false),
 	}, s.downloadAttachment)
 	server.AddTool(&mcp.Tool{
 		Name:        "create_thread",
@@ -129,8 +129,8 @@ func (s *Server) build() *mcp.Server {
 			"thread":  map[string]any{},
 			"message": map[string]any{},
 		}, []string{"thread"}),
-Annotations: annotations(true, false, true),
-}, s.createThread)
+		Annotations: annotations(false),
+	}, s.createThread)
 	server.AddTool(&mcp.Tool{
 		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}, "openai/toolInvocation/invoking": "Posting to Agentbox…", "openai/toolInvocation/invoked": "Posted to Agentbox"},
 		Name:        "post_message",
@@ -155,8 +155,8 @@ Annotations: annotations(true, false, true),
 		OutputSchema: objectSchema(map[string]any{
 			"message": map[string]any{},
 		}, []string{"message"}),
-Annotations: annotations(true, false, true),
-}, s.postMessage)
+		Annotations: annotations(false),
+	}, s.postMessage)
 	server.AddTool(&mcp.Tool{
 		Name:        "manage_thread_visibility",
 		Title:       "Manage thread visibility",
@@ -177,8 +177,8 @@ Annotations: annotations(true, false, true),
 		OutputSchema: objectSchema(map[string]any{
 			"visibility": map[string]any{},
 		}, []string{"visibility"}),
-Annotations: annotations(true, true, false),
-}, s.manageThreadVisibility)
+		Annotations: annotations(true),
+	}, s.manageThreadVisibility)
 	return server
 }
 
@@ -525,10 +525,9 @@ func attachmentReadOutputSchema() map[string]any {
 	}, []string{"asset", "encoding", "text", "range"})
 }
 
-func annotations(readOnly bool, destructive bool, openWorld bool) *mcp.ToolAnnotations {
+func annotations(destructive bool) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{
-		ReadOnlyHint:    readOnly,
+		ReadOnlyHint:    true,
 		DestructiveHint: &destructive,
-		OpenWorldHint:   &openWorld,
 	}
 }

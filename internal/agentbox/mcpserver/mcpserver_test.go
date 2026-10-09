@@ -48,15 +48,18 @@ func setThreadVisibilityForTest(ctx context.Context, repository interface {
 
 func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	byName := listToolsByName(t)
-for _, name := range []string{"list_threads", "search_threads", "get_thread", "read_attachment", "download_attachment", "create_thread", "post_message", "manage_thread_visibility"} {
-tool := byName[name]
-if tool == nil {
-t.Fatalf("missing tool %s in %#v", name, byName)
-}
-if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-t.Fatalf("%s missing readOnlyHint: %#v", name, tool.Annotations)
-}
-}
+	for _, name := range []string{"list_threads", "search_threads", "get_thread", "read_attachment", "download_attachment", "create_thread", "post_message", "manage_thread_visibility"} {
+		tool := byName[name]
+		if tool == nil {
+			t.Fatalf("missing tool %s in %#v", name, byName)
+		}
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Fatalf("%s missing readOnlyHint: %#v", name, tool.Annotations)
+		}
+		if tool.Annotations.OpenWorldHint != nil {
+			t.Fatalf("%s unexpected openWorldHint: %#v", name, tool.Annotations)
+		}
+	}
 	if !byName["list_threads"].Annotations.ReadOnlyHint {
 		t.Fatalf("list_threads annotations = %#v", byName["list_threads"].Annotations)
 	}
@@ -65,7 +68,7 @@ t.Fatalf("%s missing readOnlyHint: %#v", name, tool.Annotations)
 	}
 	for _, name := range []string{"get_thread", "read_attachment", "download_attachment"} {
 		tool := byName[name]
-		if !tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
+		if !tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
 			t.Fatalf("%s annotations = %#v", name, tool.Annotations)
 		}
 	}
@@ -73,13 +76,10 @@ t.Fatalf("%s missing readOnlyHint: %#v", name, tool.Annotations)
 		t.Fatalf("get_thread attachment guidance = %q", description)
 	}
 	post := byName["post_message"]
-if post.Annotations.OpenWorldHint == nil || !*post.Annotations.OpenWorldHint {
-t.Fatalf("post_message annotations = %#v", post.Annotations)
-}
-visibility := byName["manage_thread_visibility"]
-if visibility.Annotations.DestructiveHint == nil || !*visibility.Annotations.DestructiveHint {
-t.Fatalf("manage_thread_visibility annotations = %#v", visibility.Annotations)
-}
+	visibility := byName["manage_thread_visibility"]
+	if visibility.Annotations.DestructiveHint == nil || !*visibility.Annotations.DestructiveHint {
+		t.Fatalf("manage_thread_visibility annotations = %#v", visibility.Annotations)
+	}
 	meta := post.Meta.GetMeta()
 	if got := meta["openai/toolInvocation/invoked"]; got != "Posted to Agentbox" {
 		t.Fatalf("post_message meta = %#v", meta)
