@@ -87,12 +87,7 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
   const [assetBusy, setAssetBusy] = useState<string | null>(null);
-  const markdownPreview = useThreadMarkdownPreview();
-  const resetMarkdownPreview = markdownPreview.reset;
-
-  useEffect(() => {
-    resetMarkdownPreview();
-  }, [threadId, resetMarkdownPreview]);
+  const markdownPreview = useThreadMarkdownPreview(threadId, "local");
 
   const plainTextCount = thread?.messages.filter((message) => isPlainTextMessage(message.body, message.body_content_type)).length ?? 0;
 

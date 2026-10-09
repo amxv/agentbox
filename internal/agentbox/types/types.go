@@ -176,6 +176,12 @@ type Thread struct {
 	VisibilitySummary        ThreadVisibilitySummary `json:"visibility_summary"`
 }
 
+// ThreadDisplayPreference belongs to a reader, not to the shared thread.
+type ThreadDisplayPreference struct {
+	AllPlainAsMarkdown bool            `json:"all_plain_as_markdown"`
+	MessagePreferences map[string]bool `json:"message_preferences"`
+}
+
 type ThreadTeamSummary struct {
 	ID   string `json:"id"`
 	Slug string `json:"slug"`

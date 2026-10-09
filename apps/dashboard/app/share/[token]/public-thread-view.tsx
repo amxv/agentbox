@@ -84,12 +84,7 @@ export function PublicThreadView({ token }: { token: string }) {
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState<string | null>(null);
   const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
-  const markdownPreview = useThreadMarkdownPreview();
-  const resetMarkdownPreview = markdownPreview.reset;
-
-  useEffect(() => {
-    resetMarkdownPreview();
-  }, [token, resetMarkdownPreview]);
+  const markdownPreview = useThreadMarkdownPreview(thread?.id ?? `public:${token}`, "local");
 
   const plainTextCount = thread?.messages.filter((message) => isPlainTextMessage(message.body, message.body_content_type)).length ?? 0;
 

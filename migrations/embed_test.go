@@ -12,8 +12,8 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-if len(migrations) != 23 {
-t.Fatalf("migration count = %d, want 23", len(migrations))
+if len(migrations) != 24 {
+t.Fatalf("migration count = %d, want 24", len(migrations))
 	}
 	for index, migration := range migrations {
 		wantVersion := fmt.Sprintf("%04d", index+1)

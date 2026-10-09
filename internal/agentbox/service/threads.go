@@ -157,6 +157,14 @@ func (s *Service) GetThread(ctx context.Context, auth types.AuthContext, threadI
 	return thread, nil
 }
 
+// An inexpensive version probe for open readers. It never fetches message bodies.
+func (s *Service) GetThreadActivity(ctx context.Context, auth types.AuthContext, threadID string) (string, error) {
+	if err := requireScope(auth, "threads:read"); err != nil {
+		return "", err
+	}
+	return s.repo.GetThreadActivity(ctx, auth.UserID, threadID)
+}
+
 func (s *Service) GetMessage(ctx context.Context, auth types.AuthContext, messageID string) (*types.Message, error) {
 	if err := requireScope(auth, "threads:read"); err != nil {
 		return nil, err

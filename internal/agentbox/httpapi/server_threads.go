@@ -110,6 +110,14 @@ func (s *Server) threadSubroutes(w http.ResponseWriter, r *http.Request) {
 		s.threadView(w, r, threadID)
 		return
 	}
+	if tail == "display-preference" {
+		s.threadDisplayPreference(w, r, threadID)
+		return
+	}
+	if tail == "activity" {
+		s.threadActivity(w, r, threadID)
+		return
+	}
 	if tail == "messages" {
 		s.postMessage(w, r, threadID)
 		return

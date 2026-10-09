@@ -33,6 +33,9 @@ type Repository interface {
 	CreateThread(ctx context.Context, userID string, title string, auth types.AuthContext) (types.Thread, error)
 	CreateThreadWithMessage(ctx context.Context, userID string, title string, auth types.AuthContext, body string, bodyContentType *string) (types.Thread, types.Message, error)
 	GetThread(ctx context.Context, userID string, threadID string) (*types.ThreadWithMessages, error)
+	GetThreadActivity(ctx context.Context, userID string, threadID string) (string, error)
+	GetThreadDisplayPreference(ctx context.Context, userID string, threadID string) (types.ThreadDisplayPreference, error)
+	SaveThreadDisplayPreference(ctx context.Context, userID string, threadID string, preference types.ThreadDisplayPreference) error
 	GetMessage(ctx context.Context, userID string, messageID string) (*types.Message, error)
 	ListOwnerContentThreads(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) ([]types.OwnerContentThreadSummary, error)
 	ListOwnerContentThreadsPage(ctx context.Context, ownerUserID string, params types.OwnerContentListParams) (types.OwnerContentThreadPage, error)

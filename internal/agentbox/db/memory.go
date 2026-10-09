@@ -30,24 +30,25 @@ func (l *memoryAttachmentPurgeLease) Close(context.Context) error {
 }
 
 type MemoryRepository struct {
-	purgeMutex        sync.Mutex
-	Threads           []types.Thread
-	Messages          []types.Message
-	Assets            []types.Asset
-	Pending           []types.PendingUpload
-	UploadCleanup     []memoryUploadCleanup
-	APIKeys           []types.APIKey
-	Users             []types.User
-	Sessions          []types.UserSession
-	CLICodes          []types.CLILoginCode
-	OwnerSetupTokens  []memoryOwnerSetupToken
-	SignupInvitations []memorySignupInvitation
-	Teams             []types.Team
-	TeamMemberships   []types.TeamMembership
-	ThreadTeamShares  []types.ThreadTeamShare
-	ThreadPublicLinks []types.ThreadPublicLink
-	Onboarding        []types.OnboardingState
-	RaycastSetupURLs  map[string]string
+	purgeMutex               sync.Mutex
+	Threads                  []types.Thread
+	Messages                 []types.Message
+	Assets                   []types.Asset
+	Pending                  []types.PendingUpload
+	UploadCleanup            []memoryUploadCleanup
+	APIKeys                  []types.APIKey
+	Users                    []types.User
+	Sessions                 []types.UserSession
+	CLICodes                 []types.CLILoginCode
+	OwnerSetupTokens         []memoryOwnerSetupToken
+	SignupInvitations        []memorySignupInvitation
+	Teams                    []types.Team
+	TeamMemberships          []types.TeamMembership
+	ThreadTeamShares         []types.ThreadTeamShare
+	ThreadPublicLinks        []types.ThreadPublicLink
+	ThreadDisplayPreferences map[string]types.ThreadDisplayPreference
+	Onboarding               []types.OnboardingState
+	RaycastSetupURLs         map[string]string
 }
 
 type memoryOwnerSetupToken struct {

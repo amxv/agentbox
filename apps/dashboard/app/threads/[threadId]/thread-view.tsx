@@ -2,15 +2,20 @@
 
 import {
   ChevronDownIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
+  Code2Icon,
   DownloadIcon,
   EyeIcon,
   FileTextIcon,
   MessageSquareIcon,
   PlusIcon,
-  ShieldAlertIcon
+  RotateCcwIcon,
+  ShieldAlertIcon,
+  WandSparklesIcon
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,7 +38,6 @@ import {
   EmptyMedia,
   EmptyTitle
 } from "@/components/ui/empty";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
@@ -46,12 +50,10 @@ import { ThreadVisibilityControl } from "./thread-visibility-control";
 import { attributionLabel } from "../../components/attribution";
 import { ThreadMarkdownPreviewButton, useThreadMarkdownPreview } from "../../components/thread-markdown-preview";
 import { isPlainTextMessage } from "./markdown-utils";
-import {
-  MetricStrip,
-  MonoValue,
-  PanelHeader,
-  PanelMain,
-} from "../../components/panel-shell";
+import { MonoValue, PanelHeader, PanelMain } from "../../components/panel-shell";
+
+const THREAD_POLL_INTERVAL_MS = 60_000;
+const LARGE_MARKDOWN_THRESHOLD = 300_000;
 
 type Asset = {
   id: string;
@@ -101,6 +103,12 @@ function formatDate(value: string) {
   });
 }
 
+function formatCompactDate(value: string) {
+  return new Date(value).toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+  });
+}
+
 function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -139,64 +147,139 @@ export function ThreadView({ threadId }: { threadId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [showReplyComposer, setShowReplyComposer] = useState(false);
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(() => new Set());
+  const [rawMessageOverrides, setRawMessageOverrides] = useState<Record<string, boolean>>({});
   const [assetResolutions, setAssetResolutions] = useState<Record<string, AssetResolution>>({});
   const [assetBusy, setAssetBusy] = useState<string | null>(null);
   const [downloadAllBusy, setDownloadAllBusy] = useState<string | null>(null);
   const [markdownPreviewBodies, setMarkdownPreviewBodies] = useState<Record<string, string>>({});
   const [markdownPreviewErrors, setMarkdownPreviewErrors] = useState<Record<string, string>>({});
   const [expandedMarkdownPreviews, setExpandedMarkdownPreviews] = useState<Set<string>>(() => new Set());
-  const markdownPreview = useThreadMarkdownPreview();
-  const resetMarkdownPreview = markdownPreview.reset;
+  const markdownPreview = useThreadMarkdownPreview(threadId);
+  const currentThread = useRef<Thread | null>(null);
+  const probedAt = useRef(Date.now());
+  const pendingProbe = useRef(false);
+  const previewRequests = useRef(new Map<string, AbortController>());
 
   useEffect(() => {
-    resetMarkdownPreview();
-  }, [threadId, resetMarkdownPreview]);
+    const controllers = previewRequests.current;
+    return () => {
+      for (const controller of controllers.values()) controller.abort();
+      controllers.clear();
+    };
+  }, [threadId]);
 
-  const loadThread = useCallback(async function loadThread() {
-    setLoading(true);
-    setError(null);
+  const loadThread = useCallback(async function loadThread(options: { quiet?: boolean; signal?: AbortSignal } = {}) {
+    if (!options.quiet) {
+      setLoading(true);
+      setError(null);
+    }
     try {
-      const session = await fetchSession();
-      if (!session) {
+      if (!options.quiet) {
+        const session = await fetchSession(options.signal);
+        if (!session) {
+          router.replace(`/login?next=/threads/${encodeURIComponent(threadId)}`);
+          return;
+        }
+      }
+      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/view`, { cache: "no-store", signal: options.signal });
+      if (response.status === 401) {
         router.replace(`/login?next=/threads/${encodeURIComponent(threadId)}`);
         return;
       }
-      const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/view`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
       const nextThread = data.thread as Thread;
+      if (options.signal?.aborted) return;
+      const previousIDs = new Set(currentThread.current?.messages.map((message) => message.id) ?? []);
+      currentThread.current = nextThread;
       setThread(nextThread);
       setExpandedMessages((current) => {
         const next = new Set<string>();
         for (const message of nextThread.messages) {
           if (current.has(message.id)) next.add(message.id);
+          else if (options.quiet && !previousIDs.has(message.id)) next.add(message.id);
         }
-        if (nextThread.messages.length === 1) next.add(nextThread.messages[0].id);
+        if (!options.quiet && nextThread.messages.length === 1) next.add(nextThread.messages[0].id);
         return next;
       });
-      setAssetResolutions({});
-      setMarkdownPreviewBodies({});
-      setMarkdownPreviewErrors({});
-      setExpandedMarkdownPreviews(new Set());
+      if (!options.quiet) {
+        setAssetResolutions({});
+        setMarkdownPreviewBodies({});
+        setMarkdownPreviewErrors({});
+        setExpandedMarkdownPreviews(new Set());
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (!options.signal?.aborted && !options.quiet) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (!options.quiet && !options.signal?.aborted) setLoading(false);
     }
   }, [router, threadId]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => { void loadThread(); }, 0);
-    return () => window.clearTimeout(timeout);
+    const controller = new AbortController();
+    currentThread.current = null;
+    const timeout = window.setTimeout(() => { void loadThread({ signal: controller.signal }); }, 0);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
   }, [loadThread]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    probedAt.current = Date.now();
+
+    async function checkForNewMessages() {
+      if (document.hidden || pendingProbe.current || !currentThread.current) return;
+      pendingProbe.current = true;
+      probedAt.current = Date.now();
+      try {
+        const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/activity`, {
+          cache: "no-store", signal: controller.signal
+        });
+        if (response.status === 401) {
+          router.replace(`/login?next=/threads/${encodeURIComponent(threadId)}`);
+          return;
+        }
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!controller.signal.aborted && data.updated_at !== currentThread.current?.updated_at) {
+          await loadThread({ quiet: true, signal: controller.signal });
+        }
+      } catch {
+        // Background polling is best-effort; leave the existing reader usable.
+      } finally {
+        pendingProbe.current = false;
+      }
+    }
+
+    function resume() {
+      if (!document.hidden && Date.now() - probedAt.current >= THREAD_POLL_INTERVAL_MS) {
+        void checkForNewMessages();
+      }
+    }
+
+    const timer = window.setInterval(() => { void checkForNewMessages(); }, THREAD_POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("focus", resume);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("focus", resume);
+    };
+  }, [loadThread, router, threadId]);
 
   useEffect(() => {
     const assets = thread?.messages.flatMap((message) => message.assets).filter(isPreviewableImage) ?? [];
     if (assets.length === 0) return;
 
-    const controller = new AbortController();
     for (const asset of assets) {
-      if (!asset.preview_path) continue;
+      if (!asset.preview_path || previewRequests.current.has(asset.id)) continue;
+      const controller = new AbortController();
+      previewRequests.current.set(asset.id, controller);
       void fetch(asset.preview_path, { cache: "no-store", signal: controller.signal })
         .then(async (response) => {
           const data = await response.json().catch(() => ({}));
@@ -232,12 +315,11 @@ export function ThreadView({ threadId }: { threadId: string }) {
         });
     }
 
-    return () => controller.abort();
   }, [thread]);
 
   async function postReply(body: string, files: File[]) {
     await postDashboardMessage(threadId, body, files);
-    await loadThread();
+    await loadThread({ quiet: true });
     setShowReplyComposer(false);
   }
 
@@ -249,6 +331,21 @@ export function ThreadView({ threadId }: { threadId: string }) {
     () => thread?.messages.filter((message) => isPlainTextMessage(message.body, message.body_content_type)).length ?? 0,
     [thread]
   );
+  const allExpanded = thread !== null && thread.messages.length > 0 && thread.messages.every((message) => expandedMessages.has(message.id));
+
+  function toggleAllMessages() {
+    if (!thread) return;
+    setExpandedMessages(allExpanded ? new Set() : new Set(thread.messages.map((message) => message.id)));
+  }
+
+  function toggleMarkdownForMessage(messageId: string, enabled: boolean) {
+    markdownPreview.setMessageMarkdown(messageId, enabled);
+    setRawMessageOverrides((current) => {
+      const next = { ...current };
+      delete next[messageId];
+      return next;
+    });
+  }
 
   function toggleMessage(messageId: string) {
     setExpandedMessages((current) => {
@@ -364,17 +461,21 @@ export function ThreadView({ threadId }: { threadId: string }) {
   }
 
   return (
-      <PanelMain width="reading">
+      <PanelMain width="reading" className="gap-4 py-4 sm:gap-5 sm:py-6 lg:gap-6 lg:py-7">
         <PanelHeader
           title={thread?.title ?? "Thread"}
+          className="gap-3 pb-4 sm:pb-5 lg:pb-5 [&_h1]:text-2xl sm:[&_h1]:text-3xl lg:[&_h1]:text-4xl"
           description={
-            <span className="flex flex-col gap-3">
-              <span className="flex flex-wrap items-center gap-3">
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs sm:text-sm">
+              <span className="flex min-w-0 items-center gap-1">
                 <MonoValue>{thread?.id ?? threadId}</MonoValue>
-                <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" />
+                <CopyButton value={thread?.id ?? threadId} label="Copy thread ID" size="icon-xs" />
               </span>
               {thread ? (
-                <span>Created by {attributionLabel(thread.created_by_user_display_name, thread.created_by_actor_name, thread.created_by)} · Updated {formatDate(thread.updated_at)}</span>
+                <>
+                  <span>{thread.messages.length} messages · {assetCount} attachments</span>
+                  <span>Updated {formatDate(thread.updated_at)}</span>
+                </>
               ) : null}
             </span>
           }
@@ -389,17 +490,23 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 count={plainTextCount}
                 onToggle={markdownPreview.toggleAll}
               />
+              {thread?.messages.length ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={toggleAllMessages}
+                  aria-label={allExpanded ? "Collapse all messages" : "Expand all messages"}
+                  title={allExpanded ? "Collapse all messages" : "Expand all messages"}
+                  className="h-9 min-w-9 gap-2 px-2.5 sm:px-3"
+                >
+                  {allExpanded ? <ChevronsDownUpIcon aria-hidden="true" /> : <ChevronsUpDownIcon aria-hidden="true" />}
+                  <span className="hidden sm:inline">{allExpanded ? "Collapse all" : "Expand all"}</span>
+                </Button>
+              ) : null}
               {thread ? <ThreadVisibilityControl threadId={thread.id} /> : null}
             </>
           }
-          aside={thread ? (
-            <MetricStrip
-              items={[
-                { label: "Messages", value: thread.messages.length },
-                { label: "Attachments", value: assetCount }
-              ]}
-            />
-          ) : null}
         />
 
         {showReplyComposer ? (
@@ -418,10 +525,17 @@ export function ThreadView({ threadId }: { threadId: string }) {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
+        {markdownPreview.error ? (
+          <Alert variant="destructive" role="status">
+            <ShieldAlertIcon />
+            <AlertTitle>Markdown display preference not synced</AlertTitle>
+            <AlertDescription>{markdownPreview.error}</AlertDescription>
+          </Alert>
+        ) : null}
 
         <section className="flex min-w-0 flex-col gap-3 sm:gap-5" aria-label="Thread messages">
-          {loading ? <MessageSkeleton /> : null}
-          {!loading && !error && thread?.messages.length === 0 ? (
+          {loading || !markdownPreview.ready ? <MessageSkeleton /> : null}
+          {!loading && markdownPreview.ready && !error && thread?.messages.length === 0 ? (
             <Empty className="border py-16">
               <EmptyHeader>
                 <EmptyMedia variant="icon"><MessageSquareIcon /></EmptyMedia>
@@ -430,48 +544,76 @@ export function ThreadView({ threadId }: { threadId: string }) {
               </EmptyHeader>
             </Empty>
           ) : null}
-          {!loading && !error ? thread?.messages.map((message, index) => {
+          {!loading && markdownPreview.ready && !error ? thread?.messages.map((message, index) => {
             const isExpanded = expandedMessages.has(message.id);
+            const isPlain = isPlainTextMessage(message.body, message.body_content_type);
+            const forceMarkdown = isPlain && markdownPreview.isMessageMarkdown(message.id);
+            const canRenderMarkdown = !isPlain || forceMarkdown;
+            const showRaw = rawMessageOverrides[message.id] ?? (!canRenderMarkdown || message.body.length > LARGE_MARKDOWN_THRESHOLD);
             return (
               <Collapsible open={isExpanded} onOpenChange={() => toggleMessage(message.id)} key={message.id}>
-                <Card className="min-w-0">
-                  <CollapsibleTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="panel-message-trigger h-auto w-full min-w-0 flex-col items-stretch justify-start gap-3 rounded-none p-3.5 text-left whitespace-normal sm:p-5"
-                      />
-                    }
-                  >
-                    <span className="flex w-full min-w-0 items-start gap-2.5 sm:gap-3">
+                <Card className="min-w-0 gap-0 py-0">
+                  <div className="flex min-w-0 flex-col gap-1 border-b border-border/70 p-2 sm:flex-row sm:items-center sm:gap-2 sm:px-3">
+                    <CollapsibleTrigger
+                      render={<Button type="button" variant="ghost" className="panel-message-trigger h-auto min-w-0 flex-1 justify-start gap-1.5 rounded-sm px-1 py-1.5 text-left whitespace-normal sm:gap-2" />}
+                    >
                       <Badge variant="secondary" className="shrink-0">#{index + 1}</Badge>
-                      <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-                          <strong className="min-w-0 break-words font-heading text-sm font-semibold sm:text-base">{attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}</strong>
-                          <Badge variant="outline" className="shrink-0">{getMessageKind(message.body_content_type)}</Badge>
-                          {message.assets.length > 0 ? <Badge variant="outline" className="shrink-0">{message.assets.length} attachment{message.assets.length === 1 ? "" : "s"}</Badge> : null}
-                        </span>
-                        <span className="panel-message-meta text-xs/relaxed sm:text-sm">
-                          <time dateTime={message.created_at}>{formatDate(message.created_at)}</time>
-                        </span>
-                      </span>
-                      <ChevronDownIcon className={cn("mt-0.5 size-4 shrink-0 transition-transform", isExpanded && "rotate-180")} />
-                    </span>
-                    {!isExpanded ? <span className="panel-message-preview line-clamp-2 w-full min-w-0 break-words text-sm/relaxed">{getMessagePreview(message.body)}</span> : null}
-                  </CollapsibleTrigger>
+                      <strong className="min-w-0 break-words font-heading text-sm font-semibold">
+                        {attributionLabel(message.created_by_user_display_name, message.created_by_actor_name, message.author)}
+                      </strong>
+                      <Badge variant="outline" className="shrink-0 text-[0.66rem]">
+                        {forceMarkdown ? "Markdown · preview" : getMessageKind(message.body_content_type)}
+                      </Badge>
+                      {message.assets.length ? <span className="text-[0.7rem] text-muted-foreground">· {message.assets.length} files</span> : null}
+                      <time className="ml-auto hidden shrink-0 text-xs text-muted-foreground md:inline" dateTime={message.created_at}>{formatDate(message.created_at)}</time>
+                      <ChevronDownIcon className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", isExpanded && "rotate-180")} />
+                    </CollapsibleTrigger>
+                    <div className="flex min-w-0 items-center gap-0.5 sm:shrink-0" role="group" aria-label={`Message ${index + 1} actions`}>
+                      <time className="mr-auto text-[0.7rem] text-muted-foreground sm:hidden" dateTime={message.created_at} title={formatDate(message.created_at)}>{formatCompactDate(message.created_at)}</time>
+                      <span className="min-w-0 max-w-[4.5rem] truncate font-mono text-[0.65rem] text-muted-foreground sm:max-w-28" title={message.id}>{message.id}</span>
+                      <CopyButton value={message.id} label="Copy message ID" size="icon-xs" />
+                      <CopyButton value={message.body} label="Copy message" size="icon-xs" />
+                      {isPlain ? (
+                        <Button
+                          size="icon-xs"
+                          variant={forceMarkdown ? "secondary" : "ghost"}
+                          type="button"
+                          aria-label={forceMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
+                          title={forceMarkdown ? "Show original plain text" : "Attempt Markdown rendering"}
+                          aria-pressed={forceMarkdown}
+                          onClick={() => toggleMarkdownForMessage(message.id, !forceMarkdown)}
+                        >
+                          {forceMarkdown ? <RotateCcwIcon aria-hidden="true" /> : <WandSparklesIcon aria-hidden="true" />}
+                        </Button>
+                      ) : null}
+                      {canRenderMarkdown ? (
+                        <Button
+                          size="icon-xs"
+                          variant={showRaw ? "secondary" : "ghost"}
+                          type="button"
+                          aria-label={showRaw ? "Show rendered Markdown" : "Show raw Markdown"}
+                          title={showRaw ? "Show rendered Markdown" : "Show raw Markdown"}
+                          aria-pressed={showRaw}
+                          onClick={() => setRawMessageOverrides((current) => ({ ...current, [message.id]: !showRaw }))}
+                        >
+                          {showRaw ? <EyeIcon aria-hidden="true" /> : <Code2Icon aria-hidden="true" />}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {!isExpanded ? (
+                    <CollapsibleTrigger render={<Button type="button" variant="ghost" className="panel-message-trigger h-auto w-full justify-start rounded-none px-3 py-2 text-left text-sm whitespace-normal" />}>
+                      <span className="panel-message-preview line-clamp-2 min-w-0 break-words">{getMessagePreview(message.body)}</span>
+                    </CollapsibleTrigger>
+                  ) : null}
                   <CollapsibleContent>
-                    <Separator />
-                    <CardContent className="flex min-w-0 flex-col gap-5 pt-4 sm:gap-8 sm:pt-6">
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <MonoValue className="min-w-0 truncate sm:break-all">{message.id}</MonoValue>
-                        <CopyButton value={message.id} label="Copy message ID" />
-                      </div>
+                    <CardContent className="flex min-w-0 flex-col gap-4 px-3 py-3 sm:px-4 sm:py-4">
                       <MessageContent
                         body={message.body}
                         contentType={message.body_content_type}
-                        forceMarkdown={markdownPreview.isMessageMarkdown(message.id)}
-                        onForceMarkdownChange={(enabled) => markdownPreview.setMessageMarkdown(message.id, enabled)}
+                        forceMarkdown={forceMarkdown}
+                        sourceMode={showRaw}
+                        hideToolbar
                       />
                       {message.assets.length > 0 ? (
                         <section className="flex flex-col gap-4" aria-label="Attachments">

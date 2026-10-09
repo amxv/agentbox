@@ -14,12 +14,16 @@ export function MessageContent({
   body,
   contentType,
   forceMarkdown,
-  onForceMarkdownChange
+  onForceMarkdownChange,
+  hideToolbar = false,
+  sourceMode
 }: {
   body: string;
   contentType?: string | null;
   forceMarkdown?: boolean;
   onForceMarkdownChange?: (enabled: boolean) => void;
+  hideToolbar?: boolean;
+  sourceMode?: boolean;
 }) {
   const safeBody = body || "(empty message)";
   const explicitType = normalizeContentType(contentType);
@@ -30,9 +34,9 @@ export function MessageContent({
   const [localMarkdownPreview, setLocalMarkdownPreview] = useState(false);
   const previewMarkdown = isPlainText && (forceMarkdown ?? localMarkdownPreview);
   const [sourcePreference, setSourcePreference] = useState<boolean | null>(null);
-  const showSource = previewMarkdown
+  const showSource = sourceMode ?? (previewMarkdown
     ? sourcePreference === true
-    : isPlainText || (sourcePreference ?? body.length > LARGE_MARKDOWN_THRESHOLD);
+    : isPlainText || (sourcePreference ?? body.length > LARGE_MARKDOWN_THRESHOLD));
 
   function toggleMarkdownPreview() {
     const next = !previewMarkdown;
@@ -60,7 +64,7 @@ export function MessageContent({
   if (showSource) {
     return (
       <div className="flex min-w-0 flex-col gap-3 sm:gap-5">
-        <MessageToolbar
+        {!hideToolbar ? <MessageToolbar
           label={previewMarkdown ? "Markdown · preview" : messageFormatLabel(resolvedType, wasInferred)}
           body={body}
           action={
@@ -74,7 +78,7 @@ export function MessageContent({
               ) : null}
             </>
           }
-        />
+        /> : null}
         <pre className="max-h-[60rem] min-w-0 overflow-auto whitespace-pre-wrap break-words border bg-[var(--panel-code-bg)] p-3 font-mono text-[0.84rem]/relaxed text-[var(--panel-code-foreground)] sm:p-6 sm:text-sm/7">
           {safeBody}
         </pre>
@@ -84,7 +88,7 @@ export function MessageContent({
 
   return (
     <div className="flex min-w-0 flex-col gap-3 sm:gap-5">
-      <MessageToolbar
+      {!hideToolbar ? <MessageToolbar
         label={previewMarkdown ? "Markdown · preview" : messageFormatLabel(resolvedType, wasInferred)}
         body={body}
         action={
@@ -96,7 +100,7 @@ export function MessageContent({
             </Button>
           </>
         }
-      />
+      /> : null}
       <MarkdownMessage body={body} />
     </div>
   );

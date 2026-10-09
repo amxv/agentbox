@@ -48,6 +48,9 @@ const PRIMARY_LINKS: NavLink[] = [
   { href: "/raycast", label: "Raycast", shortLabel: "Raycast", icon: RadarIcon }
 ];
 
+// Keep Raycast available in the menu without spending permanent navbar space.
+const NAVBAR_LINKS = PRIMARY_LINKS.filter((link) => link.href !== "/raycast");
+
 const OWNER_LINKS: NavLink[] = [
   { href: "/owner/users", label: "Users & teams", shortLabel: "Users", icon: UsersIcon },
   { href: "/owner/content", label: "All content", shortLabel: "Audit", icon: SearchIcon }
@@ -100,7 +103,7 @@ export function AppNav() {
 
         <div className="hidden min-w-0 flex-1 items-center gap-3 lg:flex">
           <nav className="panel-nav-links" aria-label="Main navigation">
-            {PRIMARY_LINKS.map((link) => (
+            {NAVBAR_LINKS.map((link) => (
               <DesktopNavLink key={link.href} link={link} pathname={pathname} />
             ))}
           </nav>
@@ -199,7 +202,7 @@ export function AppNav() {
         </div>
       </div>
       <nav className="panel-mobile-nav flex gap-1 overflow-x-auto border-t border-border/60 px-3 py-1.5 sm:px-7 lg:hidden" aria-label="Quick navigation">
-        {PRIMARY_LINKS.map((link) => {
+        {NAVBAR_LINKS.map((link) => {
           const Icon = link.icon;
           const active = isActive(pathname, link.href);
           return (
