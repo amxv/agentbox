@@ -48,11 +48,15 @@ func setThreadVisibilityForTest(ctx context.Context, repository interface {
 
 func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 	byName := listToolsByName(t)
-	for _, name := range []string{"list_threads", "search_threads", "get_thread", "read_attachment", "download_attachment", "create_thread", "post_message", "manage_thread_visibility"} {
-		if byName[name] == nil {
-			t.Fatalf("missing tool %s in %#v", name, byName)
-		}
-	}
+for _, name := range []string{"list_threads", "search_threads", "get_thread", "read_attachment", "download_attachment", "create_thread", "post_message", "manage_thread_visibility"} {
+tool := byName[name]
+if tool == nil {
+t.Fatalf("missing tool %s in %#v", name, byName)
+}
+if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+t.Fatalf("%s missing readOnlyHint: %#v", name, tool.Annotations)
+}
+}
 	if !byName["list_threads"].Annotations.ReadOnlyHint {
 		t.Fatalf("list_threads annotations = %#v", byName["list_threads"].Annotations)
 	}
@@ -69,13 +73,13 @@ func TestToolsExposeMetadataAndAnnotations(t *testing.T) {
 		t.Fatalf("get_thread attachment guidance = %q", description)
 	}
 	post := byName["post_message"]
-	if post.Annotations.ReadOnlyHint || post.Annotations.OpenWorldHint == nil || !*post.Annotations.OpenWorldHint {
-		t.Fatalf("post_message annotations = %#v", post.Annotations)
-	}
-	visibility := byName["manage_thread_visibility"]
-	if visibility.Annotations.ReadOnlyHint || visibility.Annotations.DestructiveHint == nil || !*visibility.Annotations.DestructiveHint {
-		t.Fatalf("manage_thread_visibility annotations = %#v", visibility.Annotations)
-	}
+if post.Annotations.OpenWorldHint == nil || !*post.Annotations.OpenWorldHint {
+t.Fatalf("post_message annotations = %#v", post.Annotations)
+}
+visibility := byName["manage_thread_visibility"]
+if visibility.Annotations.DestructiveHint == nil || !*visibility.Annotations.DestructiveHint {
+t.Fatalf("manage_thread_visibility annotations = %#v", visibility.Annotations)
+}
 	meta := post.Meta.GetMeta()
 	if got := meta["openai/toolInvocation/invoked"]; got != "Posted to Agentbox" {
 		t.Fatalf("post_message meta = %#v", meta)

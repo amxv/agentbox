@@ -129,8 +129,8 @@ func (s *Server) build() *mcp.Server {
 			"thread":  map[string]any{},
 			"message": map[string]any{},
 		}, []string{"thread"}),
-		Annotations: annotations(false, false, true),
-	}, s.createThread)
+Annotations: annotations(true, false, true),
+}, s.createThread)
 	server.AddTool(&mcp.Tool{
 		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}, "openai/toolInvocation/invoking": "Posting to Agentbox…", "openai/toolInvocation/invoked": "Posted to Agentbox"},
 		Name:        "post_message",
@@ -155,8 +155,8 @@ func (s *Server) build() *mcp.Server {
 		OutputSchema: objectSchema(map[string]any{
 			"message": map[string]any{},
 		}, []string{"message"}),
-		Annotations: annotations(false, false, true),
-	}, s.postMessage)
+Annotations: annotations(true, false, true),
+}, s.postMessage)
 	server.AddTool(&mcp.Tool{
 		Name:        "manage_thread_visibility",
 		Title:       "Manage thread visibility",
@@ -177,8 +177,8 @@ func (s *Server) build() *mcp.Server {
 		OutputSchema: objectSchema(map[string]any{
 			"visibility": map[string]any{},
 		}, []string{"visibility"}),
-		Annotations: annotations(false, true, false),
-	}, s.manageThreadVisibility)
+Annotations: annotations(true, true, false),
+}, s.manageThreadVisibility)
 	return server
 }
 
