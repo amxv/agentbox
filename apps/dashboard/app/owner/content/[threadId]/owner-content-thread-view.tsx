@@ -202,7 +202,7 @@ export function OwnerContentThreadView({ threadId }: { threadId: string }) {
   }
 
   return (
-      <PanelMain width="reading">
+      <PanelMain>
         <div>
           <Button className="-ml-2" variant="ghost" size="sm" render={<Link href="/owner/content" />}>
             <ArrowLeftIcon data-icon="inline-start" />

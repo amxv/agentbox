@@ -12,20 +12,15 @@ export function PanelPage({ children, className }: { children: ReactNode; classN
 
 export function PanelMain({
   children,
-  className,
-  width = "wide"
+  className
 }: {
   children: ReactNode;
   className?: string;
-  width?: "default" | "wide" | "reading";
 }) {
   return (
     <main
       className={cn(
-        "mx-auto flex min-w-0 w-full flex-col gap-6 px-3 py-5 sm:gap-8 sm:px-7 sm:py-10 lg:gap-10 lg:px-8 lg:py-12",
-        width === "default" && "max-w-6xl",
-        width === "wide" && "max-w-[1440px]",
-        width === "reading" && "max-w-[1240px]",
+        "mx-auto flex min-w-0 w-full max-w-[1240px] flex-col gap-6 px-3 py-5 sm:gap-8 sm:px-7 sm:py-10 lg:gap-10 lg:px-8 lg:py-12",
         className
       )}
     >

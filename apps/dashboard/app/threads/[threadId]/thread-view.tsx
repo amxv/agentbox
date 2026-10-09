@@ -461,7 +461,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
   }
 
   return (
-      <PanelMain width="reading" className="gap-4 py-4 sm:gap-5 sm:py-6 lg:gap-6 lg:py-7">
+      <PanelMain className="gap-4 py-4 sm:gap-5 sm:py-6 lg:gap-6 lg:py-7">
         <PanelHeader
           title={thread?.title ?? "Thread"}
           className="gap-3 pb-4 sm:pb-5 lg:pb-5 [&_h1]:text-2xl sm:[&_h1]:text-3xl lg:[&_h1]:text-4xl"

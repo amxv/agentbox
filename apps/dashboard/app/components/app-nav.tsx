@@ -17,7 +17,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -69,7 +68,6 @@ function initials(value?: string) {
 
 export function AppNav() {
   const pathname = usePathname();
-  const isReadingPage = pathname?.startsWith("/threads/") || pathname?.startsWith("/owner/content/");
   const { auth, loading, clear } = usePanelSession();
   const [signingOut, setSigningOut] = useState(false);
   const links = auth?.is_owner ? [...PRIMARY_LINKS, ...OWNER_LINKS] : PRIMARY_LINKS;
@@ -90,10 +88,7 @@ export function AppNav() {
 
   return (
     <header className="panel-nav-shell sticky top-0 z-40">
-      <div className={cn(
-        "mx-auto flex h-14 items-center gap-3 px-3 sm:h-16 sm:px-7 lg:h-[4.5rem] lg:gap-4 lg:px-8",
-        isReadingPage ? "max-w-[1240px]" : "max-w-[1440px]"
-      )}>
+      <div className="mx-auto flex h-14 max-w-[1240px] items-center gap-3 px-3 sm:h-16 sm:px-7 lg:h-[4.5rem] lg:gap-4 lg:px-8">
         <Link className="panel-brand" href="/threads" aria-label="Agentbox inbox">
           <Image className="panel-brand-mark" src="/icon.svg" width={32} height={32} alt="" unoptimized />
           <span className="panel-brand-name">Agentbox</span>
