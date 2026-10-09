@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import {
   IBM_Plex_Mono,
   Instrument_Sans,
@@ -50,7 +50,24 @@ const monoFont = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Agentbox",
-  description: "A shared thread inbox for ChatGPT, local agents, and the files that move between them."
+  description: "A shared thread inbox for ChatGPT, local agents, and the files that move between them.",
+  applicationName: "Agentbox",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Agentbox",
+    statusBarStyle: "default"
+  },
+  icons: {
+    apple: "/apple-touch-icon.png"
+  }
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#FAFAF8" },
+    { media: "(prefers-color-scheme: dark)", color: "#19191F" }
+  ]
 };
 
 /**
