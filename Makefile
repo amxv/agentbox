@@ -68,6 +68,7 @@ check-dashboard-fast:
 	cd apps/dashboard && bun run typecheck
 
 check-dashboard:
+	cd apps/dashboard && bun run test
 	cd apps/dashboard && bun run typecheck
 	cd apps/dashboard && bun run lint
 	cd apps/dashboard && bun run build

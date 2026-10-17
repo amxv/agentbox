@@ -275,6 +275,13 @@ export class AgentboxClient {
     ).toString();
   }
 
+  // This is an opt-in iOS launcher only. iOS may discard the thread path or
+  // reject the undocumented webapp:// scheme. Keep HTTPS as the default.
+  experimentalIosPwaThreadUrl(threadId: string): string {
+    const url = new URL(this.dashboardThreadUrl(threadId));
+    return `webapp://${url.host}${url.pathname}`;
+  }
+
   async request<T>(requestPath: string, init: AgentboxRequestInit = {}): Promise<T> {
     const { authenticated = true, query, ...requestInit } = init;
     const response = await this.fetcher(this.url(requestPath, { authenticated, query }), requestInit);

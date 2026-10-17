@@ -56,6 +56,10 @@ export function dashboardThreadUrl(threadId: string): string {
   return client().dashboardThreadUrl(threadId);
 }
 
+export function experimentalIosPwaThreadUrl(threadId: string): string {
+  return client().experimentalIosPwaThreadUrl(threadId);
+}
+
 export function health(): Promise<HealthResponse> {
   return client().health();
 }
