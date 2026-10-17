@@ -23,6 +23,7 @@ import {
   ThreadWithMessages,
   attributionLabel,
   dashboardThreadUrl,
+  experimentalIosPwaThreadUrl,
   getAssetDownloadUrl,
   getThread,
   listTeams,
@@ -599,6 +600,10 @@ function ThreadActions({
       <ActionPanel.Section title="Copy">
         <Action.CopyToClipboard title="Copy Thread ID" content={thread.id} shortcut={Keyboard.Shortcut.Common.Copy} />
         <Action.CopyToClipboard title="Copy Thread URL" content={threadUrl} />
+        <Action.CopyToClipboard
+          title="Copy iOS PWA URL (Experimental)"
+          content={experimentalIosPwaThreadUrl(thread.id)}
+        />
       </ActionPanel.Section>
       <AgentboxUtilityActions />
     </ActionPanel>
@@ -648,6 +653,10 @@ function MessageActions({
         <Action.CopyToClipboard title="Copy Message ID" content={message.id} shortcut={Keyboard.Shortcut.Common.Copy} />
         <Action.CopyToClipboard title="Copy Thread ID" content={message.thread_id} />
         <Action.CopyToClipboard title="Copy Thread URL" content={threadUrl} />
+        <Action.CopyToClipboard
+          title="Copy iOS PWA URL (Experimental)"
+          content={experimentalIosPwaThreadUrl(message.thread_id)}
+        />
       </ActionPanel.Section>
       <AttachmentActions
         assets={message.assets.map((asset) => ({ ...asset, messageId: message.id }))}

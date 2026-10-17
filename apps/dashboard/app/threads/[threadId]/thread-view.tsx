@@ -42,6 +42,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "../../components/copy-button";
+import { ThreadLinkMenu } from "../../components/thread-link-menu";
 import { MessageContent } from "./message-content";
 import { MessageComposer } from "../../components/message-composer";
 import { postDashboardMessage } from "../../components/agentbox-write";
@@ -481,6 +482,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
           }
           actions={
             <>
+              {thread ? <ThreadLinkMenu threadId={thread.id} /> : null}
               <Button type="button" onClick={() => setShowReplyComposer((value) => !value)}>
                 <PlusIcon data-icon="inline-start" />
                 {showReplyComposer ? "Close reply" : "Reply"}

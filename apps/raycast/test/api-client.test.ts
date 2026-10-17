@@ -79,6 +79,8 @@ test("configuration and URL construction keep auth explicit and path-safe", () =
   assert.equal(url.searchParams.get("key"), "raycast-secret");
   assert.equal(client.url("api/health", { authenticated: false }).searchParams.has("key"), false);
   assert.equal(client.dashboardThreadUrl("thr one"), "https://agentbox.example/root/threads/thr%20one");
+  assert.equal(client.experimentalIosPwaThreadUrl("thr one"), "webapp://agentbox.example/root/threads/thr%20one");
+  assert.equal(client.experimentalIosPwaThreadUrl("thr/with?query"), "webapp://agentbox.example/root/threads/thr%2Fwith%3Fquery");
 });
 
 test("auth and caller-team DTOs contain user metadata without tenant assumptions", async () => {
