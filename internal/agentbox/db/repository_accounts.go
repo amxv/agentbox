@@ -482,6 +482,12 @@ returning id, email, display_name, password_hash, is_owner, created_at, updated_
 		if err != nil {
 			return types.User{}, err
 		}
+		if _, err := tx.Exec(ctx, `update user_password_resets set revoked_at = now() where user_id = $1 and consumed_at is null and revoked_at is null`, user.ID); err != nil {
+			return types.User{}, err
+		}
+		if _, err := tx.Exec(ctx, `update user_password_resets set revoked_at = now() where user_id = $1 and consumed_at is null and revoked_at is null`, user.ID); err != nil {
+			return types.User{}, err
+		}
 		if _, err := tx.Exec(ctx, `update user_sessions set revoked_at = coalesce(revoked_at, now()) where user_id = $1`, user.ID); err != nil {
 			return types.User{}, err
 		}

@@ -77,6 +77,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/auth/owner/setup", s.authOwnerSetup)
 	s.mux.HandleFunc("/api/auth/invitations/inspect", s.authInvitationInspect)
 	s.mux.HandleFunc("/api/auth/invitations/register", s.authInvitationRegister)
+	s.mux.HandleFunc("/api/auth/password-reset/inspect", s.authPasswordResetInspect)
+	s.mux.HandleFunc("/api/auth/password-reset/complete", s.authPasswordResetComplete)
 	s.mux.HandleFunc("/api/auth/logout", s.authLogout)
 	s.mux.HandleFunc("/api/auth/me", s.authMe)
 	s.mux.HandleFunc("/api/me", s.authMe)

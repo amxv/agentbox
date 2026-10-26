@@ -85,6 +85,9 @@ type Repository interface {
 	CreateCLILoginCode(ctx context.Context, code types.CLILoginCode) (types.CLILoginCode, error)
 	ConsumeCLILoginCode(ctx context.Context, codeHash string, stateHash string, redirectURI string) (*types.CLILoginCode, *types.User, error)
 	CreateOwnerSetupToken(ctx context.Context, tokenHash string, expiresAt time.Time) (types.OwnerSetupToken, error)
+	CreateUserPasswordReset(ctx context.Context, issuerUserID string, targetUserID string, tokenHash string, expiresAt time.Time) (types.PasswordResetToken, error)
+	FindValidUserPasswordReset(ctx context.Context, tokenHash string) (*types.PasswordResetToken, error)
+	ConsumeUserPasswordReset(ctx context.Context, tokenHash string, passwordHash string) error
 	UseOwnerSetupToken(ctx context.Context, tokenHash string, email string, displayName string, passwordHash string) (types.User, types.OwnerSetupToken, error)
 	CreateSignupInvitation(ctx context.Context, createdByUserID string, tokenHash string, expiresAt time.Time, teamIDs []string) (types.SignupInvitation, error)
 	ListSignupInvitations(ctx context.Context) ([]types.SignupInvitation, error)

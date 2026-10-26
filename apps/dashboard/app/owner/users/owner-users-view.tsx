@@ -146,6 +146,13 @@ type Invitation = {
   teams: Team[];
 };
 
+type CreatedReset = {
+  userID: string;
+  userName: string;
+  url: string;
+  expiresAt: string;
+};
+
 type CreatedInvitation = {
   invitation: Invitation;
   token: string;
@@ -210,6 +217,8 @@ export function OwnerUsersView() {
   const [userTeamsByUser, setUserTeamsByUser] = useState<Record<string, Team[]>>({});
   const [userTeamPages, setUserTeamPages] = useState<Record<string, PageInfo>>({});
   const [created, setCreated] = useState<CreatedInvitation | null>(null);
+  const [createdReset, setCreatedReset] = useState<CreatedReset | null>(null);
+  const [resetCopied, setResetCopied] = useState(false);
   const [expiryMinutes, setExpiryMinutes] = useState(7 * 24 * 60);
   const [selectedInvitationTeamIDs, setSelectedInvitationTeamIDs] = useState<string[]>([]);
   const [newTeamName, setNewTeamName] = useState("");
@@ -406,6 +415,38 @@ export function OwnerUsersView() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function issuePasswordReset(user: User) {
+    setBusy(`user:reset:${user.id}`);
+    setError(null);
+    setCreatedReset(null);
+    setResetCopied(false);
+    try {
+      const response = await fetch(`/api/owner/users/${encodeURIComponent(user.id)}/password-reset`, {
+        method: "POST",
+        cache: "no-store"
+      });
+      const data = await responseJSON(response);
+      if (typeof data.reset_path !== "string" || !data.reset_path.startsWith("/reset-password#token=")) {
+        throw new Error("The reset link was not returned correctly.");
+      }
+      setCreatedReset({ userID: user.id, userName: user.display_name, url: `${window.location.origin}${data.reset_path}`, expiresAt: data.expires_at });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyPasswordResetLink() {
+    if (!createdReset) return;
+    try {
+      await navigator.clipboard.writeText(createdReset.url);
+      setResetCopied(true);
+    } catch {
+      setError("Could not copy automatically. Select the link and copy it manually.");
     }
   }
 
@@ -644,6 +685,16 @@ export function OwnerUsersView() {
                             <Badge variant="secondary">Protected</Badge>
                           ) : (
                             <>
+                              {!user.disabled_at ? (
+                                <Button
+                                  variant="outline"
+                                  disabled={busy !== null}
+                                  onClick={() => void issuePasswordReset(user)}
+                                >
+                                  {busy === `user:reset:${user.id}` ? <Spinner data-icon="inline-start" /> : <KeyRoundIcon data-icon="inline-start" />}
+                                  Generate reset link
+                                </Button>
+                              ) : null}
                               <Button
                                 variant="outline"
                                 disabled={busy === `user:${user.id}`}
@@ -663,6 +714,25 @@ export function OwnerUsersView() {
                         </CardAction>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-5">
+                        {createdReset?.userID === user.id ? (
+                          <section className="flex flex-col gap-3 rounded-lg border border-border bg-muted/30 p-4" aria-label={`${user.display_name} password reset link`}>
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold">One-time password reset link</p>
+                                <p className="text-xs text-muted-foreground">For {createdReset.userName} · Expires {formatDate(createdReset.expiresAt)}</p>
+                              </div>
+                              <Button size="icon-xs" variant="ghost" aria-label="Dismiss reset link" onClick={() => setCreatedReset(null)}><XIcon /></Button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Input className="min-w-0 flex-1 font-mono text-xs" aria-label="Password reset link" readOnly value={createdReset.url} onFocus={(event) => event.currentTarget.select()} />
+                              <Button variant="secondary" onClick={() => void copyPasswordResetLink()}>
+                                {resetCopied ? <CheckIcon data-icon="inline-start" /> : <ClipboardIcon data-icon="inline-start" />}
+                                {resetCopied ? "Copied" : "Copy link"}
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">Share this privately. Generating another link invalidates this one. The link can be used only once; resetting the web password signs out existing browser sessions but does not change any agent credentials.</p>
+                          </section>
+                        ) : null}
                         <section className="flex flex-col gap-2" aria-label={`${user.display_name} teams`}>
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="font-mono text-[0.65rem] tracking-[0.1em] text-muted-foreground uppercase">Teams</span>

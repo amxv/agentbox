@@ -67,6 +67,8 @@ Create a dedicated Raycast credential from the signed-in dashboard and enter its
 
 The Next.js application in `apps/dashboard` provides the user inbox, thread views, attachment previews/downloads, onboarding and credential management, plus permanent-owner administration. Its `/api/*` handlers are thin same-origin proxies to the Go backend.
 
+The permanent owner can generate a **password reset link** for an active non-owner account from **Owner → Users**. Copy the link and share it privately; Agentbox does not send email. Links expire after one hour, are single-use, and are replaced when the owner generates another link for the same user. The recipient can set a new password at `/reset-password` and then sign in normally. The reset logs out existing dashboard sessions but preserves connected agent/CLI API keys and team memberships.
+
 The current app also still serves a few public setup/landing surfaces. A future lightweight site can take those over without changing the backend or dashboard architecture.
 
 ## Repository

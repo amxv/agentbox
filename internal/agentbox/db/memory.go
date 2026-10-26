@@ -42,6 +42,7 @@ type MemoryRepository struct {
 	CLICodes                 []types.CLILoginCode
 	OwnerSetupTokens         []memoryOwnerSetupToken
 	SignupInvitations        []memorySignupInvitation
+	PasswordResets           []memoryPasswordReset
 	Teams                    []types.Team
 	TeamMemberships          []types.TeamMembership
 	ThreadTeamShares         []types.ThreadTeamShare
@@ -53,6 +54,11 @@ type MemoryRepository struct {
 
 type memoryOwnerSetupToken struct {
 	Token     types.OwnerSetupToken
+	TokenHash string
+}
+
+type memoryPasswordReset struct {
+	Token     types.PasswordResetToken
 	TokenHash string
 }
 

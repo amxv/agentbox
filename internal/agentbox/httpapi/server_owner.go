@@ -417,6 +417,10 @@ func (s *Server) ownerUserAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, page)
 		return
 	}
+	if parts[1] == "password-reset" {
+		s.ownerIssuePasswordReset(w, r, *authContext, parts[0])
+		return
+	}
 	if !method(w, r, http.MethodPost) {
 		return
 	}

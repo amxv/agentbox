@@ -8,6 +8,7 @@ import (
 var ErrOwnerAlreadyExists = errors.New("deployment owner already exists")
 var ErrOwnerSetupTokenInvalid = errors.New("owner setup token is invalid or expired")
 var ErrSignupInvitationInvalid = errors.New("signup invitation is invalid or expired")
+var ErrPasswordResetInvalid = errors.New("password reset token is invalid, expired, or already used")
 var ErrEmailAlreadyRegistered = errors.New("email is already registered")
 var ErrUserNotFound = errors.New("user not found")
 var ErrUserDisabled = errors.New("user is disabled")
@@ -88,6 +89,15 @@ type CLILoginCode struct {
 type OwnerSetupToken struct {
 	ID         string  `json:"id"`
 	Purpose    string  `json:"purpose"`
+	CreatedAt  string  `json:"created_at"`
+	ExpiresAt  string  `json:"expires_at"`
+	ConsumedAt *string `json:"consumed_at,omitempty"`
+	RevokedAt  *string `json:"revoked_at,omitempty"`
+}
+
+type PasswordResetToken struct {
+	ID         string  `json:"id"`
+	UserID     string  `json:"user_id"`
 	CreatedAt  string  `json:"created_at"`
 	ExpiresAt  string  `json:"expires_at"`
 	ConsumedAt *string `json:"consumed_at,omitempty"`

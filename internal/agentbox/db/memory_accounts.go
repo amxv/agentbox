@@ -396,6 +396,12 @@ func (m *MemoryRepository) SetUserDisabled(_ context.Context, userID string, dis
 			if user.DisabledAt == nil {
 				user.DisabledAt = &now
 			}
+			for resetIndex := range m.PasswordResets {
+				reset := &m.PasswordResets[resetIndex].Token
+				if reset.UserID == user.ID && reset.ConsumedAt == nil && reset.RevokedAt == nil {
+					reset.RevokedAt = &now
+				}
+			}
 			for sessionIndex := range m.Sessions {
 				if m.Sessions[sessionIndex].UserID == user.ID && m.Sessions[sessionIndex].RevokedAt == nil {
 					m.Sessions[sessionIndex].RevokedAt = &now
