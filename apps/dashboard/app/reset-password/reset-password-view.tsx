@@ -21,8 +21,11 @@ export function ResetPasswordView() {
     // The secret is delivered in the fragment: no HTTP access logs or referrer headers.
     // Remove it from the visible URL before making any requests.
     const params = new URLSearchParams(window.location.hash.slice(1));
-    const secret = params.get("token") ?? "";
-    window.history.replaceState(null, "", "/reset-password");
+    // React Strict Mode replays effects in development after the fragment has
+    // been cleared. Keep the secret across that replay without restoring it
+    // to the URL or making the user request another link.
+    const secret = params.get("token") ?? tokenRef.current;
+    if (params.has("token")) window.history.replaceState(null, "", "/reset-password");
     tokenRef.current = secret;
     let cancelled = false;
     async function inspect() {
