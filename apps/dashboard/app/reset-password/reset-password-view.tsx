@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AgentboxMark } from "../components/agentbox-mark";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import styles from "../login/auth.module.css";
@@ -9,7 +9,7 @@ import styles from "../login/auth.module.css";
 type LinkState = "checking" | "valid" | "invalid" | "done";
 
 export function ResetPasswordView() {
-  const [token, setToken] = useState("");
+  const tokenRef = useRef("");
   const [state, setState] = useState<LinkState>("checking");
   const [expiresAt, setExpiresAt] = useState("");
   const [password, setPassword] = useState("");
@@ -23,13 +23,10 @@ export function ResetPasswordView() {
     const params = new URLSearchParams(window.location.hash.slice(1));
     const secret = params.get("token") ?? "";
     window.history.replaceState(null, "", "/reset-password");
-    setToken(secret);
-    if (!secret) {
-      setState("invalid");
-      return;
-    }
+    tokenRef.current = secret;
     let cancelled = false;
     async function inspect() {
+      if (!secret) { setState("invalid"); return; }
       try {
         const response = await fetch("/api/auth/password-reset/inspect", {
           method: "POST",
@@ -64,7 +61,7 @@ export function ResetPasswordView() {
         method: "POST",
         headers: { "content-type": "application/json" },
         cache: "no-store",
-        body: JSON.stringify({ token, password })
+        body: JSON.stringify({ token: tokenRef.current, password })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -73,7 +70,7 @@ export function ResetPasswordView() {
       }
       setPassword("");
       setConfirmPassword("");
-      setToken("");
+      tokenRef.current = "";
       setState("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
