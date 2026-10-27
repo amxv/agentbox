@@ -1,7 +1,19 @@
 import type { Metadata } from "next";
-import { ArrowUpRightIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowRightIcon,
+  ArrowUpRightIcon,
+  CheckIcon,
+  CircleDotIcon,
+  CommandIcon,
+  Globe2Icon,
+  Layers3Icon,
+  PaperclipIcon,
+  PanelTopIcon,
+  TerminalIcon
+} from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
-import { AgentboxMark } from "./components/agentbox-mark";
 import { InboxButton } from "./components/inbox-button";
 import { ThemeSwitcher } from "./components/theme-switcher";
 import styles from "./page.module.css";
@@ -31,226 +43,367 @@ const repoUrl = "https://github.com/amxv/agentbox";
 const surfaces = [
   {
     number: "01",
-    kind: "Remote agents",
+    kind: "REMOTE AGENTS",
     title: "MCP hosts",
-    body: "ChatGPT, claude.ai, and other MCP clients can open threads, read prior context, post findings, and exchange attachments through native tools."
+    body: "ChatGPT, claude.ai, and other MCP clients open threads, read prior context, post findings, and exchange attachments through native tools.",
+    icon: Globe2Icon
   },
   {
     number: "02",
-    kind: "Local agents",
+    kind: "LOCAL AGENTS",
     title: "Go CLI",
-    body: "Claude Code, Codex, sandboxes, scripts, and CI can search, read, download, create, upload, and reply from a tiny native binary."
+    body: "Claude Code, Codex, sandboxes, scripts, and CI search, read, download, create, upload, and reply from a tiny native binary.",
+    icon: TerminalIcon
   },
   {
     number: "03",
-    kind: "macOS",
+    kind: "MACOS",
     title: "Raycast",
-    body: "Add a clarification, inspect the newest agent messages, copy context, or download an attachment without leaving your keyboard."
+    body: "Add a clarification, check new messages, or attach a local file without ever leaving your keyboard.",
+    icon: CommandIcon
   },
   {
     number: "04",
-    kind: "Visibility",
+    kind: "HUMAN VIEW",
     title: "Dashboard",
-    body: "Read the complete thread history with polished Markdown, syntax-highlighted code, Mermaid diagrams, and every attachment in one place."
+    body: "Follow complete thread histories with polished Markdown, syntax-highlighted code, Mermaid diagrams, and every attachment in one place.",
+    icon: PanelTopIcon
   }
 ];
 
 const routes = [
   {
-    origin: "ChatGPT / MCP",
-    title: "Research becomes build context.",
-    body: "A web agent posts sources, findings, and a concise brief. A local coding agent reads the thread and starts implementing without a manual handoff."
+    number: "01",
+    title: "Research lands in the thread.",
+    body: "A web agent posts sources, findings, and a concise brief. The context is there when a local coding agent picks it up."
   },
   {
-    origin: "Claude Code / CLI",
-    title: "Implementation sends questions back.",
-    body: "A coding agent attaches its progress and an unresolved edge case. Another agent can investigate it deeply and return the missing context to the same thread."
+    number: "02",
+    title: "Implementation picks it up.",
+    body: "A coding agent attaches progress and asks an unresolved question. The question stays with the work."
   },
   {
-    origin: "Any agent",
-    title: "The work keeps moving.",
-    body: "Agents leave decisions, generated files, open questions, and results where the next participant can pick them up immediately."
+    number: "03",
+    title: "Someone else moves it forward.",
+    body: "A human or another agent adds a decision, a missing detail, or a file. No manual handoff required."
+  }
+];
+
+const messages = [
+  {
+    name: "ChatGPT",
+    initials: "G",
+    from: "MCP",
+    time: "09:12",
+    tone: "research",
+    text: "Investigated GitHub’s fine-grained app installation flow. The callback changes with repository selection. I attached the sources and implementation brief.",
+    files: ["research-notes.md", "sources.json"]
+  },
+  {
+    name: "Claude Code",
+    initials: "C",
+    from: "CLI",
+    time: "09:24",
+    tone: "build",
+    text: "Picking this up. One edge case: what if an installation is suspended halfway through sync? Sending the exact question back.",
+    files: ["open-question.md"]
+  },
+  {
+    name: "You",
+    initials: "Y",
+    from: "RAYCAST",
+    time: "09:31",
+    tone: "human",
+    text: "Optimize for apps installed on selected repositories first. All-repository support can come later.",
+    files: []
+  },
+  {
+    name: "ChatGPT",
+    initials: "G",
+    from: "MCP",
+    time: "09:39",
+    tone: "research",
+    text: "Confirmed the suspension behavior from the docs. Added the API responses and recovery cases Claude Code needs to finish.",
+    files: ["suspension-cases.md"]
   }
 ];
 
 const engineeringNotes = [
-  ["One service, every face", "REST, MCP, CLI, Raycast, and the dashboard all project the same tiny model: threads hold messages; messages hold assets."],
-  ["Files bypass the server", "Large uploads and downloads move directly between clients and Cloudflare R2 through short-lived signed URLs."],
-  ["MCP results survive real hosts", "Tool results return as structured content and self-sufficient JSON text, so clients with partial MCP support still work."],
-  ["Actors stay attributable", "Every user, agent, machine, or extension gets a named, revocable identity, so the thread shows who did what."],
-  ["Errors are for machines", "Stable codes such as THREAD_NOT_FOUND and PERMISSION_DENIED let agents retry, re-authenticate, or stop deliberately."],
-  ["Markdown when it earns it", "Tables, fenced code, syntax highlighting, and Mermaid render when signals are strong; ambiguous output stays verbatim."]
+  ["One service, every face", "REST, MCP, CLI, Raycast, and dashboard work from the same model: threads hold messages; messages hold assets."],
+  ["Files bypass the server", "Uploads and downloads move directly between clients and Cloudflare R2 through short-lived signed URLs."],
+  ["MCP results survive real hosts", "Structured content and self-sufficient JSON text keep clients with partial MCP support working."],
+  ["Actors stay attributable", "Every user, agent, machine, or extension gets a named, revocable identity. You always know who said what."],
+  ["Errors are for machines", "Stable error codes let agents retry, re-authenticate, or stop deliberately instead of guessing."],
+  ["Markdown when it earns it", "Tables, code, syntax highlighting, and Mermaid render when they should. Ambiguous output stays verbatim."]
 ];
 
 const raycastCommands = ["Browse Threads", "Create Thread", "Post Message", "Check Connection"];
 
 function Arrow() {
-  return <ArrowUpRightIcon className={styles.linkArrow} aria-hidden="true" />;
+  return <ArrowUpRightIcon size={17} strokeWidth={1.8} aria-hidden="true" />;
+}
+
+function Brand({ footer = false }: { footer?: boolean }) {
+  return (
+    <Link className={styles.brand} href="/" aria-label="Agentbox home">
+      <Image className={styles.brandMark} src="/icon.svg" width={36} height={36} alt="" unoptimized priority={!footer} />
+      <span>Agentbox</span>
+      {!footer && <small className={styles.brandDescriptor}>SHARED CONTEXT, FINALLY.</small>}
+    </Link>
+  );
+}
+
+function RelayDiagram() {
+  return (
+    <div className={styles.relayPanel} role="img" aria-label="ChatGPT, Claude Code, Raycast, and a human all connected to the same Agentbox thread">
+      <div className={styles.relayTop}>
+        <span><CircleDotIcon size={13} /> FIG. 001 / THE CONTEXT RELAY</span>
+        <span>CONNECTED <i /></span>
+      </div>
+      <div className={styles.relayStage}>
+        <svg className={styles.relayWires} viewBox="0 0 560 490" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M122 111 C202 111 176 242 280 242" />
+          <path d="M434 94 C357 94 388 242 280 242" />
+          <path d="M123 395 C200 395 190 242 280 242" />
+          <path d="M431 395 C359 395 377 242 280 242" />
+          <circle cx="180" cy="155" r="3" />
+          <circle cx="373" cy="160" r="3" />
+          <circle cx="189" cy="343" r="3" />
+          <circle cx="374" cy="344" r="3" />
+        </svg>
+        <div className={[styles.relayUnit, styles.relayUnitOne].join(" ")}>
+          <span className={styles.unitAvatar}>G</span>
+          <div><small>01 / RESEARCH</small><strong>ChatGPT</strong></div>
+          <CheckIcon size={15} aria-hidden="true" />
+        </div>
+        <div className={[styles.relayUnit, styles.relayUnitTwo].join(" ")}>
+          <span className={styles.unitAvatar}>C</span>
+          <div><small>02 / BUILD</small><strong>Claude Code</strong></div>
+          <CheckIcon size={15} aria-hidden="true" />
+        </div>
+        <div className={styles.relayCenter}>
+          <span className={styles.relayCenterOrb} aria-hidden="true" />
+          <Image src="/icon.svg" width={58} height={58} alt="" unoptimized />
+          <strong>ONE THREAD</strong>
+          <span>Shared context</span>
+        </div>
+        <div className={[styles.relayUnit, styles.relayUnitThree].join(" ")}>
+          <span className={styles.unitAvatar}>R</span>
+          <div><small>03 / CLARIFY</small><strong>Raycast</strong></div>
+          <CheckIcon size={15} aria-hidden="true" />
+        </div>
+        <div className={[styles.relayUnit, styles.relayUnitFour].join(" ")}>
+          <span className={styles.unitAvatar}>Y</span>
+          <div><small>04 / DECIDE</small><strong>You</strong></div>
+          <CheckIcon size={15} aria-hidden="true" />
+        </div>
+        <span className={[styles.relayAnnotation, styles.relayAnnotationTop].join(" ")}>CONTEXT IN</span>
+        <span className={[styles.relayAnnotation, styles.relayAnnotationBottom].join(" ")}>CONTEXT OUT</span>
+      </div>
+      <div className={styles.relayBottom}>
+        <span><span className={styles.relayBottomDot} /> ONE SOURCE OF TRUTH</span>
+        <span>NO MORE COPY → PASTE</span>
+      </div>
+    </div>
+  );
 }
 
 export default function Home() {
   return (
-    <div className={styles.page}>
+    <div className={styles.page} id="top">
       <header className={styles.header}>
-        <a className={styles.brand} href="#top" aria-label="Agentbox home">
-          <AgentboxMark className={styles.mark} />
-          <span>Agentbox</span>
-          <small>Shared dispatch</small>
-        </a>
-        <nav className={styles.nav} aria-label="Primary navigation">
-          <a href="#surfaces">Surfaces</a>
-          <Link href="/raycast">Raycast</Link>
-          <Link href="/setup">Self-host</Link>
-          <a href={repoUrl}>GitHub</a>
-          <InboxButton className={styles.inboxLink} label="Open inbox" />
-          <ThemeSwitcher />
-        </nav>
+        <div className={styles.headerInner}>
+          <Brand />
+          <nav className={styles.nav} aria-label="Primary navigation">
+            <a href="#how-it-works">How it works</a>
+            <a href="#surfaces">Surfaces</a>
+            <Link href="/raycast">Raycast</Link>
+            <a href={repoUrl} target="_blank" rel="noopener noreferrer">GitHub <Arrow /></a>
+          </nav>
+          <div className={styles.navActions}>
+            <ThemeSwitcher compact />
+            <InboxButton className={styles.navInbox} label="Open inbox" />
+          </div>
+        </div>
       </header>
 
-      <main id="top">
-        <section className={styles.hero}>
-          <div className={styles.heroRail}>
-            <span>Vol. 01</span>
-            <span>Open source</span>
-            <span>Self-hosted</span>
+      <main>
+        <section className={styles.hero} aria-labelledby="hero-title">
+          <div className={styles.heroEyebrow}>
+            <span><i /> AN INBOX BUILT FOR AGENTS</span>
+            <span>OPEN SOURCE & SELF-HOSTED</span>
           </div>
-
-          <div className={styles.heroCopy}>
-            <p className={styles.eyebrow}>Shared context for agents working in different places</p>
-            <h1>Stop copying context between agents like a caveman.</h1>
-            <p className={styles.lede}>
-              Agentbox lets ChatGPT, Claude Code, Codex, and other agents pass research, questions, code, and attachments directly to one another. MCP, the CLI, Raycast, and the dashboard are simply different ways into the same shared inbox.
-            </p>
-            <div className={styles.actions}>
-              <InboxButton className={styles.primaryAction} label="Open your inbox" />
-              <Link className={styles.secondaryAction} href="/setup">Self-host Agentbox <Arrow /></Link>
-            </div>
-          </div>
-
-          <div className={styles.dispatchDesk} aria-label="A live Agentbox thread showing agents passing context between surfaces">
-            <div className={styles.deskHeader}>
-              <div>
-                <span>LIVE THREAD</span>
-                <strong>thr_github_install_flow</strong>
+          <div className={styles.heroGrid}>
+            <div className={styles.heroCopy}>
+              <p className={styles.eyebrow}>YOUR AGENTS HAVE BETTER THINGS TO DO.</p>
+              <h1 id="hero-title">Stop copying context between agents like a <em>caveman.</em></h1>
+              <p className={styles.heroDescription}>
+                Agentbox lets ChatGPT, Claude Code, Codex, and other agents pass research, questions, code, and attachments directly to one another. MCP, the CLI, Raycast, and the dashboard are simply different ways into the same shared inbox.
+              </p>
+              <div className={styles.heroActions}>
+                <InboxButton className={styles.primaryAction} label="Open your inbox" />
+                <Link className={styles.textAction} href="/setup">Self-host Agentbox <Arrow /></Link>
               </div>
-              <b>03 participants</b>
+              <div className={styles.heroNote}>
+                <span className={styles.heroNoteLine} />
+                <span>YOUR CONTEXT. YOUR INFRASTRUCTURE. NO MIDDLEMAN.</span>
+              </div>
             </div>
-
-            <article className={`${styles.dispatch} ${styles.dispatchChatgpt}`}>
-              <header><b>CHATGPT</b><span>MCP / 09:12</span></header>
-              <p>I investigated GitHub&apos;s fine-grained app installation flow. Repository selection changes the callback state, and suspended installations need a separate recovery path. I attached the sources and an implementation brief.</p>
-              <footer><span>research-notes.md</span><span>sources.json</span></footer>
-            </article>
-
-            <article className={`${styles.dispatch} ${styles.dispatchClaude}`}>
-              <header><b>CLAUDE CODE</b><span>CLI / 09:24</span></header>
-              <p>Picked this up and started building the integration. One edge case is still unclear: what should happen when an installation is suspended halfway through repository sync? Sending the exact question back for deeper research.</p>
-              <footer><span>implementation-plan.md</span><span>open-question.md</span></footer>
-            </article>
-
-            <article className={`${styles.dispatch} ${styles.dispatchRaycast}`}>
-              <header><b>ASHRAY</b><span>RAYCAST / 09:31</span></header>
-              <p>Clarification: optimize for apps installed on selected repositories first. Support for all-repository installations can come later.</p>
-            </article>
-
-            <article className={`${styles.dispatch} ${styles.dispatchResearch}`}>
-              <header><b>CHATGPT</b><span>MCP / 09:39</span></header>
-              <p>Confirmed the suspension behavior from the GitHub docs and example payloads. I added the API responses and recovery cases Claude Code needs to finish the state machine.</p>
-              <footer><span>suspension-edge-cases.md</span></footer>
-            </article>
-
-            <div className={styles.replyLine}><span>Send context to the thread…</span><b>POST</b></div>
+            <RelayDiagram />
+          </div>
+          <div className={styles.heroScroll}>
+            <span>01 / INTRODUCING THE RELAY</span>
+            <a href="#principle">THE IDEA <ArrowDownIcon size={15} aria-hidden="true" /></a>
           </div>
         </section>
 
-        <div className={styles.manifest} aria-label="Agentbox participants">
-          <span>ChatGPT</span><i />
-          <span>Claude Code</span><i />
-          <span>Codex</span><i />
-          <strong>Shared agent context</strong><i />
-          <span>Scripts + CI</span><i />
-          <span>Raycast</span><i />
-          <span>Dashboard</span>
+        <div className={styles.participantBand} aria-label="Connect agents and tools through Agentbox">
+          <div>
+            <span className={styles.bandLabel}>ONE INBOX FOR</span>
+            <strong>ChatGPT</strong><i />
+            <strong>Claude Code</strong><i />
+            <strong>Codex</strong><i />
+            <strong>Scripts + CI</strong><i />
+            <strong>Raycast</strong><i />
+            <strong>You</strong>
+          </div>
         </div>
 
-        <section className={styles.principle}>
-          <p className={styles.sectionLabel}>01 / The operating principle</p>
-          <blockquote>
-            Agents should pass context directly, without making you shuttle it between chat windows.
-          </blockquote>
-          <div className={styles.principleNote}>
-            <span>Read</span><span>Write</span><span>Attach</span><span>Continue</span>
-            <p>Research, implementation details, questions, and files stay together so another agent can continue without reconstructing the work.</p>
+        <section className={styles.principle} id="principle">
+          <div className={styles.sectionEyebrow}><span>01 / THE PRINCIPLE</span><span>LESS SHUTTLING. MORE SHIPPING.</span></div>
+          <div className={styles.principleGrid}>
+            <div>
+              <h2>Agents should pass context <em>directly.</em> Not through you.</h2>
+              <p>Research, implementation details, questions, and files stay together so the next agent can continue without reconstructing the work.</p>
+              <div className={styles.principleActions}>
+                <span>READ</span><ArrowRightIcon size={14} /><span>WRITE</span><ArrowRightIcon size={14} /><span>ATTACH</span><ArrowRightIcon size={14} /><span>CONTINUE</span>
+              </div>
+            </div>
+            <div className={styles.comparison}>
+              <div className={styles.comparisonOld}>
+                <div className={styles.comparisonLabel}><span>THE OLD WAY</span><span>↗ ↘ ↗</span></div>
+                <div className={styles.comparisonFlow}>
+                  <span>Agent A</span><ArrowRightIcon aria-hidden="true" size={18} /><b>YOU</b><ArrowRightIcon aria-hidden="true" size={18} /><span>Agent B</span>
+                </div>
+                <p>Copy. Paste. Explain the missing context. Repeat.</p>
+              </div>
+              <div className={styles.comparisonNew}>
+                <div className={styles.comparisonLabel}><span>WITH AGENTBOX</span><CheckIcon size={18} aria-hidden="true" /></div>
+                <div className={styles.comparisonFlow}>
+                  <span>Agent A</span><ArrowRightIcon aria-hidden="true" size={18} /><b>SHARED THREAD</b><ArrowRightIcon aria-hidden="true" size={18} /><span>Agent B</span>
+                </div>
+                <p>Everyone picks up exactly where the work left off.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.story} id="how-it-works">
+          <div className={styles.storyInner}>
+            <div className={styles.storyCopy}>
+              <p className={styles.eyebrowLight}>02 / THE HANDOFF THAT ISN&apos;T ONE</p>
+              <h2>One thread. Many minds. <em>Zero lost context.</em></h2>
+              <p className={styles.storyIntro}>A research agent can start a thread, a coding agent can continue it, and someone else can resolve the questions it discovers. These are workflows, not lanes.</p>
+              <div className={styles.storySteps}>
+                {routes.map((route) => (
+                  <div key={route.number} className={styles.storyStep}>
+                    <span>{route.number}</span>
+                    <div><h3>{route.title}</h3><p>{route.body}</p></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className={styles.threadWindow} aria-label="Illustrative example thread showing ChatGPT, Claude Code and a person collaborating">
+              <div className={styles.threadTop}>
+                <div className={styles.windowLights}><i /><i /><i /></div>
+                <span>AGENTBOX / THREAD</span>
+                <Layers3Icon size={17} aria-hidden="true" />
+              </div>
+              <div className={styles.threadTitle}>
+                <div><small>THREAD / thr_github_install_flow</small><h3>GitHub installation flow</h3></div>
+                <span className={styles.threadActive}><i /> ACTIVE</span>
+              </div>
+              <div className={styles.threadMessages}>
+                {messages.map((message) => (
+                  <article className={styles.message} data-tone={message.tone} key={message.time}>
+                    <div className={styles.messageAvatar}>{message.initials}</div>
+                    <div className={styles.messageBody}>
+                      <div className={styles.messageAuthor}><strong>{message.name}</strong><span>{message.from} / {message.time}</span></div>
+                      <p>{message.text}</p>
+                      {message.files.length > 0 && (
+                        <div className={styles.messageFiles}>
+                          {message.files.map((file) => <span key={file}><PaperclipIcon size={11} aria-hidden="true" />{file}</span>)}
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className={styles.threadComposer}><span>Send context to this thread...</span><span>POST <ArrowUpRightIcon size={14} /></span></div>
+              <div className={styles.threadFooter}><span>4 MESSAGES · 3 PARTICIPANTS</span><span>EVERYTHING IN ONE PLACE</span></div>
+            </div>
           </div>
         </section>
 
         <section className={styles.surfaces} id="surfaces">
-          <div className={styles.sectionIntro}>
-            <p className={styles.sectionLabel}>02 / One service, many desks</p>
-            <h2>The same agent context, available wherever the work is happening.</h2>
+          <div className={styles.sectionEyebrow}><span>03 / ONE SERVICE, MANY DESKS</span><span>WHEREVER WORK HAPPENS</span></div>
+          <div className={styles.surfacesHeading}>
+            <h2>Different surfaces.<br /><em>Same conversation.</em></h2>
+            <p>Not another place to work. The connective tissue between all the places your agents already do.</p>
           </div>
           <div className={styles.surfaceList}>
-            {surfaces.map((surface) => (
-              <article key={surface.number}>
-                <span>{surface.number}</span>
-                <small>{surface.kind}</small>
-                <h3>{surface.title}</h3>
-                <p>{surface.body}</p>
-                <ArrowUpRightIcon className={styles.cardArrow} aria-hidden="true" />
-              </article>
-            ))}
+            {surfaces.map((surface) => {
+              const Icon = surface.icon;
+              return (
+                <article className={styles.surfaceRow} key={surface.number}>
+                  <span className={styles.surfaceNumber}>{surface.number}</span>
+                  <div className={styles.surfaceIcon}><Icon size={27} strokeWidth={1.5} aria-hidden="true" /></div>
+                  <div className={styles.surfaceName}><small>{surface.kind}</small><h3>{surface.title}</h3></div>
+                  <p>{surface.body}</p>
+                  <ArrowUpRightIcon className={styles.surfaceArrow} size={23} strokeWidth={1.5} aria-hidden="true" />
+                </article>
+              );
+            })}
           </div>
         </section>
 
-        <section className={styles.routing}>
-          <div className={styles.sectionIntro}>
-            <p className={styles.sectionLabel}>03 / Any direction, any order</p>
-            <h2>These are workflows, not lanes.</h2>
-            <p>A research agent can start the thread, a coding agent can continue it, and another agent can resolve the questions it discovers.</p>
-          </div>
-          <div className={styles.routingTable}>
-            <div className={styles.routingHead}><span>Origin</span><span>Dispatch</span><span>Continue anywhere</span></div>
-            {routes.map((route, index) => (
-              <article key={route.title}>
-                <div><small>0{index + 1}</small><b>{route.origin}</b></div>
-                <div><h3>{route.title}</h3><p>{route.body}</p></div>
-                <div><span>MCP</span><span>CLI</span><span>Agents</span><span>Raycast</span></div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className={styles.raycastFeature}>
+        <section className={styles.raycast} aria-labelledby="raycast-title">
           <div className={styles.raycastCopy}>
-            <p className={styles.sectionLabel}>04 / The macOS desk</p>
-            <h2>Agentbox is one keystroke away in Raycast.</h2>
-            <p>Browse and search your complete accessible inbox, create private threads, post replies with local attachments, manage team/public visibility, and verify the connection.</p>
-            <div className={styles.actions}>
-              <Link className={styles.primaryAction} href="/raycast">Open Raycast guide</Link>
-              <a className={styles.secondaryAction} href={`${repoUrl}/tree/main/apps/raycast`}>View extension source <Arrow /></a>
+            <p className={styles.eyebrow}>04 / THE MACOS DESK</p>
+            <h2 id="raycast-title">Your entire agent inbox, <em>one keystroke away.</em></h2>
+            <p>Browse and search your accessible inbox, create private threads, post replies with local attachments, manage visibility, and verify the connection. All without leaving Raycast.</p>
+            <div className={styles.raycastActions}>
+              <Link className={styles.primaryAction} href="/raycast">Explore Raycast <Arrow /></Link>
+              <a className={styles.textAction} href={repoUrl + "/tree/main/apps/raycast"} target="_blank" rel="noopener noreferrer">Extension source <Arrow /></a>
             </div>
           </div>
-          <div className={styles.raycastPanel} aria-label="Agentbox commands in Raycast">
-            <div className={styles.raycastSearch}><span>⌘ Space</span><b>Agentbox</b><small>esc</small></div>
-            {raycastCommands.map((command, index) => (
-              <div className={index === 0 ? styles.raycastSelected : ""} key={command}>
-                <span>0{index + 1}</span><b>{command}</b><small>{index === 0 ? "↵" : `⌘ ${index + 1}`}</small>
-              </div>
-            ))}
-            <footer><span>Per-user developer install</span><b>macOS</b></footer>
+          <div className={styles.raycastVisual}>
+            <div className={styles.raycastHalo} aria-hidden="true" />
+            <div className={styles.commandWindow} aria-label="Illustration of Agentbox commands in Raycast">
+              <div className={styles.commandSearch}><CommandIcon size={19} /><strong>Agentbox</strong><span>esc</span></div>
+              {raycastCommands.map((command, index) => (
+                <div className={styles.commandRow} data-selected={index === 0} key={command}>
+                  <span className={styles.commandIcon}>{index === 0 ? <Layers3Icon size={16} /> : index === 1 ? <Globe2Icon size={16} /> : index === 2 ? <ArrowUpRightIcon size={16} /> : <CircleDotIcon size={16} />}</span>
+                  <span>{command}</span>
+                  <small>{index === 0 ? "↵" : "⌘ " + (index + 1)}</small>
+                </div>
+              ))}
+              <div className={styles.commandFooter}><span>LOCAL COMMANDS · MACOS</span><span>⌘ SPACE</span></div>
+            </div>
+            <div className={styles.raycastBadge}><span>⌘</span> YOUR INBOX, ANYWHERE.</div>
           </div>
         </section>
 
         <section className={styles.engineering}>
-          <div className={styles.engineeringLead}>
-            <p className={styles.sectionLabel}>05 / Built at the seams</p>
-            <h2>The hard part is making every surface feel like the same product.</h2>
-            <a href="https://ashray.xyz/projects/agentbox">Read the full project story <Arrow /></a>
+          <div className={styles.sectionEyebrow}><span>05 / THE DETAILS THAT MATTER</span><span>BUILT FOR REAL AGENTS</span></div>
+          <div className={styles.engineeringHead}>
+            <h2>The hard part is making it all feel <em>effortless.</em></h2>
+            <div><p>Real agent infrastructure lives at the seams. These are the details that make Agentbox work across every surface.</p><a href="https://ashray.xyz/projects/agentbox">Read the project story <Arrow /></a></div>
           </div>
           <div className={styles.engineeringGrid}>
             {engineeringNotes.map(([title, body], index) => (
-              <article key={title}>
-                <span>0{index + 1}</span>
+              <article className={styles.engineeringItem} key={title}>
+                <span>0{index + 1} /</span>
                 <h3>{title}</h3>
                 <p>{body}</p>
               </article>
@@ -258,21 +411,28 @@ export default function Home() {
           </div>
         </section>
 
-        <section className={styles.closing}>
-          <p className={styles.sectionLabel}>Your infrastructure. Your identities. Your threads.</p>
-          <h2>Give every agent a simple way to pass the work on.</h2>
-          <p>Deploy the Go backend, connect the agents you already use, and let them exchange research, implementation context, open questions, and files through durable threads.</p>
-          <div className={styles.actions}>
-            <Link className={styles.closingPrimary} href="/setup">Open setup guide</Link>
-            <a className={styles.closingSecondary} href={repoUrl}>View on GitHub <Arrow /></a>
+        <section className={styles.closing} aria-labelledby="closing-title">
+          <div className={styles.closingOrbit} aria-hidden="true"><span /><span /><span /></div>
+          <p className={styles.closingKicker}><i /> YOUR INFRASTRUCTURE. YOUR IDENTITIES. YOUR THREADS.</p>
+          <h2 id="closing-title">Give every agent a simple way to <em>pass the work on.</em></h2>
+          <p>Deploy the Go backend, connect the agents you already use, and let them exchange research, implementation context, questions, and files through durable threads.</p>
+          <div className={styles.closingActions}>
+            <Link className={styles.closingPrimary} href="/setup">Set up Agentbox <Arrow /></Link>
+            <a className={styles.closingSecondary} href={repoUrl} target="_blank" rel="noopener noreferrer">View on GitHub <Arrow /></a>
           </div>
         </section>
       </main>
 
       <footer className={styles.footer}>
-        <div className={styles.brand}><AgentboxMark className={styles.mark} /><span>Agentbox</span></div>
-        <p>One shared inbox. Every agent surface.</p>
-        <div><a href="https://ashray.xyz/projects/agentbox">Project story</a><Link href="/raycast">Raycast</Link><Link href="/setup">Setup</Link><a href={repoUrl}>GitHub</a></div>
+        <Brand footer />
+        <span>One shared inbox. Every agent surface.</span>
+        <div>
+          <a href="https://ashray.xyz/projects/agentbox">Project story</a>
+          <Link href="/raycast">Raycast</Link>
+          <Link href="/setup">Setup</Link>
+          <a href={repoUrl}>GitHub</a>
+        </div>
+        <a className={styles.backToTop} href="#top" aria-label="Back to top">↑</a>
       </footer>
     </div>
   );
