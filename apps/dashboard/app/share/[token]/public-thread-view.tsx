@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { AgentboxMark } from "../../components/agentbox-mark";
+import { AgentboxLogo } from "../../components/agentbox-logo";
 import { ThemeSwitcher } from "../../components/theme-switcher";
 import { ThreadMarkdownPreviewButton, useThreadMarkdownPreview } from "../../components/thread-markdown-preview";
 import { MessageContent } from "../../threads/[threadId]/message-content";
@@ -212,8 +212,8 @@ export function PublicThreadView({ token }: { token: string }) {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <Link className={styles.brand} href="/"><AgentboxMark className={styles.mark}/><span>Agentbox</span><small>Shared thread</small></Link>
-        <div className={styles.headerMeta}><span>Read only</span><ThemeSwitcher/></div>
+        <Link className={styles.brand} href="/"><AgentboxLogo className={styles.mark}/><span>Agentbox</span><small>Shared thread</small></Link>
+        <div className={styles.headerMeta}><span>Read only</span><ThemeSwitcher compact/></div>
       </header>
 
       <main className={styles.main}>
@@ -297,7 +297,7 @@ export function PublicThreadView({ token }: { token: string }) {
               ))}
             </section>
 
-            <footer className={styles.footer}><AgentboxMark className={styles.footerMark}/><div><strong>Shared from Agentbox</strong><span>One thread. Separate humans and agents. Preserved attribution.</span></div></footer>
+            <footer className={styles.footer}><AgentboxLogo className={styles.footerMark}/><div><strong>Shared from Agentbox</strong><span>One thread. Separate humans and agents. Preserved attribution.</span></div></footer>
           </>
         )}
       </main>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { ArrowUpRightIcon } from "lucide-react";
 import Link from "next/link";
-import { AgentboxMark } from "../components/agentbox-mark";
+import { AgentboxLogo } from "../components/agentbox-logo";
 import { InboxButton } from "../components/inbox-button";
 import { PublicCopyButton } from "../components/public-copy-button";
 import { ThemeSwitcher } from "../components/theme-switcher";
@@ -126,7 +126,7 @@ export default function SetupPage() {
     <div className={styles.page}>
       <header className={styles.header}>
         <Link className={styles.brand} href="/">
-          <AgentboxMark className={styles.mark} />
+          <AgentboxLogo className={styles.mark} />
           <span>Agentbox</span>
           <small>Operator&apos;s manual</small>
         </Link>
@@ -135,8 +135,8 @@ export default function SetupPage() {
           <Link href="/raycast">Raycast</Link>
           <a href="/setup-self-host.md">Markdown</a>
           <a href={repoUrl}>GitHub</a>
+          <span className={styles.themeControl}><ThemeSwitcher compact /></span>
           <InboxButton className={styles.inboxLink} label="Open inbox" />
-          <ThemeSwitcher />
         </nav>
       </header>
 
@@ -225,7 +225,7 @@ export default function SetupPage() {
       </main>
 
       <footer className={styles.footer}>
-        <div className={styles.brand}><AgentboxMark className={styles.mark} /><span>Agentbox</span></div>
+        <Link className={styles.brand} href="/"><AgentboxLogo className={styles.mark} /><span>Agentbox</span></Link>
         <p>One core service. Every participant.</p>
         <div><a href="/setup-self-host.md">Raw Markdown</a><Link href="/raycast">Raycast</Link><a href={repoUrl}>GitHub</a></div>
       </footer>

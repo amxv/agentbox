@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { AgentboxMark } from "../components/agentbox-mark";
+import { AgentboxLogo } from "../components/agentbox-logo";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import styles from "../login/auth.module.css";
 
@@ -85,25 +85,15 @@ export function ResetPasswordView() {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <Link className={styles.brand} href="/"><AgentboxMark className={styles.mark}/><span>Agentbox</span><small>Password reset</small></Link>
-        <nav className={styles.nav}><Link href="/login">Sign in</Link><ThemeSwitcher/></nav>
+        <Link className={styles.brand} href="/"><AgentboxLogo className={styles.mark}/><span>Agentbox</span></Link>
+        <nav className={styles.nav} aria-label="Account navigation"><Link href="/login">Sign in</Link><ThemeSwitcher compact/></nav>
       </header>
       <main className={styles.main}>
-        <section className={styles.story}>
-          <p className={styles.eyebrow}>Private account recovery</p>
-          <h1>Back to your shared inbox.</h1>
-          <p>Set a new web dashboard password without changing your existing threads, team access, or agent credentials.</p>
-          <div className={styles.ticket}>
-            <div><span>Link</span><b>Single use</b></div>
-            <div><span>Access</span><b>Only from your deployment owner</b></div>
-            <div><span>Agents</span><b>Existing API keys unchanged</b></div>
-          </div>
-        </section>
         <div className={styles.cardWrap}>
           <form className={styles.card} onSubmit={submit}>
-            <div className={styles.cardTop}><span>Account recovery</span><span>{state === "checking" ? "Checking" : state === "valid" ? "Valid link" : state === "done" ? "Complete" : "Unavailable"}</span></div>
-            <h2>{state === "done" ? "Password updated." : state === "invalid" ? "This link cannot be used." : "Reset your password."}</h2>
-            <p className={styles.cardCopy}>
+            <p className={styles.eyebrow}>Account recovery</p>
+            <h1>{state === "done" ? "Password updated." : state === "invalid" ? "Invalid reset link." : "Reset password."}</h1>
+            <p className={styles.cardCopy} aria-live="polite">
               {state === "checking" && "Verifying your one-time reset link…"}
               {state === "valid" && `Choose a new password of at least 12 characters. This link expires ${expiresAt ? new Date(expiresAt).toLocaleString() : "soon"}.`}
               {state === "invalid" && "The link may have expired, been replaced, or already been used. Ask the deployment owner to generate another link."}
@@ -117,12 +107,12 @@ export function ResetPasswordView() {
             )}
             {error && <div className={styles.error} role="alert"><strong>Could not reset password.</strong><span>{error}</span></div>}
             {state === "valid" && <button className={styles.submit} type="submit" disabled={saving || !password || !confirmPassword}>{saving ? "Updating password…" : "Set new password"}</button>}
-            {state === "done" && <Link className={styles.submit} style={{display:"grid",placeItems:"center"}} href="/login">Go to sign in</Link>}
-            <p className={styles.note}>For your security, opening this page removes the token from the address bar. Each link works only once.</p>
+            {state === "done" && <Link className={styles.submit} href="/login">Go to sign in</Link>}
+            {state === "valid" && <p className={styles.note}>Reset links can only be used once.</p>}
           </form>
         </div>
       </main>
-      <footer className={styles.footer}><span>One identity across Agentbox.</span><div><Link href="/login">Sign in</Link><a href="https://github.com/amxv/agentbox">GitHub</a></div></footer>
+      <footer className={styles.footer}><Link href="/setup">Self-host Agentbox</Link><a href="https://github.com/amxv/agentbox">GitHub</a></footer>
     </div>
   );
 }

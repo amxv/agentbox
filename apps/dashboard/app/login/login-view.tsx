@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AgentboxMark } from "../components/agentbox-mark";
+import { AgentboxLogo } from "../components/agentbox-logo";
 import { fetchSession } from "../components/session";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import styles from "./auth.module.css";
@@ -46,32 +46,26 @@ export function LoginView() {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <Link className={styles.brand} href="/"><AgentboxMark className={styles.mark}/><span>Agentbox</span><small>Human access</small></Link>
-        <nav className={styles.nav}><Link href="/">Home</Link><Link href="/setup">Self-host</Link><ThemeSwitcher/></nav>
+        <Link className={styles.brand} href="/"><AgentboxLogo className={styles.mark}/><span>Agentbox</span></Link>
+        <nav className={styles.nav} aria-label="Account navigation"><Link href="/">Home</Link><ThemeSwitcher compact/></nav>
       </header>
       <main className={styles.main}>
-        <section className={styles.story}>
-          <p className={styles.eyebrow}>The human is a participant</p>
-          <h1>Take your seat in the same inbox as every agent.</h1>
-          <p>Sign in to create threads, reply, attach files, manage identities, and review the exact history shared by MCP clients, CLI agents, Raycast, scripts, and CI.</p>
-          <div className={styles.ticket}><div><span>Access</span><b>User browser session</b></div><div><span>Rights</span><b>Read, write, upload, share</b></div><div><span>Record</span><b>Named attribution in every thread</b></div></div>
-        </section>
         <div className={styles.cardWrap}>
           <form className={styles.card} onSubmit={submit}>
-            <div className={styles.cardTop}><span>Account access</span><span>Read + write</span></div>
-            <h2>Sign in to Agentbox.</h2>
-            <p className={styles.cardCopy}>Use the account created through your owner-issued invitation. Public signup without an invitation is disabled.</p>
+            <p className={styles.eyebrow}>Welcome back</p>
+            <h1>Sign in.</h1>
+            <p className={styles.cardCopy}>Your shared inbox is right where you left it.</p>
             <div className={styles.fields}>
-              <label className={styles.label}>Email<input autoComplete="email" autoFocus className={styles.input} value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="you@example.com" type="email"/></label>
-              <label className={styles.label}>Password<input autoComplete="current-password" className={styles.input} value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="Password" type="password"/></label>
+              <label className={styles.label}>Email<input autoComplete="email" autoFocus className={styles.input} value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="you@example.com" type="email" required/></label>
+              <label className={styles.label}>Password<input autoComplete="current-password" className={styles.input} value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="Your password" type="password" required/></label>
             </div>
-            {error && <div className={styles.error}><strong>Could not sign in.</strong><span>{error}</span></div>}
-            <button className={styles.submit} type="submit" disabled={loading || checkingSession || !email.trim() || !password}>{loading ? "Signing in…" : checkingSession ? "Checking session…" : "Enter the shared inbox"}</button>
-            <p className={styles.note}>Your browser session identifies you as the human actor for this account. Agent and extension credentials remain separate and revocable.</p>
+            {error && <div className={styles.error} role="alert"><strong>Could not sign in.</strong><span>{error}</span></div>}
+            <button className={styles.submit} type="submit" disabled={loading || checkingSession || !email.trim() || !password}>{loading ? "Signing in…" : checkingSession ? "Checking session…" : "Sign in"}</button>
+            <p className={styles.note}>Invitation only. Ask your deployment owner for access.</p>
           </form>
         </div>
       </main>
-      <footer className={styles.footer}><span>One shared inbox. Every participant.</span><div><Link href="/setup">Setup</Link><Link href="/raycast">Raycast</Link><a href="https://github.com/amxv/agentbox">GitHub</a></div></footer>
+      <footer className={styles.footer}><Link href="/setup">Self-host Agentbox</Link><a href="https://github.com/amxv/agentbox">GitHub</a></footer>
     </div>
   );
 }
