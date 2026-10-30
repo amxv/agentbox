@@ -6,12 +6,20 @@ on:
     branches: [main]
     paths:
       - 'apps/dashboard/**'
-      - '.github/workflows/deploy-dashboard.yml'
+      - '!apps/dashboard/**/*.test.ts'
+      - '!apps/dashboard/**/*.test.tsx'
+      - '!apps/dashboard/**/*.spec.ts'
+      - '!apps/dashboard/**/*.spec.tsx'
+      - '!apps/dashboard/README.md'
   pull_request:
     branches: [main]
     paths:
       - 'apps/dashboard/**'
-      - '.github/workflows/deploy-dashboard.yml'
+      - '!apps/dashboard/**/*.test.ts'
+      - '!apps/dashboard/**/*.test.tsx'
+      - '!apps/dashboard/**/*.spec.ts'
+      - '!apps/dashboard/**/*.spec.tsx'
+      - '!apps/dashboard/README.md'
   workflow_dispatch:
 
 permissions:

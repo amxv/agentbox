@@ -26,8 +26,12 @@ test('backend deployment is API-specific, and frontend deployment is dashboard-s
       assert.ok(apiPaths.includes(entry), `missing backend input ${entry}`);
     }
     assert.ok(!apiPaths.some(p => p.startsWith('apps/dashboard')));
+    assert.ok(apiPaths.includes('!**/*_test.go'), 'Go tests alone must not deploy');
     assert.ok(dashPaths.includes('apps/dashboard/**'));
+    assert.ok(dashPaths.includes('!apps/dashboard/**/*.test.ts'), 'dashboard tests alone must not deploy');
     assert.ok(!dashPaths.includes('cmd/**') && !dashPaths.includes('internal/**'));
+    assert.ok(!apiPaths.some(p => p.startsWith('.github/workflows')));
+    assert.ok(!dashPaths.some(p => p.startsWith('.github/workflows')));
   }
   for (const source of [api, dash]) {
     assert.match(source, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
