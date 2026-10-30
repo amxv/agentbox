@@ -1,0 +1,87 @@
+name: Deploy Go API
+
+# A dashboard-only change must not create an API deployment (including a skipped one).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/api/**'
+      - 'api/**'
+      - 'internal/**'
+      - 'migrations/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.vercelignore'
+      - 'vercel.json'
+      - '.github/workflows/deploy-api.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cmd/api/**'
+      - 'api/**'
+      - 'internal/**'
+      - 'migrations/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.vercelignore'
+      - 'vercel.json'
+      - '.github/workflows/deploy-api.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: agentbox-api-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify Go API and embedded migrations
+        run: go test ./cmd/api ./migrations ./internal/...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deploy backend only when its inputs change
+        id: deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_API_PROJECT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" && test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
+          mkdir -p .vercel
+          printf '{"orgId":"%s","projectId":"%s"}\n' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
+          flags=()
+          if [ "$EVENT_NAME" != 'pull_request' ]; then flags+=(--prod); fi
+          url="$(npx --yes vercel@65.1.0 deploy --yes --non-interactive "${flags[@]}" --token "$VERCEL_TOKEN")"
+          printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+          printf 'Go API deployment: %s\n' "$url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish API preview on pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.deployment.outputs.url }}
+        with:
+          script: |
+            const marker = '<!-- agentbox-api-preview -->';
+            const body = `${marker}\nGo API preview: ${process.env.PREVIEW_URL}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const previous = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

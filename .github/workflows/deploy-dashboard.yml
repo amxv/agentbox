@@ -1,0 +1,79 @@
+name: Deploy dashboard
+
+# Do not send backend, CLI, or Raycast commits to Vercel's dashboard project.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/dashboard/**'
+      - '.github/workflows/deploy-dashboard.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/dashboard/**'
+      - '.github/workflows/deploy-dashboard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: agentbox-dashboard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+      - name: Install dependencies
+        working-directory: apps/dashboard
+        run: bun install --frozen-lockfile --linker=isolated
+      - name: Verify dashboard
+        working-directory: apps/dashboard
+        run: |
+          bun run test
+          bun run typecheck
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Deploy dashboard only when its inputs change
+        id: deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_DASHBOARD_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_DASHBOARD_PROJECT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN" && test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
+          mkdir -p .vercel
+          printf '{"orgId":"%s","projectId":"%s"}\n' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" > .vercel/project.json
+          flags=()
+          if [ "$EVENT_NAME" != 'pull_request' ]; then flags+=(--prod); fi
+          url="$(npx --yes vercel@65.1.0 deploy --yes --non-interactive "${flags[@]}" --token "$VERCEL_TOKEN")"
+          printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+          printf 'Dashboard deployment: %s\n' "$url" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish dashboard preview on pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.deployment.outputs.url }}
+        with:
+          script: |
+            const marker = '<!-- agentbox-dashboard-preview -->';
+            const body = `${marker}\nDashboard preview: ${process.env.PREVIEW_URL}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const previous = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

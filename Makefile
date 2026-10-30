@@ -78,7 +78,7 @@ check-integration:
 	bun test tests/integration/dashboard-backend/attachment-proxy.test.mjs
 
 check-deploy:
-	node --test tests/deployment/vercel-ignore.test.mjs
+node --test tests/deployment/deploy-routing.test.mjs
 
 check-raycast:
 	cd apps/raycast && CI=1 NO_COLOR=1 npm run verify

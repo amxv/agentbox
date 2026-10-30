@@ -80,7 +80,9 @@ Backend deployment files are colocated with the backend executable:
 
 ```text
 cmd/api/vercel.json
-cmd/api/should-build.mjs
+vercel.json (the backend Vercel project's repository-root configuration)
+.github/workflows/deploy-api.yml (Go API deployments, path-filtered)
+.github/workflows/deploy-dashboard.yml (dashboard deployments, path-filtered)
 cmd/api/r2-cors.json
 ```
 
