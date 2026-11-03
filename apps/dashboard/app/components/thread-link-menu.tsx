@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
-import { experimentalIosPwaThreadUrl, threadWebUrl } from "@/lib/thread-links";
+import { experimentalIosPwaLaunchUrl, threadWebUrl } from "@/lib/thread-links";
 
 export function ThreadLinkMenu({ threadId }: { threadId: string }) {
   const [copied, setCopied] = useState<"web" | "pwa" | null>(null);
@@ -18,7 +18,7 @@ export function ThreadLinkMenu({ threadId }: { threadId: string }) {
     try {
       const link = kind === "web"
         ? threadWebUrl(window.location.origin, threadId)
-        : experimentalIosPwaThreadUrl(window.location.origin, threadId);
+        : experimentalIosPwaLaunchUrl(window.location.origin);
       await navigator.clipboard.writeText(link);
       setCopied(kind);
       window.setTimeout(() => setCopied(null), 1600);
@@ -37,14 +37,15 @@ export function ThreadLinkMenu({ threadId }: { threadId: string }) {
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuItem onClick={() => void copyLink("web")}>
           {copied === "web" ? <CheckIcon /> : <GlobeIcon />}
-          {copied === "web" ? "Copied web thread link" : "Copy web thread link"}
+          {copied === "web" ? "Copied thread link" : "Copy thread link (HTTPS)"}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => void copyLink("pwa")}>
           {copied === "pwa" ? <CheckIcon /> : <SmartphoneIcon />}
-          {copied === "pwa" ? "Copied experimental iOS link" : "Copy iOS PWA link (experimental)"}
+          {copied === "pwa" ? "Copied experimental launcher" : "Copy iOS app launcher (experimental)"}
         </DropdownMenuItem>
         <p className="px-3 pb-2 pt-1 text-xs leading-relaxed text-muted-foreground">
-          iOS may launch the installed PWA but ignore the thread path, or refuse the link. Use the web link for reliable access.
+          HTTPS thread links can open the installed app on supported Android setups. iOS opens them in a browser.
+          The undocumented iOS launcher may open the app at its inbox, not this thread, or fail.
         </p>
       </DropdownMenuContent>
     </DropdownMenu>

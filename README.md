@@ -130,6 +130,44 @@ make migrate
 make build-cli
 ```
 
+## Installed web app links
+
+The production dashboard is `https://agentbox.ashray.xyz`. Share ordinary HTTPS
+thread URLs (`https://agentbox.ashray.xyz/threads/<thread-id>`), not custom schemes.
+The dashboard manifest keeps its existing `id: /threads`, `start_url: /threads`,
+and `scope: /` so existing installations and all thread URLs stay in scope.
+Its `launch_handler.client_mode: navigate-existing` asks supporting Chromium
+browsers to navigate an existing PWA window to the captured URL instead of
+just focusing the inbox. **The browser and OS decide whether a link is captured.**
+
+- **Android:** A Chrome-installed **WebAPK** can register in-scope HTTPS links
+  with Android. Link handling still depends on browser/OS defaults, the user's
+  preferences, and the source app. Ordinary browser home-screen shortcuts do
+  not gain the same URL handling. Check Android Settings > Apps > Agentbox >
+  Open by default / Open supported links if it opens in the browser.
+- **iOS/iPadOS:** Home Screen web apps do **not** register as Universal Link
+  handlers. Links tapped in Messages or other apps open in the browser, not
+  automatically in the installed web app. In-scope navigation *from within*
+  the Home Screen app stays in the app. The optional `webapp://` launcher in
+  the Copy link menu is undocumented and may open the app at its inbox or fail;
+  it is **not a thread deep link**. The HTTPS URL is the reliable way to reach
+  a specific thread in the browser.
+- **Desktop Chromium:** Recent Chrome versions can capture in-scope links to
+  an installed PWA unless the user opts out. Other browsers may ignore the
+  launch handler.
+
+To verify on a device: install the HTTPS dashboard as an app, sign in, open an
+existing `/threads/<thread-id>` link **from a different app**, then check both
+whether the PWA launched and whether the intended thread opened. Repeat with
+the PWA already running. On Android test both the WebAPK and a plain shortcut,
+where available. On iOS test a Messages link separately from a same-origin
+link clicked inside the Home Screen app. A desktop browser or device emulator
+can validate the manifest and route but cannot prove native OS URL capture.
+
+References: [Chrome navigation management](https://developer.chrome.com/docs/capabilities/pwa-navigation-management),
+[web.dev OS integration](https://web.dev/learn/pwa/os-integration),
+[Apple's web app scope behavior](https://developer.apple.com/videos/play/wwdc2023/10120/).
+
 ## Deployment
 
 The backend is deployed from the root Go module with `cmd/api/vercel.json`. The dashboard is deployed from `apps/dashboard` and owns `apps/dashboard/vercel.json`.

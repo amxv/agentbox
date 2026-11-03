@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "test": "bun test lib/thread-links.test.ts",
+    "test": "bun test lib/*.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },

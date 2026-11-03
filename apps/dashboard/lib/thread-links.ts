@@ -1,22 +1,26 @@
-/** The ordinary HTTPS URL remains the reliable, shareable thread deep link. */
-export function threadWebUrl(origin: string, threadId: string): string {
+function dashboardOrigin(origin: string): URL {
   const base = new URL(origin);
-  if ((base.protocol !== "https:" && base.protocol !== "http:") || base.username || base.password) {
-    throw new Error("Expected an HTTP(S) dashboard origin");
+  if ((base.protocol !== "https:" && base.protocol !== "http:") || base.username || base.password ||
+    base.pathname !== "/" || base.search || base.hash) {
+    throw new Error("Expected an HTTP(S) dashboard origin without credentials or a path");
   }
+  return base;
+}
+
+/** This same-origin HTTPS URL is the only reliable, shareable thread deep link. */
+export function threadWebUrl(origin: string, threadId: string): string {
   if (!threadId.trim()) throw new Error("Thread ID is required");
-  return new URL(`/threads/${encodeURIComponent(threadId)}`, base).toString();
+  return new URL(`/threads/${encodeURIComponent(threadId)}`, dashboardOrigin(origin)).toString();
 }
 
 /**
- * Experimental iOS Home Screen web-app launcher.
+ * Experimental iOS Home Screen app launcher; NOT a thread deep link.
  *
  * `webapp://` is an undocumented iOS system scheme, not a registered PWA
- * protocol handler. On some iOS versions it launches the installed app, but
- * may discard the thread path or fail outright. Never replace the HTTPS link
- * with this or promise that it opens the requested thread on iOS.
+ * protocol handler. It may launch the installed app on some iOS versions,
+ * but route and query parameters are not reliably honored, and it may fail.
+ * Deliberately omit the thread path instead of suggesting it can be opened.
  */
-export function experimentalIosPwaThreadUrl(origin: string, threadId: string): string {
-  const url = new URL(threadWebUrl(origin, threadId));
-  return `webapp://${url.host}${url.pathname}`;
+export function experimentalIosPwaLaunchUrl(origin: string): string {
+  return `webapp://${dashboardOrigin(origin).host}`;
 }
