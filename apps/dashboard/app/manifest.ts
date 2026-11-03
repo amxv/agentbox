@@ -1,7 +1,12 @@
 import type { MetadataRoute } from "next";
 
-export default function manifest(): MetadataRoute.Manifest {
+type LinkAwareManifest = MetadataRoute.Manifest & {
+  launch_handler: { client_mode: "navigate-existing" };
+};
+
+export default function manifest(): LinkAwareManifest {
   return {
+    // Keep this identity and start URL stable for existing installations.
     id: "/threads",
     name: "Agentbox",
     short_name: "Agentbox",
@@ -9,6 +14,9 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/threads",
     scope: "/",
     display: "standalone",
+    // When the browser/OS captures an in-scope link, navigate to that URL
+    // instead of merely focusing the inbox. This does not enable capture on iOS.
+    launch_handler: { client_mode: "navigate-existing" },
     background_color: "#19191F",
     theme_color: "#19191F",
     icons: [
